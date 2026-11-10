@@ -8,32 +8,39 @@ Source trees used (re-fetch commands in `docs/app-rpt-audio-notes.md`):
 app_rpt **3.10.8** (matching the installed `2:22.10.1+asl3-3.10.8-1.deb13`)
 and Asterisk 22 `bridges/bridge_softmix.c`.
 
-## 1. Is the call downlink self-free, live? — **OPEN (gates everything)**
+## 1. Is the call downlink self-free, live? — **YES. ANSWERED 2026-11-10**
 
-Source says yes, and the reasoning is in `app-rpt-audio-notes.md`: a link's
-audio goes to its own conference leg, softmix subtracts a member's own
-contribution, and the one path that could feed it back (`mix_altaudio()`) is
-gated on `!l->lastrx`, which `*99` sets. Nothing has been *heard* yet, and
-HenWen 1's `status.html:7784` comment asserts the opposite ("while keyed, is
-your own voice ~a beat behind"). That comment's provenance was checked —
-commit `c4c8fcf`, whose own message gives the real reason as "Listen stays the
-one monitor path", and no record in `tx-spike/README.md` or the project
-memory of anyone actually hearing self-audio on that downlink — so it reads as
-a design-time assumption. **It still has to be falsified before Phase 2.**
+**Measured on node 643930, with no RF: it is a radioless node** (UCI-120 with
+only a hand mic, no transceiver), so `*99` asserts PTT on nothing. Two
+phone-portal legs on the same node, `0HenWen-SpikeA` (keys with `*99`, plays a
+1 kHz tone for 3 s, unkeys with `#`) and `0HenWen-SpikeB` (listens only), each
+recording its own downlink via `MixMonitor`'s `r()` split. See
+`henwen-spike-selfecho` in `/etc/asterisk/custom/extensions.conf`.
 
-Two ways to close it, either is enough:
+| capture | 1 kHz tone | peak RMS |
+|---|---|---|
+| A's **write** side (what A sent into the conference) | present 3.7→6.6s, fraction **1.0** | 0.0884 |
+| A's **own downlink** during that same window | **absent, fraction 0.0** | **0.0000** |
+| B's downlink (control leg, same node) | present, fraction **1.0** | 0.0884 |
 
-- **Operator test, zero setup.** With TX armed and Listen off, in the browser
-  console:
-  ```js
-  var rs = new MediaStream(_tx.session.connection.getReceivers()
-      .filter(r=>r.track).map(r=>{r.track.enabled=true; return r.track}));
-  var m = new Audio(); m.srcObject = rs; m.play();
-  ```
-  Key ~5s and talk. Expected: no self-audio while keyed, tail/courtesy tone on
-  release. (One transmission; the operator's own node.)
-- **Lab rig**, below — the automatable version, and the one that becomes a
-  regression test.
+**Zero, not attenuated.** During its own 3-second transmission the keyed leg's
+downlink is digital silence — every 100 ms window reads RMS 0.0000 — while the
+control leg received the identical audio at full level. So the conference
+really did carry the audio, and really did withhold it from its sender.
+`bridge_softmix.c:213`'s mix-minus-self is doing exactly what the source read
+said, and **HenWen 1's `status.html:7784` comment ("while keyed, is your own
+voice ~a beat behind") is wrong** — that was a design-time assumption, never a
+measurement.
+
+One more thing the same recording settles: A's downlink is **live**, not
+muted. It carries nothing during A's own transmission, then real audio from
+~1 s after the `#` unkey (RMS 0.010–0.016 for 1.4 s) — the hang-time/courtesy
+tail arriving through the altaudio whisper path, which `monchannel_read()`
+gates on `!l->lastrx`, i.e. precisely when keying stops. So "hear your own tail
+as confirmation", which HenWen 1 needed the post-unkey mute hold to preserve,
+comes free on this path.
+
+**This was the finding that gated the whole HenWen 2.0 direction. It holds.**
 
 ## 2. Can `rpt_auth` enforce per-user TX? — **NO, but it points somewhere better**
 
