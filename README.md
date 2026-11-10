@@ -1,7 +1,16 @@
-# HenWen — AllStarLink 3 Node Manager & Kiosk
+# HenWen 2.0 — AllStarLink 3 Node Manager & Kiosk
 
-[![Latest release](https://img.shields.io/github/v/release/GooseThings/HenWen)](https://github.com/GooseThings/HenWen/releases)
-[![Wiki](https://img.shields.io/badge/docs-wiki-blue)](https://github.com/GooseThings/HenWen/wiki)
+> **Work in progress.** HenWen 2.0 is a fork of
+> [HenWen 1.x](https://github.com/GooseThings/HenWen) that rebuilds audio on
+> Asterisk's own interfaces: every audio stream becomes a native VoIP call
+> into the node instead of a tap on its radio channel. **1.x is the version to
+> run today**; this one is under active development and is not yet a
+> replacement. Start with [`docs/HENWEN2-PLAYBOOK.md`](docs/HENWEN2-PLAYBOOK.md),
+> and [`docs/app-rpt-audio-notes.md`](docs/app-rpt-audio-notes.md) for the
+> source-level reasoning behind the change.
+>
+> Much of what this README describes is still 1.x behavior, because the 1.x
+> code is still here until each phase of the playbook retires it.
 
 A browser-based web interface for managing and using your AllStarLink 3 node, with a public kiosk display for shared spaces. Runs as a systemd service on the same machine as Asterisk — no separate server required.
 

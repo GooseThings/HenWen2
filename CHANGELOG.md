@@ -1,5 +1,23 @@
 # Changelog
 
+## HenWen 2.0 — unreleased
+
+HenWen 2.0 is a fork of HenWen 1.x (`GooseThings/HenWen`, forked at `c875598`)
+that rebuilds audio on Asterisk's own interfaces instead of tapping the node's
+radio channel. Entries below this heading are 1.x history, kept because the
+code they describe is still here until each phase retires it. See
+`docs/HENWEN2-PLAYBOOK.md`.
+
+- **Phase 0:** repo forked with full history; `HenWen2` unit at `/opt/HenWen2`
+  with its own port, database and audio-relay ports so it runs alongside a live
+  1.x install; Raspberry Pi Zero 2 W removed as the hardware floor (now a Pi 4
+  (4GB) or any 2+ core x86-64); playbook and app_rpt audio notes added under
+  `docs/`.
+
+---
+
+## 1.x history
+
 ## v2026.10.30
 
 - **Fixed: the Node ID page showed "Idle" while the node was keyed.** The page only refreshed itself while a monitor was already active, so one opened during a quiet spell never refreshed at all and missed every key-up until reloaded. It now refreshes every 3 seconds while the page is open.
