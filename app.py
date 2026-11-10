@@ -15769,11 +15769,38 @@ def _atomic_write_if_changed(path, content, mode=0o640):
     except OSError:
         pass          # unreadable: fall through and rewrite it
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.tmp.{os.getpid()}"
-    with open(tmp, 'w') as fh:
-        fh.write(content)
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+
+    # The temp file holds every account's SIP password, so three things have
+    # to be true of how it is created, and a plain open(tmp, 'w') gets all
+    # three wrong:
+    #
+    #   * It must never be world-readable, not even briefly. open() applies
+    #     the process umask (0o022 under systemd here), so the secrets would
+    #     land in a 0644 file and only be narrowed afterwards -- a real
+    #     window, and /etc/asterisk is traversable. O_CREAT with an explicit
+    #     0o600 means it is never readable by anyone else at any point.
+    #   * It must not follow or clobber something already at that path.
+    #     O_EXCL fails instead, which is what stops a pre-created symlink in
+    #     a writable directory from redirecting the write -- the classic
+    #     insecure-temp-file pattern. The random suffix means the name cannot
+    #     be guessed in the first place; O_EXCL is the guarantee, not the
+    #     name.
+    #   * It must not survive a failure. Without the cleanup, a raising
+    #     write or replace leaves a file full of SIP passwords sitting next
+    #     to the real one under a name nothing will ever tidy up.
+    tmp = f"{path}.tmp.{os.getpid()}.{secrets.token_hex(8)}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, 'w') as fh:
+            fh.write(content)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return True
 
 

@@ -5,6 +5,7 @@
 derived Asterisk-side names, and the rendered PJSIP/dialplan config. All
 testable without Asterisk, which is the reason they're pure.
 """
+import os
 import re
 
 import pytest
@@ -309,3 +310,50 @@ class TestSipIncludeStatus:
         load. tryinclude degrades to 'not there yet'."""
         assert app.SIP_USERS_INCLUDE_LINE.startswith("#tryinclude")
         assert app.SIP_DIALPLAN_INCLUDE_LINE.startswith("#tryinclude")
+
+
+class TestTempFileHandling:
+    """The temp file holds every account's SIP password, so how it is created
+    matters as much as the final file's mode."""
+
+    @pytest.fixture(autouse=True)
+    def _tmp_paths(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(app, "SIP_USERS_CONF", str(tmp_path / "sip-users.conf"))
+        monkeypatch.setattr(app, "SIP_USERS_DIALPLAN", str(tmp_path / "sip-dialplan.conf"))
+        self.dir = tmp_path
+
+    def test_temp_file_is_never_world_readable(self, monkeypatch):
+        """open(tmp, 'w') would apply the umask and land the secrets in a 0644
+        file, narrowed only afterwards. Checked at the moment of chmod, which
+        is the end of that window."""
+        seen = {}
+        real_chmod = os.chmod
+
+        def spy(p, m, *a, **kw):
+            if ".tmp." in str(p):
+                seen["mode"] = os.stat(p).st_mode & 0o777
+            return real_chmod(p, m, *a, **kw)
+
+        monkeypatch.setattr(app.os, "chmod", spy)
+        app.write_sip_user_files([("N8GMZ", SECRET)], "643930")
+        assert seen["mode"] == 0o600, oct(seen.get("mode", 0))
+
+    def test_no_secrets_are_left_behind_when_the_write_fails(self, monkeypatch):
+        """Otherwise a file full of SIP passwords sits next to the real one
+        under a name nothing will ever tidy up."""
+        def boom(*a, **kw):
+            raise OSError("disk full")
+        monkeypatch.setattr(app.os, "replace", boom)
+        with pytest.raises(OSError):
+            app.write_sip_user_files([("N8GMZ", SECRET)], "643930")
+        assert not list(self.dir.glob("*.tmp.*")), list(self.dir.glob("*.tmp.*"))
+
+    def test_an_existing_temp_path_is_not_clobbered(self, monkeypatch):
+        """O_EXCL: the guarantee against a pre-created symlink redirecting the
+        write. Forced here by pinning the random suffix so the path is known."""
+        monkeypatch.setattr(app.secrets, "token_hex", lambda n: "deadbeefdeadbeef")
+        victim = self.dir / f"sip-users.conf.tmp.{os.getpid()}.deadbeefdeadbeef"
+        victim.write_text("pre-existing")
+        with pytest.raises(FileExistsError):
+            app.write_sip_user_files([("N8GMZ", SECRET)], "643930")
+        assert victim.read_text() == "pre-existing"
