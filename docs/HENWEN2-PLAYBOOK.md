@@ -1,8 +1,53 @@
 # HenWen 2.0 — audio as native Asterisk VoIP
 
-**Status:** Phase 0/1 in progress. Approved 2026-11-10.
+**Status (2026-11-10):** Phase 0 **done**. Phase 1 **done** — both spikes
+answered by measurement, not inference. Phase 2 **in progress**, on branch
+`phase2-per-user-sip` / **PR #1** (open, unmerged).
 **Repo:** `GooseThings/HenWen2`, forked from `GooseThings/HenWen` at `c875598`
 (full history preserved; `henwen1` remote is fetch-only).
+
+## Where things stand, and the next action
+
+Written for whoever picks this up next — a different session, or a different
+model. Read this section, then `docs/phase1-spikes.md` for what was measured
+and `docs/app-rpt-audio-notes.md` for how app_rpt actually moves audio.
+
+**HenWen2 is production.** It serves `https://henwen.ironicsandwich.com/` on
+`0.0.0.0:5000` as unit `HenWen2` from `/opt/HenWen2`; `HenWen` (1.x) is
+stopped and `disable`d. The 2.0 database is a copy of 1.x's, so
+`SOUNDS_DIR`/`TTS_VOICES_DIR` point at the **1.x** directories on purpose.
+Rollback is `systemctl stop HenWen2 && systemctl enable --now HenWen`; 1.x's
+own database is untouched. Backups: `/root/henwen-cutover-20261110-103223/`.
+
+**Functionally, 2.0 is still 1.x plus fixes.** No audio architecture has
+changed yet. Everything Phase 2 has landed so far is inert: the columns are
+unused and nothing calls the renderers or the writer.
+
+**Next action, in order:**
+
+1. The callsign assignment path — validate, enforce uniqueness, generate a
+   secret, store it. `validate_callsign()` and the unique index already
+   exist; what is missing is the route and the Manager UI field.
+2. Call `write_sip_user_files()` when an account's SIP identity changes, then
+   reload Asterisk (`pjsip reload` + `dialplan reload` over AMI) **only when
+   the writer reports a change**.
+3. Add the two `#tryinclude` lines to `pjsip.conf` and `extensions.conf`.
+   `sip_include_status()` reports whether they are there. This is a one-time
+   edit to files HenWen does not own, so it belongs in an `apply.sh`-style
+   script alongside `tx-spike/apply.sh`, not in the app.
+4. Then the Phase 2 exit criterion: a second account registers on its own
+   credential and hears node audio.
+
+**Do not** press "Launch Updater": `update.sh`'s `REPO_URL` still points at
+the 1.x repo, so it would reset this checkout onto 1.x. Held for Phase 6 by
+the owner's decision.
+
+**Testing reality:** `./venv/bin/pytest` from `/opt/HenWen2`, 1114 passing.
+Node **643930 is radioless** (UCI-120, hand mic, no transceiver), so keying
+it is not RF — that is what made both Phase 1 spikes possible without a
+separate lab Asterisk. The spike harness is still installed; see
+`henwen-spike-selfecho` in `/etc/asterisk/custom/extensions.conf` and the
+threadless `[1998]` stanza in `rpt.conf`.
 
 ## Why this fork exists
 
@@ -270,9 +315,9 @@ per-listener (bridge member + link thread + DTLS-SRTP).
 
 | Phase | Work | Exit criteria |
 |---|---|---|
-| **0** | Repo, history, remotes; `/opt/HenWen2` + unit + DB + port; docs; floor rewrite | HenWen2 runs alongside HenWen 1, 1.x untouched |
-| **1** | Spikes on the throwaway lab Asterisk (own dirs, AMI 15038 — **never** 643930) | Every question answered in writing before 2.0 audio code |
-| **2** | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential |
+| **0** ✅ | Repo, history, remotes; `/opt/HenWen2` + unit + DB + port; docs; floor rewrite | HenWen2 runs alongside HenWen 1, 1.x untouched |
+| **1** ✅ | Spikes — run against 643930 itself, which is radioless, so no lab Asterisk was needed | Both answered by measurement: the call downlink is self-free (0.0000 rms), and `outstreamcmd` carries the on-air mix including telemetry |
+| **2** | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential. **In progress (PR #1):** schema + unique index, `validate_callsign()`, `sip_identity()`, the PJSIP/dialplan renderers and the atomic writer are landed and tested but inert. Remaining: assignment route + UI, the reload trigger, the two `#tryinclude` lines. |
 | **3** | Frontend: one call = audio; connect / RX mute / PTT; gain-to-zero mute | Two accounts connected at once, neither hears itself, PTT keys |
 | **4** | Recording + stream relay onto `outstreamcmd` | A mid-QSO forced ID provably appears in a recording |
 | **5** | Delete the old pipeline and its tests; wire `listen_only`; exclude session links from Smart Connector `ilink 11`, idle detection, link counts, board display | Full suite green on a smaller codebase |

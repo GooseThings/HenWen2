@@ -6,6 +6,11 @@ HenWen 1.x — none are in the 2.0 work. This file records the disposition of
 each group so it is decided once rather than re-argued every time someone
 opens the Security tab.
 
+**All 86 were dismissed by the owner on 2026-11-10** — 17 as "false positive",
+69 as "won't fix" — on the reasoning below. The Security tab should now be
+empty, which is the point: a new alert in 2.0 code is visible instead of
+buried. If one appears, it is new, and it is about the code we just wrote.
+
 | count | rule | where | disposition |
 |---|---|---|---|
 | 69 | `py/stack-trace-exposure` | app.py | **Won't fix** — every site is admin-gated. See below. |
