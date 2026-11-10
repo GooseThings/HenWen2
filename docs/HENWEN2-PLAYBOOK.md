@@ -1,8 +1,9 @@
 # HenWen 2.0 — audio as native Asterisk VoIP
 
 **Status (2026-11-10):** Phase 0 **done**. Phase 1 **done** — both spikes
-answered by measurement, not inference. Phase 2 **in progress**, on branch
-`phase2-per-user-sip` / **PR #1** (open, unmerged).
+answered by measurement, not inference. Phase 2 **in progress**; its first
+slice is **merged to `main`** (PR #1) and running in production, deliberately
+inert.
 **Repo:** `GooseThings/HenWen2`, forked from `GooseThings/HenWen` at `c875598`
 (full history preserved; `henwen1` remote is fetch-only).
 
@@ -19,7 +20,7 @@ stopped and `disable`d. The 2.0 database is a copy of 1.x's, so
 Rollback is `systemctl stop HenWen2 && systemctl enable --now HenWen`; 1.x's
 own database is untouched. Backups: `/root/henwen-cutover-20261110-103223/`.
 
-**Functionally, 2.0 is still 1.x plus fixes.** No audio architecture has
+**`main` is what is deployed.** `/opt/HenWen2` is on `main`; PR #1 is merged and its branch deleted. **Functionally, 2.0 is still 1.x plus fixes.** No audio architecture has
 changed yet. Everything Phase 2 has landed so far is inert: the columns are
 unused and nothing calls the renderers or the writer.
 
@@ -317,7 +318,7 @@ per-listener (bridge member + link thread + DTLS-SRTP).
 |---|---|---|
 | **0** ✅ | Repo, history, remotes; `/opt/HenWen2` + unit + DB + port; docs; floor rewrite | HenWen2 runs alongside HenWen 1, 1.x untouched |
 | **1** ✅ | Spikes — run against 643930 itself, which is radioless, so no lab Asterisk was needed | Both answered by measurement: the call downlink is self-free (0.0000 rms), and `outstreamcmd` carries the on-air mix including telemetry |
-| **2** | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential. **In progress (PR #1):** schema + unique index, `validate_callsign()`, `sip_identity()`, the PJSIP/dialplan renderers and the atomic writer are landed and tested but inert. Remaining: assignment route + UI, the reload trigger, the two `#tryinclude` lines. |
+| **2** | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential. **Merged (PR #1):** schema + unique index, `validate_callsign()`, `sip_identity()`, the PJSIP/dialplan renderers and the atomic writer are landed and tested but inert. Remaining: assignment route + UI, the reload trigger, the two `#tryinclude` lines. |
 | **3** | Frontend: one call = audio; connect / RX mute / PTT; gain-to-zero mute | Two accounts connected at once, neither hears itself, PTT keys |
 | **4** | Recording + stream relay onto `outstreamcmd` | A mid-QSO forced ID provably appears in a recording |
 | **5** | Delete the old pipeline and its tests; wire `listen_only`; exclude session links from Smart Connector `ilink 11`, idle detection, link counts, board display | Full suite green on a smaller codebase |
