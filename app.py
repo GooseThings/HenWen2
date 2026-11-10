@@ -15570,6 +15570,17 @@ _CALLSIGN_RE = re.compile(r'^[A-Z0-9]{3,9}$')
 # short or memorable.
 SIP_SECRET_BYTES = 24
 
+# The alphabet secrets.token_urlsafe() actually produces. Enforced on the way
+# INTO the rendered config, not just on generation: pjsip.conf is a flat
+# key=value file, so a newline in a secret would append arbitrary
+# configuration lines, and a ';' would truncate the password Asterisk
+# actually reads (silently -- the endpoint would exist with the wrong
+# credential). generate_sip_secret() can't produce either, but a secret that
+# arrives from the database, an import or a future caller has not necessarily
+# been through it, and a config-injection sink is the wrong place to trust
+# provenance.
+_SIP_SECRET_RE = re.compile(r'^[A-Za-z0-9_-]{20,128}$')
+
 _PJSIP_USER_TEMPLATE = """[{endpoint}]
 type=endpoint
 context={context}
@@ -15654,8 +15665,12 @@ def render_pjsip_user(callsign, secret):
     and rtp_timeout is kept, because a browser that vanishes without a BYE
     otherwise leaves Rpt(<node>,P) up forever -- confirmed in 1.x on a
     27-hour-old phone-mode channel."""
-    if not str(secret or '').strip():
+    secret = str(secret or '')
+    if not secret:
         raise ValueError("a SIP secret is required")
+    if not _SIP_SECRET_RE.match(secret):
+        raise ValueError("SIP secret must be 20-128 URL-safe characters "
+                         "(A-Z a-z 0-9 _ -)")
     return _PJSIP_USER_TEMPLATE.format(secret=secret, **sip_identity(callsign))
 
 
