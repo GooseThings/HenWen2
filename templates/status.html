@@ -523,6 +523,7 @@ svg.kiosk-login-icon { display: none; }
    just under the 4.5:1 minimum). */
 #tx-btn     { --btn-tint: var(--warn); }
 #listen-btn { --btn-tint: var(--green); }
+#mute-btn   { --btn-tint: var(--accent); }
 #record-btn { --btn-tint: var(--danger); }
 .node-controls .btn-icon {
   background: color-mix(in srgb, var(--btn-tint) 8%, var(--bg3));
@@ -1694,6 +1695,10 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
   <symbol id="icon-headphones" viewBox="0 0 24 24">
     <path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3" />
   </symbol>
+  <symbol id="icon-volume-x" viewBox="0 0 24 24">
+    <path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z" />
+    <line x1="22" x2="16" y1="9" y2="15" /><line x1="16" x2="22" y1="9" y2="15" />
+  </symbol>
   <symbol id="icon-volume-2" viewBox="0 0 24 24">
     <path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z" />
     <path d="M16 9a5 5 0 0 1 0 6" />
@@ -1981,7 +1986,11 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
              strip — and dashFitNodeCard() re-measures whenever that changes. -->
         <div class="node-controls" id="node-controls">
           <button class="btn-icon" id="tx-btn" onclick="openTx()" style="display:none" title="Transmit from your microphone through this node"><svg class="icon"><use href="#icon-mic"></use></svg> Arm TX</button>
-          <button class="btn-icon" id="listen-btn" onclick="toggleListen()" title="Stream live audio from this node — expect ~1 second delay"><svg class="icon"><use href="#icon-headphones"></use></svg> Listen</button>
+          <button class="btn-icon" id="listen-btn" onclick="toggleListen()" title="Hear this node's live audio"><svg class="icon"><use href="#icon-headphones"></use></svg> Listen</button>
+          <!-- HenWen 2.0 decision D2: MUTE silences received audio in this
+               browser only. The call (and PTT) stays up, so it is shown only
+               while Listen is running. -->
+          <button class="btn-icon" id="mute-btn" onclick="toggleMute()" style="display:none" title="Silence received audio here (the connection stays up)"><svg class="icon"><use href="#icon-volume-x"></use></svg> Mute</button>
           <button class="btn-icon" id="record-btn" onclick="toggleRecord()" style="display:none" title="Record this node's audio to a file"><svg class="icon" style="color:var(--red,#f85149)"><use href="#icon-circle"></use></svg> Rec</button>
         </div>
         <div id="listen-vol-row">
@@ -6478,6 +6487,10 @@ async function kioskLogin2fa() {
 }
 
 async function kioskLogout() {
+  /* A one-call audio session IS this account's credential in use: logging
+     out must end it, or a logged-out browser keeps a keyable call up. The
+     1.x stream is left as it was (it never carried a credential). */
+  if (window._sip && (_sip.active || _sip.ua)) { _stopListen(); _txDisarmForRxStop(true); }
   await apiFetch('/logout', {method: 'POST'});
   /* /logout clears the session, invalidating the CSRF token in our meta tag.
      /login (the redirect target) regenerates one for the fresh session.
@@ -7088,10 +7101,15 @@ function _txDiag(type, detail) {
    mic's live audio level. audioLevel ≈ 0 while the operator is speaking
    means the capture path is broken (wrong device, OS mute); healthy level
    with packets flowing means the problem is downstream of the browser. */
+function _txActiveSession() {
+  return (window._sip && _sip.session) || _tx.session;
+}
+
 function _txStatsSample(tag) {
-  if (!_tx.session || !_tx.session.connection) return;
+  var sess = _txActiveSession();
+  if (!sess || !sess.connection) return;
   try {
-    _tx.session.connection.getStats().then(function(stats) {
+    sess.connection.getStats().then(function(stats) {
       var out = [];
       stats.forEach(function(s) {
         if (s.type === 'media-source' && s.kind === 'audio') {
@@ -7102,7 +7120,7 @@ function _txStatsSample(tag) {
         }
       });
       var track = null;
-      try { track = _tx.session.connection.getSenders()[0].track; } catch (e) {}
+      try { track = sess.connection.getSenders()[0].track; } catch (e) {}
       if (track) out.push('track[' + track.label.slice(0, 40) + '] muted=' + track.muted +
                           ' enabled=' + track.enabled + ' state=' + track.readyState);
       if (_tx.gainNode) out.push('gain=' + Math.round(_tx.gainNode.gain.value * 100) + '%');
@@ -7142,7 +7160,13 @@ async function _txUpdateBtn() {
   if (!eligible) { btn.style.display = 'none'; dashFitNodeCard(); return; }
   try {
     var r = await apiFetch('/api/tx/config?probe=1');
-    btn.style.display = r.ok ? '' : 'none';
+    var j = r.ok ? await r.json() : {};
+    /* HenWen 2.0: an account with its own SIP identity gets PTT from the
+       one-call Listen path (the PTT bar appears when Listen connects --
+       decision D2, no arm step), so the separate Arm TX flow is hidden
+       for it. Everyone else sees exactly the 1.x button. */
+    window._sipIdentity = (j && j.identity === 'user');
+    btn.style.display = (r.ok && !(window._sipIdentity && _sipCapable())) ? '' : 'none';
   } catch (e) { btn.style.display = 'none'; }
   /* This button lives in the Node card, which is sized to its contents —
      showing/hiding it changes how many grid rows that card needs, and a
@@ -7641,7 +7665,16 @@ function openTx() {  /* header 🎤 TX button: arm/disarm toggle */
 var TX_ICE_MAX_WAIT_MS = 4000;
 var TX_ICE_NO_CAND_MS  = 8000;
 
-function _txBoundIceGathering(s) {
+function _txBoundIceGathering(s, isLive, onNoCandidates) {
+  /* isLive(): whether this session is still the one that matters (default:
+     the Arm-TX call); onNoCandidates(): what to do when no ICE candidate
+     ever arrives (default: drop out of arming). The one-call audio path
+     passes its own -- see _doStartListenSIP(). */
+  isLive = isLive || function() { return _tx.armed && _tx.session === s; };
+  onNoCandidates = onNoCandidates || function() {
+    _txStatus('Could not start the call — no network candidates. Try arming again.', 'var(--red)');
+    disarmTx();
+  };
   var ready = null, timer = null, t0 = Date.now();
   /* The deadline below only ever armed once a first candidate had arrived,
      because ready() is handed out by the icecandidate event and there is no
@@ -7651,11 +7684,10 @@ function _txBoundIceGathering(s) {
      operator gave up. Can't force the offer without ready(), but silence is
      never the right outcome: say so and drop out of arming. */
   setTimeout(function() {
-    if (ready !== null || !_tx.armed || _tx.session !== s) return;   // progressed
-    if (!_tx.session || _tx.session.isEstablished()) return;
+    if (ready !== null || !isLive()) return;   // progressed
+    if (s.isEstablished()) return;
     _txDiag('ice-no-candidates', 'none after ' + TX_ICE_NO_CAND_MS + 'ms');
-    _txStatus('Could not start the call — no network candidates. Try arming again.', 'var(--red)');
-    disarmTx();
+    onNoCandidates();
   }, TX_ICE_NO_CAND_MS);
   var go = function(why) {
     if (!ready) return;                      // already sent, or never armed
@@ -7842,19 +7874,26 @@ function disarmTx() {
    unkey so the operator hears their own repeater tail as confirmation. */
 function _txMuteListen(muted) {
   var a = document.getElementById('node-audio');
-  if (a) a.muted = muted;
+  if (a) a.muted = muted || _userMuted;
 }
 
 function _txKey() {
-  if (!_tx.session || _tx.keyed || !_tx.session.isEstablished()) return;
+  var sess = _txActiveSession();
+  if (!sess || _tx.keyed || !sess.isEstablished()) return;
   _tx.keyed = true;
   var b = document.getElementById('tx-ptt');
   b.classList.add('tx');
   /* No _txStatus('TRANSMITTING') here — the PTT button's own color change
      (.tx class, added above) already says it; a text line repeating that
      right next to a button that's just turned red is redundant. */
-  _txMuteListen(true);
-  try { _tx.session.sendDTMF('*99', { duration: 100, interToneGap: 70 }); }
+  /* The radio-style RX mute while keyed is a legacy-path thing: the tapped
+     stream carries the transmit mix, so it would play the operator's own
+     voice back a beat late. On the one-call path the downlink is the
+     conference minus this link -- measured as digital silence during the
+     link's own transmission (docs/phase1-spikes.md, spike 1) -- so there
+     is nothing to mute, and the repeater tail arrives as confirmation. */
+  if (!(window._sip && _sip.session)) _txMuteListen(true);
+  try { sess.sendDTMF('*99', { duration: 100, interToneGap: 70 }); }
   catch (e) {
     _tx.keyed = false; b.classList.remove('tx'); _txMuteListen(false);
     _txDiag('dtmf-err', e.message);
@@ -7871,9 +7910,10 @@ function _txUnkey() {
   var b = document.getElementById('tx-ptt');
   if (b) b.classList.remove('tx');
   _txMuteListen(false);
-  if (_tx.session && _tx.session.isEstablished()) {
+  var sess = _txActiveSession();
+  if (sess && sess.isEstablished()) {
     _txStatus('');
-    try { _tx.session.sendDTMF('#', { duration: 100, interToneGap: 70 }); } catch (e) {}
+    try { sess.sendDTMF('#', { duration: 100, interToneGap: 70 }); } catch (e) {}
   }
 }
 
@@ -8075,7 +8115,8 @@ function _txUnkey() {
   ptt.addEventListener('pointerleave',  function()  { _txUnkey(); });
   ptt.addEventListener('pointercancel', function()  { _txUnkey(); });
   document.addEventListener('keydown', function(e) {
-    if (e.code === 'Space' && !e.repeat && _tx.armed && _tx.session &&
+    var pttLive = (_tx.armed && _tx.session) || (window._sip && _sip.session && _sip.canTx);
+    if (e.code === 'Space' && !e.repeat && pttLive &&
         !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '')) {
       e.preventDefault(); _txKey();
     }
@@ -8089,6 +8130,7 @@ function _txUnkey() {
   document.addEventListener('visibilitychange', function() { if (document.hidden) _txUnkey(); });
   window.addEventListener('beforeunload', function() {
     if (_tx.session) { try { _tx.session.terminate(); } catch (e) {} }
+    if (window._sip && _sip.session) { try { _sip.session.terminate(); } catch (e) {} }
   });
 })();
 
@@ -8212,7 +8254,7 @@ function _listenRecoverAfterRouteChange() {
         _listenAudioCtx.resume().catch(function() {});
       }
       var a = document.getElementById('node-audio');
-      if (a && a.paused && a.getAttribute('src')) {
+      if (a && a.paused && (a.getAttribute('src') || a.srcObject)) {
         a.play().catch(function() {});
       }
     }, ms);
@@ -8255,6 +8297,7 @@ function _listenSetBtn(html, color, disabled) {
      label is meaningful text and stays fully legible at every opacity. */
   var vol = document.getElementById('listen-volume');
   if (vol) { vol.disabled = !active; vol.style.opacity = active ? '1' : '0.4'; }
+  _muteUpdateBtn(active);
 }
 
 /* Listen volume attenuates only the <audio> element's own playback gain —
@@ -8283,14 +8326,49 @@ function _startListen() {
   var audio = document.getElementById('node-audio');
   /* Honor the TX-keyed mute even across a Listen (re)start — an auto-
      reconnect mid-transmission must not bring the delayed self-audio back. */
-  audio.muted = !!(window._tx && _tx.keyed);
+  audio.muted = !!(window._tx && _tx.keyed && !(window._sip && _sip.session)) || _userMuted;
   _listenSetBtn('... Connecting', 'var(--text2)', true);
   audio.onloadstart = null;
   audio.onerror     = null;
+  _listenArmWatchdog();
 
-  /* Startup watchdog: if playback hasn't begun within _LISTEN_START_MS, tear the
-     attempt down and tell the user instead of leaving the button stuck on
-     "... Connecting" forever (e.g. when a network blocks the live stream). */
+  /* HenWen 2.0: the server decides per session whether audio is one native
+     call (this account's own SIP identity) or the 1.x stream. See
+     /api/audio/session in app.py and _doStartListenSIP() below. */
+  apiFetch('/api/audio/session')
+    .then(function(r) {
+      if (r.status === 401) {
+        if (_listenStartTimer) { clearTimeout(_listenStartTimer); _listenStartTimer = null; }
+        _listenSetBtn('<svg class="icon"><use href="#icon-headphones"></use></svg> Listen', '', false);
+        openKioskLogin(_startListen, []);
+        return null;
+      }
+      return r.ok ? r.json() : {};
+    })
+    .then(function(d) {
+      if (!d) return;   /* 401 already handled above */
+      if (d.sip && _sipCapable() && !_sipBlocked()) {
+        _doStartListenSIP(audio, node, d);
+        return;
+      }
+      if (d.sip && !_sipCapable()) {
+        _listenFallbackNotice = 'Direct call needs HTTPS and a WebRTC browser — using the standard stream. ';
+        _audioClientLog(node, 'sip-skipped', 'browser not capable (secure=' + window.isSecureContext + ')');
+      } else if (d.sip) {
+        _listenFallbackNotice = 'Direct call keeps failing here — using the standard stream. ';
+      }
+      _startListenLegacy(audio, node);
+    })
+    .catch(function() {
+      /* An old/odd server answer is no reason to withhold audio. */
+      _startListenLegacy(audio, node);
+    });
+}
+
+/* Startup watchdog: if playback hasn't begun within _LISTEN_START_MS, tear
+   the attempt down and tell the user instead of leaving the button stuck on
+   "... Connecting" forever (e.g. when a network blocks the live stream). */
+function _listenArmWatchdog() {
   if (_listenStartTimer) clearTimeout(_listenStartTimer);
   _listenStartTimer = setTimeout(function() {
     _listenStartTimer = null;
@@ -8301,7 +8379,14 @@ function _startListen() {
     _listenSetBtn('<svg class="icon"><use href="#icon-headphones"></use></svg> Listen', '', false);
     sbToast('Audio did not start — your network may be blocking the live stream. Try again, or use a different connection.', false);
   }, _LISTEN_START_MS);
+}
 
+/* The 1.x streaming path, unchanged: a server-side capture of the node's
+   channel, encoded once and fanned out. Still the path for every account
+   without a SIP identity, and the fallback when the one-call path cannot
+   connect (decision D3: STUN plus this fallback, instrumented). */
+function _startListenLegacy(audio, node) {
+  if (!_listenStartTimer) _listenArmWatchdog();
   apiFetch('/api/audio/check/' + node)
     .then(function(r) {
       if (r.status === 401) {
@@ -8999,7 +9084,297 @@ function _doStartListenFallback(audio, node) {
   }, 8 * 60 * 1000);
 }
 
+/* ── One-call audio (HenWen 2.0, Phase 3) ───────────────────────────────
+   For an account with its own SIP identity (Manager > Users > Callsign),
+   Listen does not fetch a server-encoded stream: it registers to Asterisk
+   as that account and places ONE native call into the node's phone portal
+   (Rpt(<node>,P) under the link name 0<CALLSIGN>). That call carries
+   both directions -- the node's audio comes down it, PTT is DTMF *99/# up
+   it -- so there is no server-side capture, encoder, jitter buffer or
+   live-edge controller involved, and no self-echo: the downlink is the
+   conference minus this link (measured, docs/phase1-spikes.md).
+
+   Decision D2: no arm step. Connecting is the whole setup; the PTT bar
+   appears the moment the call is confirmed (if this account may transmit)
+   and MUTE only silences playback here. The microphone is requested up
+   front at connect -- a call with a live audio track sends RTP
+   continuously, which is exactly what Asterisk's rtp_timeout=60 needs to
+   see; if the mic is refused, a silent synthetic track keeps the RTP
+   flowing and PTT stays disabled. The mic is never gated client-side
+   between presses: app_rpt zeroes a phone link's inbound audio while the
+   link is unkeyed (app_rpt.c, "if not receiving, zero-out audio"), so
+   nothing from the mic reaches the air without *99.
+
+   Decision D3: the 1.x stream stays as the fallback. If the call cannot
+   be set up, or no inbound RTP arrives within _SIP_MEDIA_MS (ICE never
+   completed -- UDP blocked, symmetric NAT), this falls back to
+   _startListenLegacy() and logs why via /api/audio/client-log, so the
+   question "does anyone here actually need TURN?" gets answered from the
+   journal instead of guessed. Repeated failures stop retrying the call
+   for this page load (_sipBlocked()). */
+var _sip = { ua: null, session: null, cfg: null, node: '', canTx: false, micOk: false,
+             active: false, gen: 0, silentCtx: null,
+             connectTimer: null, mediaTimer: null, statsTimer: null, failures: [] };
+var _userMuted = false;
+var _SIP_CONNECT_MS   = 12000;   // registration + INVITE must confirm within this
+var _SIP_MEDIA_MS     = 6000;    // inbound RTP must have started this long after confirm
+var _SIP_STATS_MS     = 60000;   // periodic inbound/outbound RTP telemetry
+var _SIP_MAX_FAILURES = 2;       // ... within _SIP_FAIL_WINDOW_MS -> legacy for the rest of the page load
+var _SIP_FAIL_WINDOW_MS = 180000;
+
+function _sipCapable() {
+  return !!(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
+            window.RTCPeerConnection && window.WebSocket);
+}
+
+function _sipBlocked() {
+  var cutoff = Date.now() - _SIP_FAIL_WINDOW_MS;
+  _sip.failures = _sip.failures.filter(function(t) { return t > cutoff; });
+  return _sip.failures.length >= _SIP_MAX_FAILURES;
+}
+
+/* A live, continuously-sent, silent track for when the mic is refused:
+   keeps RTP flowing (rtp_timeout) with nothing on it. */
+function _sipSilentStream() {
+  var ctx = new (window.AudioContext || window.webkitAudioContext)();
+  var dest = ctx.createMediaStreamDestination();
+  var osc = ctx.createOscillator(), g = ctx.createGain();
+  g.gain.value = 0;
+  osc.connect(g); g.connect(dest); osc.start();
+  ctx.resume().catch(function() {});
+  _sip.silentCtx = ctx;
+  return dest.stream;
+}
+
+function _sipShowPtt(show) {
+  var bar = document.getElementById('tx-bar'), ptt = document.getElementById('tx-ptt');
+  if (bar) bar.style.display = show ? '' : 'none';
+  if (ptt) ptt.disabled = !show;
+  var totEl = document.getElementById('tx-ptt-tot');
+  if (totEl && show && _sip.cfg && _sip.cfg.sip && typeof _sip.cfg.sip.tot_sec === 'number' && _sip.cfg.sip.tot_sec > 0) {
+    totEl.textContent = 'Time-out timer: ' + _histDuration(_sip.cfg.sip.tot_sec);
+    totEl.style.display = '';
+  } else if (totEl) {
+    totEl.style.display = 'none';
+  }
+  if (show) {
+    _txStatus(_sip.micOk ? '' : 'Microphone unavailable — listening only', _sip.micOk ? '' : 'var(--warn)');
+    var agcMsgEl = document.getElementById('tx-agc-msg');
+    if (agcMsgEl) agcMsgEl.style.display = 'none';
+  }
+}
+
+function _doStartListenSIP(audio, node, cfg) {
+  /* The generic startup watchdog would tear this down as "no stream"; the
+     call has its own deadline below, which falls back instead of stopping. */
+  if (_listenStartTimer) { clearTimeout(_listenStartTimer); _listenStartTimer = null; }
+  var gen = ++_sip.gen;
+  var stale = function() { return _sip.gen !== gen; };
+  _sip.node = node; _sip.cfg = cfg; _sip.canTx = !!cfg.can_tx; _sip.active = false;
+  _listenNode = node;
+  var sip = cfg.sip;
+
+  clearTimeout(_sip.connectTimer);
+  _sip.connectTimer = setTimeout(function() {
+    if (stale() || _sip.active) return;
+    _sipFallback('connect-timeout');
+  }, _SIP_CONNECT_MS);
+
+  _loadJsSIP().then(function() {
+    if (stale()) return null;
+    /* Mic up front (D2). _txBuildMicChain() is the Arm-TX mic chain: the
+       same gain slider, meter and device/processing choices apply here. */
+    return _txBuildMicChain().then(function(stream) {
+      _sip.micOk = true;
+      return stream;
+    }, function(err) {
+      _txDiag('mic-err', (err && err.name) + ' ' + (err && err.message));
+      _sip.micOk = false;
+      _sip.canTx = false;
+      return _sipSilentStream();
+    });
+  }).then(function(micStream) {
+    if (!micStream) return;
+    if (stale()) { _txReleaseMic(); return; }
+    var domain = location.hostname;
+    var socket = new JsSIP.WebSocketInterface('wss://' + location.host + sip.ws_path);
+    var ua = new JsSIP.UA({ sockets: [socket], uri: 'sip:' + sip.username + '@' + domain,
+                            authorization_user: sip.auth_user || sip.username,
+                            password: sip.password, register: true, session_timers: false });
+    _sip.ua = ua;
+    ua.on('registrationFailed', function(e) {
+      if (!stale()) _sipFallback('registration-failed:' + (e.cause || ''));
+    });
+    ua.on('registered', function() {
+      if (stale() || _sip.session) return;
+      var s = ua.call('sip:' + sip.dial + '@' + domain, {
+        mediaStream: micStream,
+        /* STUN for the same reason Arm TX needs it: signaling rides the
+           Apache WSS proxy, the media is direct UDP. */
+        pcConfig: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
+      });
+      _sip.session = s;
+      _txBoundIceGathering(s,
+        function() { return !stale() && _sip.session === s; },
+        function() { _sipFallback('no-ice-candidates'); });
+      /* Inbound audio IS the monitor path here: play it through the same
+         <audio> element the 1.x stream uses, so the Volume slider, the
+         speaker picker (setSinkId) and the user's Mute all keep working. */
+      s.connection.addEventListener('track', function(e) {
+        if (stale()) return;
+        var stream = (e.streams && e.streams[0]) || new MediaStream([e.track]);
+        audio.srcObject = stream;
+        audio.muted = _userMuted;
+        audio.play().catch(function(err) { _txDiag('play-err', err && err.name); });
+      });
+      s.on('confirmed', function() {
+        if (stale()) { try { s.terminate(); } catch (e) {} return; }
+        clearTimeout(_sip.connectTimer);
+        _sip.active = true;
+        _listenActive = true;
+        _listenSetBtn('<svg class="icon"><use href="#icon-headphones"></use></svg> Stop', 'var(--green)', false);
+        if (_sip.canTx) _sipShowPtt(true);
+        sbToast('Monitoring node ' + node + ' as ' + sip.callsign + ' — direct call'
+                + (_sip.canTx ? ', PTT ready' : ''), true);
+        _audioClientLog(node, 'sip-connected', 'callsign=' + sip.callsign + ' link=' + sip.link_name
+                        + ' mic=' + _sip.micOk + ' tx=' + _sip.canTx);
+        _sipWatchMedia(s, node, stale);
+        dashFitNodeCard();
+      });
+      s.on('newDTMF', function(e) {
+        if (e.originator === 'local') _txDiag('dtmf', 'sent ' + e.dtmf.tone);
+      });
+      s.on('failed', function(e) {
+        if (!stale()) _sipFallback('call-failed:' + (e.cause || ''));
+      });
+      s.on('ended', function(e) {
+        if (!stale()) _sipEnded(e);
+      });
+    });
+    ua.start();
+  }).catch(function(e) {
+    if (!stale()) _sipFallback('error:' + (e && e.message));
+  });
+}
+
+/* Did media actually flow? ICE can "succeed" on signaling alone; packets
+   are the proof. No inbound packets _SIP_MEDIA_MS after confirm means the
+   UDP path is blocked, and the honest answer is the fallback -- plus one
+   telemetry line, which is the whole D3 measurement. */
+function _sipWatchMedia(s, node, stale) {
+  function sample(cb) {
+    try {
+      s.connection.getStats().then(function(stats) {
+        var o = { rx: 0, lost: 0, jitter: null, tx: 0, cand: '' };
+        stats.forEach(function(r) {
+          if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+            o.rx = r.packetsReceived || 0; o.lost = r.packetsLost || 0;
+            o.jitter = (r.jitter != null) ? Math.round(r.jitter * 1000) : null;
+          }
+          if (r.type === 'outbound-rtp' && r.kind === 'audio') o.tx = r.packetsSent || 0;
+          if (r.type === 'candidate-pair' && (r.selected || r.nominated) && r.state === 'succeeded') {
+            o.cand = (r.localCandidateId || '').slice(-4);
+          }
+        });
+        cb(o);
+      }).catch(function() { cb(null); });
+    } catch (e) { cb(null); }
+  }
+  clearTimeout(_sip.mediaTimer);
+  _sip.mediaTimer = setTimeout(function() {
+    if (stale()) return;
+    sample(function(o) {
+      if (stale()) return;
+      if (!o) return;
+      if (o.rx === 0) {
+        _audioClientLog(node, 'sip-nomedia', 'no inbound RTP after ' + _SIP_MEDIA_MS + 'ms, tx=' + o.tx);
+        _sipFallback('no-media');
+        return;
+      }
+      _audioClientLog(node, 'sip-media', 'rx=' + o.rx + ' tx=' + o.tx + ' jitter=' + o.jitter + 'ms');
+    });
+  }, _SIP_MEDIA_MS);
+  clearInterval(_sip.statsTimer);
+  _sip.statsTimer = setInterval(function() {
+    if (stale()) { clearInterval(_sip.statsTimer); return; }
+    sample(function(o) {
+      if (o) _audioClientLog(node, 'sip-stats', 'rx=' + o.rx + ' lost=' + o.lost + ' tx=' + o.tx + ' jitter=' + o.jitter + 'ms');
+    });
+  }, _SIP_STATS_MS);
+}
+
+/* The call ended without us asking: network drop, Asterisk hangup (TOT,
+   rtp_timeout), credential revoked. Try once more after a short pause --
+   _startListen() re-asks the server, so a revoked identity lands on the
+   1.x stream instead of looping. */
+function _sipEnded(e) {
+  var node = _sip.node, cause = (e && e.cause) || '';
+  _audioClientLog(node, 'sip-ended', cause);
+  _sip.failures.push(Date.now());
+  _sipTeardown();
+  _listenActive = false;
+  _listenSetBtn('... Reconnecting', 'var(--text2)', true);
+  sbToast('Audio call ended (' + (cause || 'unknown') + ') — reconnecting', false);
+  setTimeout(function() { if (!_listenActive) _startListen(); }, 3000);
+}
+
+function _sipFallback(reason) {
+  var node = _sip.node, audio = document.getElementById('node-audio');
+  _audioClientLog(node, 'sip-fallback', reason);
+  _sip.failures.push(Date.now());
+  _sipTeardown();
+  _listenFallbackNotice = 'Direct call unavailable (' + reason.split(':')[0] + ') — using the standard stream. ';
+  _listenSetBtn('... Connecting', 'var(--text2)', true);
+  _startListenLegacy(audio, node);
+}
+
+/* Returns true if a one-call session (or attempt) was torn down. */
+function _sipTeardown() {
+  var had = !!(_sip.ua || _sip.session || _sip.active || _sip.connectTimer);
+  _sip.gen++;                       /* every pending callback sees stale() */
+  clearTimeout(_sip.connectTimer);  _sip.connectTimer = null;
+  clearTimeout(_sip.mediaTimer);    _sip.mediaTimer = null;
+  clearInterval(_sip.statsTimer);   _sip.statsTimer = null;
+  /* Nothing below may run for a 1.x-path Listen: _stopListen() calls this
+     on every internal reconnect/pipeline swap, and an armed Arm-TX call
+     (its own mic chain, its own PTT bar, possibly keyed right now) has to
+     ride through those untouched. */
+  if (!had) return false;
+  _txUnkey();                       /* sends # if keyed; hangup is a guaranteed unkey anyway */
+  _sipShowPtt(false);
+  if (_sip.session) { try { _sip.session.terminate(); } catch (e) {} _sip.session = null; }
+  if (_sip.ua)      { try { _sip.ua.stop(); }           catch (e) {} _sip.ua = null; }
+  _txReleaseMic();
+  if (_sip.silentCtx) { try { _sip.silentCtx.close(); } catch (e) {} _sip.silentCtx = null; }
+  var a = document.getElementById('node-audio');
+  if (a && a.srcObject) a.srcObject = null;
+  _sip.active = false; _sip.micOk = false; _sip.canTx = false;
+  return had;
+}
+
+/* MUTE (decision D2): playback-side only, for whichever path is live. */
+function toggleMute() {
+  _userMuted = !_userMuted;
+  var a = document.getElementById('node-audio');
+  if (a) a.muted = _userMuted || !!(window._tx && _tx.keyed && !_sip.session);
+  _muteUpdateBtn(_listenActive);
+}
+
+function _muteUpdateBtn(listenActive) {
+  var b = document.getElementById('mute-btn');
+  if (!b) return;
+  var show = !!listenActive;
+  var was = b.style.display !== 'none';
+  b.style.display = show ? '' : 'none';
+  b.innerHTML = '<svg class="icon"><use href="#icon-volume-' + (_userMuted ? '2' : 'x') + '"></use></svg> '
+                + (_userMuted ? 'Unmute' : 'Mute');
+  b.classList.toggle('btn-active', _userMuted);
+  b.style.color = _userMuted ? 'var(--text)' : '';
+  if (was !== show) dashFitNodeCard();
+}
+
 function _stopListen() {
+  var wasSip = _sipTeardown();   /* no-op when the 1.x path was in use */
   if (_listenStartTimer) { clearTimeout(_listenStartTimer);  _listenStartTimer = null; }
   if (_listenRenewTimer) { clearTimeout(_listenRenewTimer);  _listenRenewTimer = null; }
   if (_listenRateTimer)  { clearInterval(_listenRateTimer);  _listenRateTimer  = null; }
@@ -9037,7 +9412,7 @@ function _stopListen() {
   _listenActive = false;
   _listenNode   = '';
   _listenSetBtn('<svg class="icon"><use href="#icon-headphones"></use></svg> Listen', '', false);
-  if (node) {
+  if (node && !wasSip) {
     apiFetch('/api/audio/stop', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},

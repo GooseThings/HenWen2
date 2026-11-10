@@ -1,9 +1,11 @@
 # HenWen 2.0 — audio as native Asterisk VoIP
 
-**Status (2026-11-10):** Phase 0 **done**. Phase 1 **done** — both spikes
-answered by measurement, not inference. Phase 2 **in progress**; its first
-slice is **merged to `main`** (PR #1) and running in production, deliberately
-inert.
+**Status (2026-11-10, evening):** Phase 0 **done**. Phase 1 **done** — both
+spikes answered by measurement, not inference. Phase 2 **built** (PR #1
+merged; PR #2 open and deployed) — the one step left is the owner running
+`sip-users/apply.sh`, after which the exit criterion can be checked. Phase 3
+**built, not live-verified** (PR #3, stacked on PR #2, deployed): the one-call
+audio path exists end to end but no browser has placed the call yet.
 **Repo:** `GooseThings/HenWen2`, forked from `GooseThings/HenWen` at `c875598`
 (full history preserved; `henwen1` remote is fetch-only).
 
@@ -20,24 +22,39 @@ stopped and `disable`d. The 2.0 database is a copy of 1.x's, so
 Rollback is `systemctl stop HenWen2 && systemctl enable --now HenWen`; 1.x's
 own database is untouched. Backups: `/root/henwen-cutover-20261110-103223/`.
 
-**`main` is what is deployed.** `/opt/HenWen2` is on `main`; PR #1 is merged and its branch deleted. **Functionally, 2.0 is still 1.x plus fixes.** No audio architecture has
-changed yet. Everything Phase 2 has landed so far is inert: the columns are
-unused and nothing calls the renderers or the writer.
+**What is deployed:** `/opt/HenWen2` is on branch `phase3-one-call-audio`
+(PR #3, which contains PR #2's `phase2-finish`); `main` is still PR #1.
+Neither PR is merged — the owner reviews first. **Functionally, 2.0 is
+still 1.x plus fixes for every account**, because nothing in Phases 2-3
+changes what a session gets until (a) the include wiring has run and (b) an
+account has been given a callsign. Both are owner actions; neither has
+happened.
 
-**Next action, in order:**
+**Next action, in order (the first two are the owner's):**
 
-1. The callsign assignment path — validate, enforce uniqueness, generate a
-   secret, store it. `validate_callsign()` and the unique index already
-   exist; what is missing is the route and the Manager UI field.
-2. Call `write_sip_user_files()` when an account's SIP identity changes, then
-   reload Asterisk (`pjsip reload` + `dialplan reload` over AMI) **only when
-   the writer reports a change**.
-3. Add the two `#tryinclude` lines to `pjsip.conf` and `extensions.conf`.
-   `sip_include_status()` reports whether they are there. This is a one-time
-   edit to files HenWen does not own, so it belongs in an `apply.sh`-style
-   script alongside `tx-spike/apply.sh`, not in the app.
-4. Then the Phase 2 exit criterion: a second account registers on its own
-   credential and hears node audio.
+1. Wire the includes — a change to Asterisk's own config that this session
+   was not permitted to make:
+   ```
+   sudo bash /opt/HenWen2/sip-users/apply.sh
+   sudo INSTALL_DIR=/opt/HenWen2 SERVICE_NAME=HenWen2 bash /opt/HenWen2/provision-sudoers.sh   # for the Manager button
+   ```
+2. Give one account a callsign (Manager > Users), then prove the Phase 2
+   exit criterion: `sudo /opt/HenWen2/sip-users/check-register.py --user
+   henwen-u-<callsign> --auth-user <CALLSIGN> --password <secret from the
+   users table>` must print PASS, and `pjsip show endpoints` must list
+   `henwen-u-<callsign>`. **This is also the first live test of the
+   endpoint-identification choice** (SIP user = endpoint name, auth user =
+   callsign, see "Per-user SIP identity" in CLAUDE.md): if REGISTER is
+   refused with 401/403 while the password is right, swap the renderer to
+   `username={endpoint}` in the auth object instead — one-line change, the
+   tests pin the current choice and would need the same edit.
+3. From that account, press Listen on the kiosk: it should connect as a
+   direct call (toast says so), appear as `0<CALLSIGN>` in `rpt lstats`,
+   and show the PTT bar. Check the journal for `sip-connected` then
+   `sip-media` (good) or `sip-fallback`/`sip-nomedia` (the D3 measurement).
+4. Phase 3 exit criterion: two such accounts at once, neither hears itself,
+   PTT keys. Then merge PRs #2 and #3.
+5. Phase 4.
 
 **Do not** press "Launch Updater": `update.sh`'s `REPO_URL` still points at
 the 1.x repo, so it would reset this checkout onto 1.x. Held for Phase 6 by
@@ -281,6 +298,36 @@ channel). A muted mic therefore has to keep sending RTP: mute is
 gain-to-zero in the existing WebAudio chain, and RX mute is playback-side
 only.
 
+### Phase 3 as built (2026-11-10)
+
+- **Gate:** `GET /api/audio/session` returns the per-user credential only
+  for an account with a usable identity (callsign + secret + includes
+  wired), never for a listen-only account (D1-a: any credential can key;
+  enforcing it inside the call is Phase 5) and never during a node lockout
+  for a non-owner. Everyone else gets exactly the 1.x Listen and Arm TX.
+- **Playback** goes through the existing `#node-audio` element via
+  `srcObject`, so Volume, the speaker picker and Mute are shared with the
+  1.x path. Chrome will not play remote WebRTC audio through WebAudio
+  alone; the element is the reliable sink.
+- **Mic:** requested at connect (D2). A refused mic becomes a silent
+  synthetic track so RTP keeps flowing for `rtp_timeout`; PTT stays off.
+  Not gated between presses: app_rpt zeroes a phone link's inbound audio
+  while unkeyed (`app_rpt.c`, "if not receiving, zero-out audio"), verified
+  in the 3.10.8 source during this phase.
+- **Fallback (D3):** registration/INVITE failure, no ICE candidate,
+  `_SIP_CONNECT_MS` (12s) without confirm, or zero inbound RTP
+  `_SIP_MEDIA_MS` (6s) after confirm → one journal line
+  (`sip-fallback`/`sip-nomedia`) and the 1.x stream. An unexpected `ended`
+  retries once after 3s; two failures in 3 minutes pin the page load to
+  the stream. `sip-connected`/`sip-media`/`sip-stats` are the positive
+  telemetry.
+- **Arm TX** is hidden only for accounts the one-call path serves; its code
+  path is untouched for everyone else and is what the fallback leaves in
+  place. `_sipTeardown()` is a no-op unless a one-call attempt existed,
+  because `_stopListen()` runs on every internal 1.x reconnect and an armed
+  Arm-TX call must survive those.
+- **Logout ends the call** — the credential in use is the account's.
+
 ### Retired with this architecture
 
 `audio_ws_relay.py`, `ws-audio/`, `audiosocket-tap/`, `_start_broadcast()`,
@@ -318,8 +365,8 @@ per-listener (bridge member + link thread + DTLS-SRTP).
 |---|---|---|
 | **0** ✅ | Repo, history, remotes; `/opt/HenWen2` + unit + DB + port; docs; floor rewrite | HenWen2 runs alongside HenWen 1, 1.x untouched |
 | **1** ✅ | Spikes — run against 643930 itself, which is radioless, so no lab Asterisk was needed | Both answered by measurement: the call downlink is self-free (0.0000 rms), and `outstreamcmd` carries the on-air mix including telemetry |
-| **2** | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential. **Merged (PR #1):** schema + unique index, `validate_callsign()`, `sip_identity()`, the PJSIP/dialplan renderers and the atomic writer are landed and tested but inert. Remaining: assignment route + UI, the reload trigger, the two `#tryinclude` lines. |
-| **3** | Frontend: one call = audio; connect / RX mute / PTT; gain-to-zero mute | Two accounts connected at once, neither hears itself, PTT keys |
+| **2** 🔧 | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential. **Built:** PR #1 (schema, renderers, writer) merged; PR #2 (assignment route + Manager field, provisioning trigger + reload, revocation incl. hangup of live calls, `sip-users/apply.sh`, `/api/tx/config` per-user identity, connector exclusion) open and deployed. **Not verified live:** the include wiring needs the owner; `sip-users/check-register.py` then proves the registration half. |
+| **3** 🔧 | Frontend: one call = audio; connect / MUTE / PTT | Two accounts connected at once, neither hears itself, PTT keys. **Built (PR #3):** `/api/audio/session` + `_doStartListenSIP()`; mic up front, PTT bar on confirm, playback-side Mute, no keyed RX mute, 1.x stream as the instrumented fallback. **Not verified live:** no browser has placed the call yet. |
 | **4** | Recording + stream relay onto `outstreamcmd` | A mid-QSO forced ID provably appears in a recording |
 | **5** | Delete the old pipeline and its tests; wire `listen_only`; exclude session links from Smart Connector `ilink 11`, idle detection, link counts, board display | Full suite green on a smaller codebase |
 | **6** | Scaling measurement, concurrency cap, TURN, 1.x→2.0 migration | Documented concurrent-session ceiling |

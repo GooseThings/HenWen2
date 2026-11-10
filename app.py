@@ -1764,7 +1764,7 @@ def check_auth():
                       'api_nets_create', 'api_nets_update', 'api_nets_delete',
                       'api_echolink_search', 'api_asl_search',
                       'api_status_reset_idle',
-                      'api_tx_config', 'api_recording_permission',
+                      'api_tx_config', 'api_audio_session', 'api_recording_permission',
                       'api_recording_start', 'api_recordings_list', 'api_recording_download',
                       'api_recordings_rename', 'api_recordings_delete',
                       'api_chat_messages_get', 'api_chat_messages_post',
@@ -9322,6 +9322,83 @@ def _find_henwen_apache_vhost():
     return vhosts[0] if vhosts else None
 
 
+def _node_tot_sec(content, node):
+    """app_rpt's Time-Out Timer for `node`, in seconds -- see the comment in
+    api_tx_config() for why totime= is milliseconds and why an absent value
+    is 180 rather than 0."""
+    tot_sec = 180
+    node_settings = parse_stanza_settings(content, node) if content else {}
+    tot_setting = node_settings.get("totime")
+    if tot_setting and not tot_setting.get("commented") and tot_setting.get("value"):
+        try:
+            tot_sec = max(0, int(tot_setting["value"])) // 1000
+        except ValueError:
+            pass
+    return tot_sec
+
+
+@app.route("/api/audio/session")
+def api_audio_session():
+    """HenWen 2.0 (Phase 3): what this session should use for node audio.
+
+    Answers the kiosk's Listen button before it starts anything. `sip` is
+    this account's own per-user identity when it has one and Asterisk is
+    wired to read it (_sip_user_identity()); the browser then places one
+    native call that carries both directions -- receive audio and, when
+    `can_tx`, PTT via DTMF -- and there is no server-side audio pipeline
+    at all. `sip` is null for everyone else, and the kiosk uses the 1.x
+    streaming path (`legacy_path` says which flavor) exactly as before:
+    accounts without a callsign, every account until sip-users/apply.sh has
+    run, listen-only accounts (under decision D1-a any issued credential
+    can key, so they are never handed one -- wiring listen_only into the
+    call itself is Phase 5), and any non-owner while a node lockout is on.
+
+    The shared `henwen-tx` credential is deliberately NOT offered here: it
+    belongs to the 1.x Arm-TX flow (/api/tx/config), which stays exactly as
+    it was for accounts the new path does not apply to."""
+    if not session.get('logged_in'):
+        return jsonify({"error": "Authentication required"}), 401
+    node = _sip_local_node()
+    if not node:
+        return jsonify({"error": "No local node configured"}), 500
+    rx_path = (_get_rx_audio_config() or RX_AUDIO_CONFIG_DEFAULTS)['path']
+    body = {"node": node, "legacy_path": rx_path, "sip": None, "identity": None,
+            "can_tx": False}
+    urow = get_db().execute("SELECT listen_only, callsign, sip_secret FROM users WHERE id=?",
+                            (session.get('user_id'),)).fetchone()
+    listen_only = bool(session.get('role') == 'user' and urow and urow["listen_only"])
+    locked = session.get('role') != 'owner' and is_any_node_locked()
+    if listen_only:
+        body["reason"] = "listen_only"
+    elif locked:
+        body["reason"] = "locked"
+    else:
+        ident = _sip_user_identity(urow)
+        if ident:
+            content = read_conf_file(RPT_CONF_PATH)
+            body.update({
+                "identity": "user",
+                "can_tx":   True,
+                "sip": {
+                    "username":  ident["endpoint"],
+                    "auth_user": ident["callsign"],
+                    "password":  ident["secret"],
+                    "callsign":  ident["callsign"],
+                    "link_name": ident["link_name"],
+                    "ws_path":   TX_WS_PATH,
+                    "dial":      node,
+                    "tot_sec":   _node_tot_sec(content, node),
+                },
+            })
+            log("INFO", f"[AUDIO] One-call audio session for {session.get('username', '?')} "
+                        f"({ident['callsign']}, link {ident['link_name']}) on node {node}")
+        else:
+            body["reason"] = "no_identity"
+    resp = jsonify(body)
+    resp.headers["Cache-Control"] = "no-store"   # may carry a live SIP credential
+    return resp
+
+
 @app.route("/api/tx/config")
 def api_tx_config():
     """SIP credentials for the browser transmitter. Any logged-in role — this
@@ -9387,14 +9464,7 @@ def api_tx_config():
     # falls back to app_rpt's own documented default (180s) rather than 0,
     # since 0 would read as "no timeout" — a real, different setting app_rpt
     # itself doesn't treat totime=0 as meaning (0 isn't a valid totime).
-    tot_sec = 180
-    node_settings = parse_stanza_settings(content, node) if content else {}
-    tot_setting = node_settings.get("totime")
-    if tot_setting and not tot_setting.get("commented") and tot_setting.get("value"):
-        try:
-            tot_sec = max(0, int(tot_setting["value"])) // 1000
-        except ValueError:
-            pass
+    tot_sec = _node_tot_sec(content, node)
 
     if ident:
         # The SIP *user* (From header, what PJSIP's `username` endpoint
