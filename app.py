@@ -549,99 +549,78 @@ class _LocalProxyFix:
 
 
 app.wsgi_app = _LocalProxyFix(app.wsgi_app)
-
-
 # ---------------------------------------------------------------------------
-# Path-prefix mounting (URL_PREFIX) -- Phase 0 scaffolding, DELETE IN PHASE 3
+# Serving HenWen under a URL path prefix
 #
-# HenWen2 runs alongside a live HenWen 1.x install during 2.0 development, so
-# it needs to be reachable through the *existing* Apache vhost rather than a
-# new hostname: `https://<host>/2/...`. Setting URL_PREFIX=/2 mounts the whole
-# app under that prefix.
+# HenWen has always assumed it owns the root of whatever hostname serves it:
+# every template hardcodes root-absolute URLs ("/api/...", "/static/...",
+# "/login"), and nothing goes through url_for(). That makes it impossible to
+# front at a subpath -- https://example.com/henwen/ -- which is a reasonable
+# thing to want when one box serves several apps, or when two HenWen installs
+# run side by side.
 #
-# Two halves, because this frontend predates the idea of a prefix:
-#   1. _PrefixMiddleware strips the prefix off PATH_INFO and puts it in
-#      SCRIPT_NAME, so Flask's own routing and url_for() work normally.
-#   2. _rewrite_absolute_urls() rewrites root-absolute URLs in rendered HTML.
-#      templates/status.html alone has ~60 hardcoded '/api/...' strings in
-#      inline JS plus a handful of '/static/...' attributes, none of which go
-#      through url_for(), so no amount of SCRIPT_NAME fixes them.
+# The prefix is taken from, in order:
+#   1. URL_PREFIX in the environment (explicit, for a fixed deployment), or
+#   2. the X-Forwarded-Prefix request header, which is the de-facto standard
+#      for this and what a reverse proxy can set per-request -- honored ONLY
+#      when the TCP peer is the local proxy, for the same reason
+#      _LocalProxyFix above only trusts X-Forwarded-For from there: otherwise
+#      any client could rewrite every URL this app generates.
 #
-# This is deliberately a blunt instrument and deliberately temporary. Phase 3
-# rewrites the frontend around a single Asterisk call for audio; that rewrite
-# is where these URLs stop being hardcoded and where this whole block gets
-# deleted. It is a no-op when URL_PREFIX is empty (the default), which is
-# every real deployment, so it cannot affect a normally-mounted install.
+# Both proxy shapes work. Apache may pass the prefix through
+# (ProxyPass /henwen http://127.0.0.1:5000/henwen) or strip it
+# (ProxyPass /henwen http://127.0.0.1:5000/), because this sets SCRIPT_NAME
+# either way and only trims PATH_INFO when the prefix is actually still on it.
+#
+# Setting SCRIPT_NAME is what makes Flask's own routing, url_for(),
+# redirects and the session cookie path correct. The frontend's hardcoded
+# URLs are handled on the client by the base-path adapter in
+# templates/_basepath.html -- see that file for why it is a runtime adapter
+# rather than ~300 edited call sites.
 # ---------------------------------------------------------------------------
-URL_PREFIX = os.environ.get('URL_PREFIX', '').rstrip('/')
-if URL_PREFIX and not URL_PREFIX.startswith('/'):
-    URL_PREFIX = '/' + URL_PREFIX
-
-# Two patterns, because the frontend hardcodes root-absolute URLs in two
-# shapes. Both deliberately match only a quoted "/..." -- never a bare "/..."
-# in prose, a regex or a protocol-relative "//host/..." -- so unrelated
-# strings are left alone.
-#
-#  1. Quoted URLs whose first segment is one of these roots. Explicit rather
-#     than "any quoted /..." so display text and regex literals can't be
-#     mangled. '/api' covers the ~60 inline-JS fetches in status.html.
-_PREFIX_REWRITE_ROOTS = ('api', 'static', 'ws-audio', 'asterisk-ws',
-                         # Page routes that inline JS navigates to directly
-                         # (location.href = '/login'), which pattern 2 can't
-                         # see because they aren't HTML attributes.
-                         'login', 'logout', 'henwen-manager', 'accessible',
-                         'forgot-password', 'reset-password', 'accept-invite')
-_PREFIX_REWRITE_RE = re.compile(
-    r"""(?P<q>["'])/(?P<root>""" + '|'.join(_PREFIX_REWRITE_ROOTS) + r""")(?=[/"'])""")
-
-#  2. href/src/action attributes, whatever their first segment. This one is
-#     load-bearing for correctness, not just cosmetics: login.html's form is
-#     action="/login", so without it a 2.0 login POST lands on the 1.x app
-#     mounted at the vhost root -- i.e. this instance's credentials would be
-#     submitted to the other instance. Found exactly that way in Phase 0.
-_PREFIX_ATTR_RE = re.compile(
-    r"""(?P<attr>\b(?:href|src|action)=)(?P<q>["'])/(?!/)""")
+# Deliberately strict: a path prefix ends up in generated URLs and in the
+# session cookie path, so only simple path segments are accepted. Anything
+# else (a scheme, a host, "..", a query) is ignored rather than sanitized.
+_URL_PREFIX_RE = re.compile(r'^(?:/[A-Za-z0-9][A-Za-z0-9._~-]*)+$')
 
 
-class _PrefixMiddleware:
-    """Serve the app under URL_PREFIX without any route knowing about it."""
+def _normalize_url_prefix(value):
+    """'' for anything unusable, else the prefix with no trailing slash."""
+    v = str(value or '').strip()
+    if not v:
+        return ''
+    if not v.startswith('/'):
+        v = '/' + v
+    v = v.rstrip('/')
+    return v if _URL_PREFIX_RE.match(v) else ''
 
-    def __init__(self, wsgi_app, prefix):
+
+URL_PREFIX = _normalize_url_prefix(os.environ.get('URL_PREFIX', ''))
+
+
+class _ScriptNamePrefixFix:
+    def __init__(self, wsgi_app):
         self.wsgi_app = wsgi_app
-        self.prefix   = prefix
 
     def __call__(self, environ, start_response):
-        path = environ.get('PATH_INFO', '')
-        if path == self.prefix or path.startswith(self.prefix + '/'):
-            environ['SCRIPT_NAME'] = environ.get('SCRIPT_NAME', '') + self.prefix
-            environ['PATH_INFO']   = path[len(self.prefix):] or '/'
+        prefix = URL_PREFIX
+        if not prefix and environ.get('REMOTE_ADDR') in ('127.0.0.1', '::1'):
+            prefix = _normalize_url_prefix(environ.get('HTTP_X_FORWARDED_PREFIX', ''))
+        if prefix:
+            path = environ.get('PATH_INFO', '')
+            if path == prefix or path.startswith(prefix + '/'):
+                # Proxy passed the prefix through -- move it to SCRIPT_NAME.
+                environ['PATH_INFO'] = path[len(prefix):] or '/'
+            environ['SCRIPT_NAME'] = environ.get('SCRIPT_NAME', '') + prefix
         return self.wsgi_app(environ, start_response)
 
 
-def _rewrite_absolute_urls(response):
-    """Prefix the frontend's hardcoded root-absolute URLs. HTML only -- a JSON
-    payload may legitimately carry a '/api/...' string that is data, not a URL
-    the browser is about to fetch."""
-    if not URL_PREFIX:
-        return response
-    if response.direct_passthrough or not response.mimetype == 'text/html':
-        return response
-    try:
-        body = response.get_data(as_text=True)
-    except (UnicodeDecodeError, RuntimeError):
-        return response
-    rewritten = _PREFIX_ATTR_RE.sub(
-        lambda m: m.group('attr') + m.group('q') + URL_PREFIX + '/', body)
-    rewritten = _PREFIX_REWRITE_RE.sub(
-        lambda m: m.group('q') + URL_PREFIX + '/' + m.group('root'), rewritten)
-    if rewritten != body:
-        response.set_data(rewritten)
-    return response
-
-
-if URL_PREFIX:
-    app.wsgi_app = _PrefixMiddleware(app.wsgi_app, URL_PREFIX)
-    app.after_request(_rewrite_absolute_urls)
+# Order matters. Applied after _LocalProxyFix, this becomes the OUTERMOST
+# layer, so it runs first and the REMOTE_ADDR check above still sees the
+# proxy's own address -- not the client address _LocalProxyFix restores from
+# X-Forwarded-For, which a client could otherwise set to 127.0.0.1 to make
+# its own X-Forwarded-Prefix trusted.
+app.wsgi_app = _ScriptNamePrefixFix(app.wsgi_app)
 
 
 class _SchemeAwareSessionInterface(SecureCookieSessionInterface):
