@@ -12480,11 +12480,17 @@ def api_audio_client_log():
     return jsonify({'ok': True})
 
 
-@app.route("/")
 # index.html is an alias, not a second page: it keeps the endpoint name
 # 'status_board', so check_auth()'s _SETUP_PAGES first-run bounce and every
 # other endpoint-name check apply to it unchanged.
+#
+# Decorator order matters and is load-bearing: decorators apply bottom-up, so
+# the LOWER @app.route is registered first, and url_for('status_board') builds
+# from the first-registered rule. With the alias registered first, every
+# redirect to the board came out as '/index.html' instead of '/' (caught by
+# tests/test_routes_smoke.py). Keep "/" below the alias.
 @app.route("/index.html")
+@app.route("/")
 def status_board():
     return render_template("status.html", henwen_version=HENWEN_VERSION,
                             rx_worklet_ver=_static_asset_ver('audio-worklet-lowlatency.js'),
