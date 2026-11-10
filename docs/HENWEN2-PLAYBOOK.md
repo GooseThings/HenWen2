@@ -4,8 +4,8 @@
 spikes answered by measurement, not inference. Phase 2 **built** (PR #1
 merged; PR #2 open and deployed) — the one step left is the owner running
 `sip-users/apply.sh`, after which the exit criterion can be checked. Phase 3
-**built, not live-verified** (PR #3, stacked on PR #2, deployed): the one-call
-audio path exists end to end but no browser has placed the call yet.
+**working live from one account** (PR #3, stacked on PR #2, deployed): see
+"Live result 2026-11-10 17:13" below. Still open: the two-account test.
 **Repo:** `GooseThings/HenWen2`, forked from `GooseThings/HenWen` at `c875598`
 (full history preserved; `henwen1` remote is fetch-only).
 
@@ -30,7 +30,33 @@ changes what a session gets until (a) the include wiring has run and (b) an
 account has been given a callsign. Both are owner actions; neither has
 happened.
 
-**Next action, in order (the first two are the owner's):**
+**Live result 2026-11-10 17:13 (owner's account, callsign N8GMZ, remote
+browser, Bluetooth headset):** owner ran `sip-users/apply.sh` and
+`provision-sudoers.sh`, assigned the callsign; HenWen provisioned and
+reloaded; `check-register.py` got 200 OK as `henwen-u-n8gmz` / auth `N8GMZ`
+(the endpoint-name-vs-auth-user split is confirmed, not an open question any
+more). Then Listen on the kiosk: journal shows `sip-connected mic=true
+tx=true`, `sip-media ice=connected rx=290 tx=292 jitter=2ms`, PTT presses as
+`*99`/`#` DTMF with live mic level, and steady `sip-stats` (~50 pkt/s each
+way, 0.1% loss, 2ms jitter). **Phase 2's exit criterion is met**, and Phase
+3's single-account half works end to end on STUN alone from a remote network.
+
+**One surprise to look at next session:** `rpt lstats 643930` did NOT list
+`0N8GMZ` while the call was up (only the real peer 27339), although the
+`PJSIP/henwen-u-n8gmz-*` channel existed. So phone-mode links may not appear
+in `rpt lstats` at all, which would mean (a) the playbook's "Connected Nodes
+shows who is listening" side benefit does not hold as written, and (b) the
+`_sip_session_link()` exclusions (connector, connect gate, alerts) are
+harmless but may be guarding against something that never happens. Check
+`rpt_cli.c`'s lstats loop for a phonemode filter, and `RPT_ALINKS`, before
+building anything on either assumption.
+
+**Next action, in order:**
+
+0. Two-account test (Phase 3 exit criterion): a second callsign on a
+   second account, two browsers, neither hears itself, both can PTT. Then
+   merge PR #2, then PR #3.
+0b. Resolve the `rpt lstats` question above; adjust docs/Phase 5 plan.
 
 1. Wire the includes — a change to Asterisk's own config that this session
    was not permitted to make:
