@@ -2426,6 +2426,7 @@ def reset_password_page():
                    (time.time(), req["id"]))
         db.commit()
         log("INFO", f"[AUTH] Password reset completed for '{req['username']}'")
+        _sip_rotate_secret_for(db, req["username"], "password reset")
         return render_template("password-reset.html", stage="done")
 
     if not req:
@@ -7539,9 +7540,58 @@ def api_alerts_test():
 def api_users_list():
     rows = get_db().execute(
         "SELECT id, username, role, created_at, session_idle_timeout, restrict_disconnect, "
-        "can_record, listen_only, totp_enabled FROM users ORDER BY role DESC, username"
+        "can_record, listen_only, totp_enabled, callsign, "
+        "(sip_secret IS NOT NULL AND sip_secret != '') AS sip_provisioned "
+        "FROM users ORDER BY role DESC, username"
     ).fetchall()
-    return jsonify({"users": [dict(r) for r in rows]})
+    # sip_secret itself is deliberately not selected: it is a live SIP
+    # password and never leaves the server except to the account's own
+    # session via /api/tx/config.
+    users = []
+    for r in rows:
+        d = dict(r)
+        d["callsign"] = d.get("callsign") or ""
+        d["sip_provisioned"] = bool(d.get("sip_provisioned"))
+        users.append(d)
+    return jsonify({"users": users})
+
+
+def _users_parse_callsign(data):
+    """The optional `callsign` field on the create/update routes: absent ->
+    None (leave alone), empty -> '' (clear), else the normalized callsign.
+    Raises ValueError with a caller-safe message."""
+    if "callsign" not in data:
+        return None
+    raw = str(data.get("callsign") or "").strip()
+    if not raw:
+        return ""
+    return validate_callsign(raw)
+
+
+def _users_callsign_taken(db, callsign, exclude_uid=None):
+    """Case-insensitive pre-check, same reason as the username one: the
+    unique index is the real guard, but a friendly 409 beats an
+    IntegrityError, and the index only covers rows that got as far as the
+    INSERT."""
+    row = db.execute("SELECT id FROM users WHERE callsign=? COLLATE NOCASE",
+                     (callsign,)).fetchone()
+    return bool(row) and (exclude_uid is None or row["id"] != exclude_uid)
+
+
+def _users_sip_response(payload, prov):
+    """Attach the provisioning outcome to a user-management response so the
+    Manager can say "saved, but Asterisk isn't wired yet" instead of green.
+    The save itself already succeeded; a provisioning problem is a warning,
+    not a failure."""
+    if prov is None:
+        return payload
+    payload["sip"] = {k: prov.get(k) for k in ("ok", "accounts", "reloaded", "included",
+                                                 "error", "detail")}
+    if not prov.get("ok"):
+        payload["warning"] = prov.get("error") or "SIP provisioning did not complete"
+    elif not prov.get("included"):
+        payload["warning"] = prov.get("detail")
+    return payload
 
 
 @app.route("/api/users", methods=["POST"])
@@ -7564,6 +7614,10 @@ def api_users_create():
     can_record = bool(data.get("can_record", False))
     if not re.match(r'^[A-Za-z0-9_.-]{2,32}$', username):
         return jsonify({"error": "Username must be 2-32 chars: letters, digits, _ . -"}), 400
+    try:
+        callsign = _users_parse_callsign(data) or None
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     pw_error = _validate_new_password(password)
     if pw_error:
         return jsonify({"error": pw_error}), 400
@@ -7582,19 +7636,27 @@ def api_users_create():
     # could otherwise coexist as two distinct accounts.
     if db.execute("SELECT id FROM users WHERE username=? COLLATE NOCASE", (username,)).fetchone():
         return jsonify({"error": f"Username '{username}' already exists."}), 409
+    if callsign and _users_callsign_taken(db, callsign):
+        return jsonify({"error": f"Callsign '{callsign}' is already assigned to another account."}), 409
+    # A SIP secret exists only alongside a callsign: generated here, never
+    # chosen, and rotated whenever the password changes (see api_users_update).
+    sip_secret = generate_sip_secret() if callsign else None
     try:
         cur = db.execute(
-            "INSERT INTO users (username, password_hash, role, restrict_disconnect, can_record, listen_only) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT INTO users (username, password_hash, role, restrict_disconnect, can_record, "
+            "listen_only, callsign, sip_secret) VALUES (?,?,?,?,?,?,?,?)",
             (username, generate_password_hash(_peppered(password)), role, int(restrict_disconnect),
-             int(can_record), int(listen_only)))
+             int(can_record), int(listen_only), callsign, sip_secret))
         db.commit()
         _seed_default_favorites(cur.lastrowid)
         log("INFO", f"[USERS] Created user '{username}' role={role} "
                     f"restrict_disconnect={restrict_disconnect} can_record={can_record} "
-                    f"listen_only={listen_only} by {caller_role}")
-        return jsonify({"ok": True})
-    except sqlite3.IntegrityError:
+                    f"listen_only={listen_only} callsign={callsign or '-'} by {caller_role}")
+        prov = sip_provision_accounts(f"created {username}") if callsign else None
+        return jsonify(_users_sip_response({"ok": True}, prov))
+    except sqlite3.IntegrityError as e:
+        if "callsign" in str(e).lower():
+            return jsonify({"error": f"Callsign '{callsign}' is already assigned to another account."}), 409
         return jsonify({"error": f"Username '{username}' already exists."}), 409
 
 
@@ -7624,6 +7686,16 @@ def api_users_update(uid):
             return jsonify({"error": "Cannot change the last superuser account."}), 400
     updates = []
     params  = []
+    # SIP identity bookkeeping: which endpoints to hang up after the commit
+    # (an old identity being revoked) and whether the generated files need
+    # re-rendering at all.
+    sip_changed   = False
+    revoke_eps    = []
+    old_callsign  = user["callsign"] if "callsign" in user.keys() else None
+    try:
+        new_callsign = _users_parse_callsign(data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     if "role" in data:
         if new_role not in ("owner", "superuser", "admin", "user"):
             return jsonify({"error": "Role must be owner, superuser, admin, or user"}), 400
@@ -7641,6 +7713,36 @@ def api_users_update(uid):
         # has just been re-authenticated-by-proxy via the admin who set it.
         updates.append("password_epoch=password_epoch+1")
         updates.append("failed_login_count=0"); updates.append("locked_until=NULL")
+        # The SIP secret rides along with the password (playbook: "secret
+        # rotates on password change"): a password change is the one signal
+        # this app has that a credential may have leaked, and the SIP
+        # secret is the other credential this account holds.
+        if old_callsign and new_callsign is None:
+            updates.append("sip_secret=?"); params.append(generate_sip_secret())
+            sip_changed = True
+            revoke_eps.append(sip_identity(old_callsign)["endpoint"])
+    if new_callsign is not None:
+        if new_callsign == "":
+            if old_callsign:
+                updates.append("callsign=NULL"); updates.append("sip_secret=NULL")
+                sip_changed = True
+                revoke_eps.append(sip_identity(old_callsign)["endpoint"])
+        else:
+            if _users_callsign_taken(db, new_callsign, exclude_uid=uid):
+                return jsonify({"error": f"Callsign '{new_callsign}' is already assigned to "
+                                         "another account."}), 409
+            if new_callsign != (old_callsign or "").upper():
+                # A new (or changed) callsign is a new endpoint, so it gets
+                # a fresh secret and the old endpoint's calls are ended.
+                updates.append("callsign=?"); params.append(new_callsign)
+                updates.append("sip_secret=?"); params.append(generate_sip_secret())
+                sip_changed = True
+                if old_callsign:
+                    revoke_eps.append(sip_identity(old_callsign)["endpoint"])
+            elif "password" in data:
+                updates.append("sip_secret=?"); params.append(generate_sip_secret())
+                sip_changed = True
+                revoke_eps.append(sip_identity(old_callsign)["endpoint"])
     if "session_idle_timeout" in data:
         raw = data["session_idle_timeout"]
         if raw is None:
@@ -7674,10 +7776,21 @@ def api_users_update(uid):
     if not updates:
         return jsonify({"ok": True, "note": "Nothing to update"})
     params.append(uid)
-    db.execute(f"UPDATE users SET {', '.join(updates)} WHERE id=?", params)
-    db.commit()
+    try:
+        db.execute(f"UPDATE users SET {', '.join(updates)} WHERE id=?", params)
+        db.commit()
+    except sqlite3.IntegrityError as e:
+        if "callsign" in str(e).lower():
+            return jsonify({"error": f"Callsign '{new_callsign}' is already assigned to "
+                                     "another account."}), 409
+        raise
     log("INFO", f"[USERS] Updated user id={uid}: {', '.join(k for k in data if k != 'password')}")
-    return jsonify({"ok": True})
+    prov = None
+    if sip_changed:
+        prov = sip_provision_accounts(f"updated {user['username']}")
+        for ep in revoke_eps:
+            _sip_hangup_endpoint_channels(ep)
+    return jsonify(_users_sip_response({"ok": True}, prov))
 
 
 @app.route("/api/users/<int:uid>", methods=["DELETE"])
@@ -7700,7 +7813,17 @@ def api_users_delete(uid):
     db.execute("DELETE FROM users WHERE id=?", (uid,))
     db.commit()
     log("INFO", f"[USERS] Deleted user '{user['username']}' (id={uid})")
-    return jsonify({"ok": True})
+    prov = None
+    had_callsign = user["callsign"] if "callsign" in user.keys() else None
+    if had_callsign:
+        # Deleting the account is revocation: the endpoint leaves the
+        # generated file, Asterisk reloads, and any call it has up is ended.
+        prov = sip_provision_accounts(f"deleted {user['username']}")
+        try:
+            _sip_hangup_endpoint_channels(sip_identity(had_callsign)["endpoint"])
+        except ValueError:
+            pass
+    return jsonify(_users_sip_response({"ok": True}, prov))
 
 
 @app.route("/api/users/<int:uid>/mfa/reset", methods=["POST"])
@@ -9229,20 +9352,25 @@ def api_tx_config():
     # which hides the TX button for locked-out roles.
     if session.get('role') != 'owner' and is_any_node_locked():
         return jsonify({"error": "Locked by the node owner", "locked": True}), 423
-    if session.get('role') == 'user':
-        urow = get_db().execute("SELECT listen_only FROM users WHERE id=?",
-                                (session.get('user_id'),)).fetchone()
-        if urow and urow["listen_only"]:
-            return jsonify({"enabled": False}), 404
+    urow = get_db().execute("SELECT listen_only, callsign, sip_secret FROM users WHERE id=?",
+                            (session.get('user_id'),)).fetchone()
+    if session.get('role') == 'user' and urow and urow["listen_only"]:
+        return jsonify({"enabled": False}), 404
+    # HenWen 2.0: an account with a provisioned SIP identity gets *its own*
+    # credential (per-user endpoint, context and app_rpt link name); the
+    # shared 1.x `henwen-tx` credential is the fallback for accounts without
+    # one, and for every account until sip-users/apply.sh has wired the
+    # generated files into Asterisk (see _sip_user_identity()).
+    ident = _sip_user_identity(urow)
     try:
         with open(TX_SECRET_PATH) as f:
             secret = f.read().strip()
     except OSError:
         secret = ""
-    if not secret:
+    if not secret and not ident:
         return jsonify({"enabled": False}), 404
     if request.args.get("probe"):
-        return jsonify({"enabled": True})
+        return jsonify({"enabled": True, "identity": "user" if ident else "shared"})
     content = read_conf_file(RPT_CONF_PATH)
     nodes   = get_node_numbers(content) if content else []
     if not nodes:
@@ -9268,17 +9396,44 @@ def api_tx_config():
         except ValueError:
             pass
 
-    log("INFO", f"[TX] Browser-TX credentials issued to {session.get('username', '?')} "
-                f"for node {node}")
-    resp = jsonify({
-        "enabled":  True,
-        "username": TX_SIP_USER,
-        "password": secret,
-        "ws_path":  TX_WS_PATH,
-        "dial":     "2" + node,
-        "node":     node,
-        "tot_sec":  tot_sec,
-    })
+    if ident:
+        # The SIP *user* (From header, what PJSIP's `username` endpoint
+        # identifier matches against the endpoint NAME) is the endpoint
+        # name; the *auth* username is the callsign, per the generated auth
+        # object. The two differ, so both are sent and the browser passes
+        # the second as JsSIP's authorization_user. The per-user context
+        # exposes the node under its bare number, not the phone-portal
+        # `2<node>` the shared context uses.
+        log("INFO", f"[TX] Per-user SIP credential issued to {session.get('username', '?')} "
+                    f"({ident['callsign']}, link {ident['link_name']}) for node {node}")
+        body = {
+            "enabled":   True,
+            "identity":  "user",
+            "username":  ident["endpoint"],
+            "auth_user": ident["callsign"],
+            "password":  ident["secret"],
+            "callsign":  ident["callsign"],
+            "link_name": ident["link_name"],
+            "ws_path":   TX_WS_PATH,
+            "dial":      node,
+            "node":      node,
+            "tot_sec":   tot_sec,
+        }
+    else:
+        log("INFO", f"[TX] Browser-TX credentials issued to {session.get('username', '?')} "
+                    f"for node {node}")
+        body = {
+            "enabled":   True,
+            "identity":  "shared",
+            "username":  TX_SIP_USER,
+            "auth_user": TX_SIP_USER,
+            "password":  secret,
+            "ws_path":   TX_WS_PATH,
+            "dial":      "2" + node,
+            "node":      node,
+            "tot_sec":   tot_sec,
+        }
+    resp = jsonify(body)
     # Live SIP credential in the body — keep it out of shared-kiosk disk caches.
     resp.headers["Cache-Control"] = "no-store"
     return resp
@@ -9363,6 +9518,27 @@ def api_tx_diagnostics():
             f"No '{TX_SIP_USER}' endpoint — run tx-spike/apply.sh (or re-run it if it was rolled back)")
     except Exception as e:
         add("PJSIP endpoint registered in Asterisk", False, f"Could not query AMI: {e}")
+
+    # HenWen 2.0 per-user SIP identities. Each is its own check so "written
+    # but not included" and "included but nobody assigned" read differently.
+    inc = sip_include_status()
+    n_ident = len(_sip_identity_rows())
+    for key, label in (("pjsip", "pjsip.conf includes the per-user endpoints"),
+                       ("dialplan", "extensions.conf includes the per-user dialplan")):
+        st = inc.get(key, {})
+        add(label, bool(st.get("included")),
+            f"{st.get('path')} has the #tryinclude line" if st.get("included") else
+            (f"Cannot read {st.get('path')}: {st.get('error')}" if not st.get("readable", True)
+             else f"{st.get('path')} has no #tryinclude for the generated file — "
+                  "run sip-users/apply.sh (Per-user SIP card below)"),
+            warn=not st.get("included") and n_ident == 0)
+    add("Accounts with a per-user SIP identity", n_ident > 0,
+        f"{n_ident} account(s) have a callsign and credential"
+        + ("" if os.path.exists(SIP_USERS_CONF) else f" but {SIP_USERS_CONF} is not written yet")
+        if n_ident else "None yet — assign a callsign in Manager > Users to give an "
+                        "account its own SIP identity (the shared henwen-tx credential "
+                        "is used until then)",
+        warn=(n_ident == 0))
 
     script_output = ""
     if not os.path.isfile(TX_CHECK_PORTS_SCRIPT):
@@ -9456,6 +9632,66 @@ def api_tx_apply():
     return jsonify({"success": True, "output": output,
                      "message": "Browser TX applied. The TX button should now appear on the "
                                 "kiosk for logged-in users."})
+
+
+# HenWen 2.0 per-user SIP: the one-time include wiring, same owner-only /
+# passwordless-sudo shape as the three apply routes above.
+
+@app.route("/api/sip-users/status")
+def api_sip_users_status():
+    if session.get('role') != 'owner':
+        return jsonify({"error": "Owner access required"}), 403
+    inc = sip_include_status()
+    return jsonify({
+        "installed":      os.path.exists(SIP_USERS_APPLY_SCRIPT_PATH),
+        "included":       bool(inc.get("ready")),
+        "include":        inc,
+        "accounts":       len(_sip_identity_rows()),
+        "files_written":  os.path.exists(SIP_USERS_CONF) and os.path.exists(SIP_USERS_DIALPLAN),
+        "pjsip_conf":     SIP_USERS_CONF,
+        "dialplan_conf":  SIP_USERS_DIALPLAN,
+        "tx_applied":     os.path.exists(TX_SECRET_PATH),
+    })
+
+
+@app.route("/api/sip-users/apply", methods=["POST"])
+def api_sip_users_apply():
+    """Runs sip-users/apply.sh (adds the two #tryinclude lines, reloads), then
+    writes the generated files and reloads again so an account assigned a
+    callsign *before* the wiring existed becomes a live endpoint right away
+    rather than on its next change."""
+    if session.get('role') != 'owner':
+        return jsonify({"error": "Owner access required"}), 403
+    if not os.path.exists(SIP_USERS_APPLY_SCRIPT_PATH):
+        return jsonify({"error": f"apply.sh not found: {SIP_USERS_APPLY_SCRIPT_PATH}"}), 404
+
+    cmd = [SUDO_PATH, "-n", SIP_USERS_APPLY_SCRIPT_PATH]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "apply.sh timed out after 30s"}), 500
+    except Exception as e:
+        log("ERROR", f"[API] /api/sip-users/apply exception: {e}")
+        return jsonify({"error": str(e)}), 500
+
+    output = (r.stdout or "") + (r.stderr or "")
+    if r.returncode != 0:
+        hint = ("Service account lacks sudo rights for sip-users/apply.sh — re-run "
+                "provision-sudoers.sh (or install.sh) to refresh the henwen-systemctl "
+                "sudoers rule."
+                if "password" in output.lower() or "authoriz" in output.lower()
+                else None)
+        log("ERROR", f"[API] sip-users apply failed (exit {r.returncode}): {output.strip()}")
+        resp = {"error": output.strip() or f"apply.sh returned code {r.returncode}", "output": output}
+        if hint:
+            resp["hint"] = hint
+        return jsonify(resp), 500
+
+    prov = sip_provision_accounts("apply.sh", force_reload=True)
+    log("INFO", f"[API] Per-user SIP includes applied by '{session.get('username')}'; "
+                f"provisioned {prov.get('accounts')} account(s), reloaded={prov.get('reloaded')}")
+    return jsonify({"success": True, "output": output, "provision": prov,
+                    "message": "Per-user SIP wiring applied."})
 
 
 @app.route("/api/rx/diagnostics")
@@ -13795,6 +14031,7 @@ def api_change_password():
     # bounced by check_auth()'s epoch check on its very next request.
     session["password_epoch"] = user["password_epoch"] + 1
     log("INFO", f"[AUTH] Password changed for '{username}'")
+    _sip_rotate_secret_for(db, username, "self-service password change")
     return jsonify({"success": True, "message": "Password updated."})
 
 
@@ -15842,6 +16079,210 @@ def write_sip_user_files(accounts, node):
         "dialplan_changed": _atomic_write_if_changed(SIP_USERS_DIALPLAN, dialplan_text),
         "accounts":         len(rows),
     }
+
+
+# ---------------------------------------------------------------------------
+# Provisioning runtime (Phase 2, second slice): the users table -> the
+# generated files -> a reload. The renderers/writer above stay pure; this is
+# the part that talks to the DB and to Asterisk.
+# ---------------------------------------------------------------------------
+_sip_provision_lock = threading.Lock()
+
+SIP_USERS_APPLY_SCRIPT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "sip-users", "apply.sh"
+)
+
+# `pjsip reload` is NOT a command on this build (only `pjsip reload qualify
+# ...` exists -- checked with `core show help pjsip reload` on Asterisk 22 /
+# ASL3); the config reload for pjsip.conf is `module reload res_pjsip.so`.
+# `dialplan reload` re-reads extensions.conf (and everything it includes)
+# without touching other modules or any call already up.
+SIP_RELOAD_COMMANDS = ("module reload res_pjsip.so", "dialplan reload")
+
+
+def _sip_session_link(peer):
+    """True for an app_rpt link that is a HenWen audio session rather than a
+    node: the shared 1.x browser-TX link ("0HenWen-Web") and every 2.0
+    per-user link ("0<CALLSIGN>", see sip_identity()). Both are '0'-prefixed
+    so app_rpt stays quiet about them, and no AllStarLink node number starts
+    with 0, so the prefix is a reliable discriminator -- but a numeric peer
+    is never treated as a session regardless, since that would be a node."""
+    p = str(peer or '')
+    return p.startswith('0') and not p.isdigit()
+
+
+def _sip_identity_rows(db=None):
+    """(callsign, secret) for every account that has both -- the input the
+    renderers want. Order is by callsign so the rendered file is stable
+    across runs, which is what lets _atomic_write_if_changed() say "nothing
+    changed"."""
+    rows = (db or get_db()).execute(
+        "SELECT callsign, sip_secret FROM users "
+        "WHERE callsign IS NOT NULL AND callsign != '' "
+        "AND sip_secret IS NOT NULL AND sip_secret != '' "
+        "ORDER BY callsign COLLATE NOCASE").fetchall()
+    return [(r["callsign"], r["sip_secret"]) for r in rows]
+
+
+def _sip_local_node():
+    content = read_conf_file(RPT_CONF_PATH)
+    nodes   = get_node_numbers(content) if content else []
+    return str(nodes[0]) if nodes else None
+
+
+def _sip_reload_asterisk():
+    """Run SIP_RELOAD_COMMANDS over AMI. Returns (ok, detail). AMI's Command
+    action reports an unknown CLI command as ordinary *output* ("No such
+    command ..."), not as an error, so the reply text is inspected rather
+    than trusting that no exception was raised."""
+    def _cmd(ami):
+        out = {}
+        for c in SIP_RELOAD_COMMANDS:
+            out[c] = ami.command(c)
+        return out
+    try:
+        outs = ami_send_command(_cmd)
+    except Exception as e:
+        return False, f"AMI reload failed: {e}"
+    for c, lines in outs.items():
+        text = " ".join(lines)
+        if "no such command" in text.lower():
+            return False, f"Asterisk does not know {c!r}: {text[:120]}"
+    return True, "; ".join(f"{c}: {' '.join(l)[:60] or 'ok'}" for c, l in outs.items())
+
+
+def _sip_hangup_endpoint_channels(endpoint):
+    """Best-effort hangup of every live channel belonging to one PJSIP
+    endpoint (channel names are PJSIP/<endpoint>-<hex>). Rotating or removing
+    a credential and reloading does not end a call that is already up --
+    Asterisk keeps the channel until it hangs up on its own -- so revocation
+    has to do this explicitly or a revoked account keeps listening (and can
+    keep keying) until it chooses to leave. Returns the number hung up; any
+    failure is logged and swallowed, since this runs inside user-management
+    requests that must still succeed when Asterisk is down."""
+    prefix = f"PJSIP/{endpoint}-"
+    try:
+        lines = ami_send_command(lambda ami: {'lines': ami.command(
+            'core show channels concise', log_level='DEBUG')}).get('lines', [])
+        chans = [c['name'] for c in _parse_concise_channels(lines)
+                 if c['name'].startswith(prefix)]
+        n = 0
+        for ch in chans:
+            def _hangup(ami, ch=ch):
+                ami._send_action({'Action': 'Hangup', 'Channel': ch})
+                raw = ami._recv_until('\r\n\r\n', timeout=ami.timeout)
+                return ami._parse_packet(raw)
+            pkt = ami_send_command(_hangup)
+            if _classify_hangup_reply(pkt) != 'error':
+                n += 1
+            else:
+                log('WARN', f"[SIP] Hangup of {ch} rejected: {pkt.get('Message', pkt)}")
+        if n:
+            log('INFO', f"[SIP] Hung up {n} live channel(s) for revoked endpoint {endpoint}")
+        return n
+    except Exception as e:
+        log('WARN', f"[SIP] Could not hang up channels for {endpoint}: {e}")
+        return 0
+
+
+def sip_provision_accounts(reason="", force_reload=False, db=None):
+    """Render the generated files from the users table, write them if they
+    changed, and reload Asterisk -- only when something changed (or
+    force_reload, used right after apply.sh adds the include lines, when the
+    files may be unchanged but Asterisk has never read them).
+
+    Never raises: this runs inside user-management requests, and an account
+    save must succeed even when Asterisk is unreachable -- the files on disk
+    are the source of truth and the next change (or Asterisk restart) picks
+    them up. Everything that went wrong is in the returned dict so the
+    caller can surface it. Serialized by _sip_provision_lock so two
+    concurrent saves cannot interleave their writes."""
+    result = {"ok": True, "reason": reason, "accounts": 0, "pjsip_changed": False,
+              "dialplan_changed": False, "reloaded": False, "included": False,
+              "node": None, "error": None, "detail": ""}
+    with _sip_provision_lock:
+        try:
+            rows = _sip_identity_rows(db)
+            result["accounts"] = len(rows)
+            node = _sip_local_node()
+            result["node"] = node
+            if node is None:
+                result.update(ok=False, error="No local node found in rpt.conf; "
+                                                "nothing written")
+                return result
+            w = write_sip_user_files(rows, node)
+            result["pjsip_changed"]    = w["pjsip_changed"]
+            result["dialplan_changed"] = w["dialplan_changed"]
+            inc = sip_include_status()
+            result["included"] = bool(inc.get("ready"))
+            changed = w["pjsip_changed"] or w["dialplan_changed"]
+            if changed:
+                log("INFO", f"[SIP] Provisioned {len(rows)} account(s) for node {node}"
+                            f"{' (' + reason + ')' if reason else ''}: "
+                            f"pjsip={'changed' if w['pjsip_changed'] else 'same'} "
+                            f"dialplan={'changed' if w['dialplan_changed'] else 'same'}")
+            if not result["included"]:
+                # Written but not read: Asterisk has no include line for these
+                # files, so a reload would be a no-op. Say so instead.
+                result["detail"] = ("Generated files written, but pjsip.conf/"
+                                    "extensions.conf do not include them yet -- "
+                                    "run sip-users/apply.sh (Manager > TX "
+                                    "Diagnostics > Per-user SIP)")
+                return result
+            if changed or force_reload:
+                ok, detail = _sip_reload_asterisk()
+                result["reloaded"] = ok
+                result["detail"] = detail
+                if not ok:
+                    result.update(ok=False, error=detail)
+                    log("WARN", f"[SIP] Reload after provisioning failed: {detail}")
+            return result
+        except Exception as e:
+            log("ERROR", f"[SIP] Provisioning failed: {e}")
+            result.update(ok=False, error=str(e))
+            return result
+
+
+def _sip_rotate_secret_for(db, username, reason):
+    """Rotate one account's SIP secret (if it has an identity), re-provision
+    and end its live calls -- the shared tail of every password-change path.
+    Best-effort: the password change has already been committed and must not
+    be reported as failed because Asterisk was unreachable."""
+    try:
+        row = db.execute("SELECT callsign FROM users WHERE username=?", (username,)).fetchone()
+        if not row or not row["callsign"]:
+            return
+        db.execute("UPDATE users SET sip_secret=? WHERE username=?",
+                   (generate_sip_secret(), username))
+        db.commit()
+        sip_provision_accounts(f"{reason} for {username}", db=db)
+        _sip_hangup_endpoint_channels(sip_identity(row["callsign"])["endpoint"])
+    except Exception as e:
+        log("WARN", f"[SIP] Secret rotation after {reason} for {username} failed: {e}")
+
+
+def _sip_user_identity(user_row):
+    """The SIP identity to hand a logged-in session, or None when the
+    account has none *usable*: no callsign/secret, or Asterisk is not wired
+    to read the generated files yet (sip_include_status()), or the file was
+    never written. Falling back to the shared credential in those cases is
+    what keeps an account working through a half-finished setup."""
+    if not user_row:
+        return None
+    try:
+        cs, secret = user_row["callsign"], user_row["sip_secret"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    if not cs or not secret:
+        return None
+    if not os.path.exists(SIP_USERS_CONF) or not sip_include_status().get("ready"):
+        return None
+    try:
+        ident = dict(sip_identity(cs))
+    except ValueError:
+        return None
+    ident["secret"] = secret
+    return ident
 
 
 RX_AUDIO_PATHS = ("legacy", "lowlatency")
@@ -17940,7 +18381,8 @@ def _connector_do_connect(local: str, target: str, disconnect_first: bool = Fals
                 with _kiosk_temp_lock:
                     perm_peers = {pn for (l, pn), info in _kiosk_temp_conns.items()
                                  if l == ln and info.get('permanent')}
-                to_drop = [pn for pn in connected if pn not in perm_peers]
+                to_drop = [pn for pn in connected
+                           if pn not in perm_peers and not _sip_session_link(pn)]
                 log("INFO", f"[CONNECTOR] Disconnecting {len(to_drop)} non-permanent "
                             f"node(s) on {ln} before scheduled connect to {tn} "
                             f"(preserving {len(connected) - len(to_drop)} permanent)")
@@ -17956,7 +18398,11 @@ def _connector_do_connect(local: str, target: str, disconnect_first: bool = Fals
                 # (skip_permanent unchecked), it has to be used for every
                 # connected peer, not just the ones we happen to know are
                 # permanent.
-                to_drop = connected
+                # A HenWen audio session (0HenWen-Web, 0<CALLSIGN>) is a
+                # link too, and `ilink 11` would end a listener's call. In
+                # 2.0 every listener is one of these, so "disconnect all" has
+                # to mean "all *nodes*" -- playbook risk 3.
+                to_drop = [pn for pn in connected if not _sip_session_link(pn)]
                 log("INFO", f"[CONNECTOR] Disconnecting all {len(to_drop)} node(s) on {ln} "
                             f"before scheduled connect to {tn}")
             for peer in to_drop:
