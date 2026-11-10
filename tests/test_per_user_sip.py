@@ -222,3 +222,90 @@ class TestSipSecretIsNotAConfigInjectionSink:
     def test_multi_user_renderer_rejects_it_too(self):
         with pytest.raises(ValueError):
             app.render_pjsip_users([("N8GMZ", "goodsecretgoodsecret\nevil=1")])
+
+
+class TestWriteSipUserFiles:
+    """The writer. Env-overridable paths keep these away from /etc/asterisk."""
+
+    @pytest.fixture(autouse=True)
+    def _tmp_paths(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(app, "SIP_USERS_CONF", str(tmp_path / "sip-users.conf"))
+        monkeypatch.setattr(app, "SIP_USERS_DIALPLAN", str(tmp_path / "sip-dialplan.conf"))
+        self.pjsip = tmp_path / "sip-users.conf"
+        self.dialplan = tmp_path / "sip-dialplan.conf"
+
+    def test_writes_both_files(self):
+        res = app.write_sip_user_files([("N8GMZ", SECRET)], "643930")
+        assert res == {"pjsip_changed": True, "dialplan_changed": True, "accounts": 1}
+        assert "[henwen-u-n8gmz]" in self.pjsip.read_text()
+        assert "Rpt(643930,P,0N8GMZ)" in self.dialplan.read_text()
+
+    def test_unchanged_content_is_not_rewritten(self):
+        """What lets the caller reload Asterisk only when something really
+        changed, instead of on every settings save."""
+        app.write_sip_user_files([("N8GMZ", SECRET)], "643930")
+        res = app.write_sip_user_files([("N8GMZ", SECRET)], "643930")
+        assert res["pjsip_changed"] is False and res["dialplan_changed"] is False
+
+    def test_a_change_is_detected(self):
+        app.write_sip_user_files([("N8GMZ", SECRET)], "643930")
+        res = app.write_sip_user_files([("N8GMZ", SECRET), ("KE8WNV", SECRET2)], "643930")
+        assert res["pjsip_changed"] is True and res["accounts"] == 2
+
+    def test_files_are_not_world_readable(self):
+        """The pjsip file contains every account's SIP password. 0640 keeps
+        group read, which is how the asterisk user gets at it; what must not
+        be set is any 'other' bit."""
+        app.write_sip_user_files([("N8GMZ", SECRET)], "643930")
+        mode = self.pjsip.stat().st_mode
+        assert mode & 0o007 == 0, oct(mode)
+        assert mode & 0o777 == 0o640, oct(mode)
+
+    def test_no_temp_files_are_left_behind(self):
+        app.write_sip_user_files([("N8GMZ", SECRET)], "643930")
+        assert not list(self.pjsip.parent.glob("*.tmp.*"))
+
+    def test_a_colliding_set_writes_nothing_at_all(self):
+        """Half-landing would leave one file describing endpoints the other
+        file has no contexts for."""
+        with pytest.raises(ValueError):
+            app.write_sip_user_files([("N8GMZ", SECRET), ("n8gmz", SECRET2)], "643930")
+        assert not self.pjsip.exists() and not self.dialplan.exists()
+
+    def test_no_accounts_still_writes_a_valid_empty_file(self):
+        res = app.write_sip_user_files([], "643930")
+        assert res["accounts"] == 0
+        assert "Do not edit by hand" in self.pjsip.read_text()
+
+
+class TestSipIncludeStatus:
+    """HenWen can write the generated files all day and nothing happens until
+    Asterisk is wired to read them -- a one-time edit to files HenWen does not
+    own. Reported rather than assumed."""
+
+    def test_reports_missing_includes(self, tmp_path):
+        pj = tmp_path / "pjsip.conf"; pj.write_text("[general]\n")
+        ex = tmp_path / "extensions.conf"; ex.write_text("[general]\n")
+        st = app.sip_include_status(str(pj), str(ex))
+        assert st["ready"] is False
+        assert st["pjsip"]["included"] is False
+
+    def test_reports_present_includes(self, tmp_path):
+        pj = tmp_path / "pjsip.conf"
+        pj.write_text("[general]\n" + app.SIP_USERS_INCLUDE_LINE + "\n")
+        ex = tmp_path / "extensions.conf"
+        ex.write_text("[general]\n" + app.SIP_DIALPLAN_INCLUDE_LINE + "\n")
+        st = app.sip_include_status(str(pj), str(ex))
+        assert st["ready"] is True
+
+    def test_an_unreadable_file_is_not_reported_as_ready(self, tmp_path):
+        st = app.sip_include_status(str(tmp_path / "nope.conf"), str(tmp_path / "nope2.conf"))
+        assert st["ready"] is False
+        assert st["pjsip"]["readable"] is False
+
+    def test_the_include_directive_is_tryinclude(self):
+        """A missing #include target is an Asterisk config parse error, so
+        wiring this up before the first provisioning run would break config
+        load. tryinclude degrades to 'not there yet'."""
+        assert app.SIP_USERS_INCLUDE_LINE.startswith("#tryinclude")
+        assert app.SIP_DIALPLAN_INCLUDE_LINE.startswith("#tryinclude")

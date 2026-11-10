@@ -15732,6 +15732,91 @@ def render_user_dialplans(accounts):
     return _GENERATED_HEADER.format(what="per-user dialplan contexts") + body
 
 
+# The generated files live in Asterisk's own custom/ directory, which already
+# exists and is asterisk-owned (it holds tx-spike's and the AudioSocket tap's
+# dialplan contexts). Env-overridable so tests never go near /etc/asterisk.
+SIP_USERS_CONF     = os.environ.get("SIP_USERS_CONF",
+                                    "/etc/asterisk/custom/henwen-sip-users.conf")
+SIP_USERS_DIALPLAN = os.environ.get("SIP_USERS_DIALPLAN",
+                                    "/etc/asterisk/custom/henwen-sip-users-dialplan.conf")
+
+# What pjsip.conf / extensions.conf need to contain for the generated files to
+# be read at all. '#tryinclude' and not '#include': the files do not exist
+# until HenWen first writes one, and a missing '#include' target is a config
+# parse error -- i.e. wiring this up before provisioning would break Asterisk's
+# config load. tryinclude degrades to "not there yet", which is the honest
+# state. The paths are relative because Asterisk resolves them against its own
+# config directory, exactly as the stock
+# `#tryinclude "custom/extensions.conf"` already does.
+SIP_USERS_INCLUDE_LINE    = '#tryinclude "custom/henwen-sip-users.conf"'
+SIP_DIALPLAN_INCLUDE_LINE = '#tryinclude "custom/henwen-sip-users-dialplan.conf"'
+
+
+def _atomic_write_if_changed(path, content, mode=0o640):
+    """Write only when the content actually differs, and never leave a
+    half-written file where Asterisk might read it.
+
+    Both halves matter here. The no-op-on-unchanged check is what lets the
+    caller reload Asterisk only when something really changed, instead of on
+    every settings save. The temp-file-plus-os.replace is because these files
+    are read by another process: a partially written pjsip.conf fragment is a
+    config error, and os.replace() is atomic within a filesystem, so a reader
+    sees either the old file or the new one. Same pattern the TTS re-synthesis
+    path already uses for a sound file being replaced under the scheduler."""
+    try:
+        if os.path.exists(path) and open(path, 'r').read() == content:
+            return False
+    except OSError:
+        pass          # unreadable: fall through and rewrite it
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, 'w') as fh:
+        fh.write(content)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+    return True
+
+
+def sip_include_status(pjsip_conf="/etc/asterisk/pjsip.conf",
+                       extensions_conf="/etc/asterisk/extensions.conf"):
+    """Whether Asterisk is actually wired to read the generated files.
+
+    HenWen can write them all day and nothing happens until the two
+    #tryinclude lines exist, which is a one-time edit to files HenWen does not
+    own. Reported rather than assumed, so a diagnostics page can say "written
+    but not included" instead of showing green -- the same reason
+    _apache_marker_status() reports per-vhost state rather than going green as
+    soon as any vhost has the proxy line."""
+    out = {}
+    for key, path, line in (("pjsip", pjsip_conf, SIP_USERS_INCLUDE_LINE),
+                            ("dialplan", extensions_conf, SIP_DIALPLAN_INCLUDE_LINE)):
+        try:
+            body = open(path, 'r').read()
+            out[key] = {"path": path, "included": line in body, "readable": True}
+        except OSError as e:
+            out[key] = {"path": path, "included": False, "readable": False,
+                        "error": str(e)}
+    out["ready"] = all(v.get("included") for k, v in out.items() if k != "ready")
+    return out
+
+
+def write_sip_user_files(accounts, node):
+    """Render and write both generated files for `accounts`, an iterable of
+    (callsign, secret). Returns which files changed.
+
+    Raises before writing anything if two accounts collide (see
+    _fail_closed_on_duplicates) -- so a bad set never half-lands, leaving one
+    file describing endpoints the other file has no contexts for."""
+    rows = [(c, s) for c, s in accounts]
+    pjsip_text    = render_pjsip_users(rows)
+    dialplan_text = render_user_dialplans([(c, node) for c, _s in rows])
+    return {
+        "pjsip_changed":    _atomic_write_if_changed(SIP_USERS_CONF, pjsip_text),
+        "dialplan_changed": _atomic_write_if_changed(SIP_USERS_DIALPLAN, dialplan_text),
+        "accounts":         len(rows),
+    }
+
+
 RX_AUDIO_PATHS = ("legacy", "lowlatency")
 # agc_enabled defaults False -- an explicit owner decision to default AGC
 # off everywhere (Listen-legacy, recording, stream relay, and low-latency
