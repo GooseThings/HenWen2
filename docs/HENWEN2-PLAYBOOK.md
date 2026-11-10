@@ -42,8 +42,8 @@ Links for people, `outstreamcmd` for machines.
 | ID | Decision | Status |
 |----|----------|--------|
 | D1 | How TX is restricted | **Software-only** (owner's call). Per-user credentials make abuse attributable and revocable; every `*99` is logged server-side. D1-c spiked in Phase 1; D1-b held in reserve. |
-| D2 | Does an explicit "arm" step stay before keying RF? | Open |
-| D3 | HTTPS mandatory (no choice — WebRTC); do we ship coturn? | Open |
+| D2 | Does an explicit "arm" step stay before keying RF? | **Answered: no.** Connecting is enough. Three controls: **PTT** (hold to talk), **MUTE** (silences received audio), **RECORD** (unchanged). See "D2 as decided" below. |
+| D3 | HTTPS mandatory (no choice — WebRTC); do we ship coturn? | Open — see "D3: how to think about TURN" below |
 | D4 | Repo visibility | Defaulted to **private** at creation; unanswered. `gh repo edit GooseThings/HenWen2 --visibility public` flips it. Note `update.sh`'s self-update fetches over plain HTTPS and needs public (Phase 6 concern only). |
 
 ### D1 — the security consequence, stated plainly
@@ -62,6 +62,79 @@ selected per call.
   rejected.
 - **D1-c (spike)** — whether `rpt_auth.c` offers per-link command
   authorization.
+
+### D2 as decided — no arm step
+
+The kiosk gets three controls and no arming:
+
+- **PTT** — hold to transmit. This is the only thing that keys the node.
+- **MUTE** — silences incoming audio. Local to the browser; it does not
+  change the call or the node.
+- **RECORD** — unchanged from 1.x.
+
+Connecting establishes the call, and the call is keyable from that moment,
+which is consistent with D1-a: the credential is keyable anyway, so an arm
+step was never a real gate — it was a UI speed bump.
+
+**One consequence to design around: when does the browser ask for the
+microphone?** A WebRTC call that can transmit needs an audio track, and
+getting one triggers the permission prompt. With no arm step there are two
+shapes, and they are not equivalent:
+
+1. **Ask at connect.** Simple, and the outbound RTP it produces is what keeps
+   `rtp_timeout=60` satisfied (see spike 3). Cost: someone who only wants to
+   listen still gets a microphone prompt, which on a public-ish kiosk reads
+   as alarming.
+2. **Start receive-only, renegotiate on the first PTT press.** No prompt
+   until someone actually wants to talk. Cost: a receive-only call sends no
+   RTP, which is exactly what `rtp_timeout=60` hangs up — so this needs the
+   timeout handled deliberately rather than inherited.
+
+Phase 3 has to pick one. Option 1 is the safe default; option 2 is the nicer
+behavior and needs the `rtp_timeout` question answered first.
+
+### D3: how to think about TURN
+
+**The problem is not HTTPS.** The web page rides your HTTPS connection; the
+*audio* does not. WebRTC media is a separate UDP stream from the listener's
+browser straight to this box (ports 10000-10100). So a listener can load the
+board perfectly and still get no audio, because the two travel different
+paths.
+
+That is a genuine regression against 1.x, whose audio rode the same HTTPS
+connection as the page and therefore worked through anything that passed web
+traffic — including HTTP-only tunnels like Cloudflare Tunnel and Tailscale
+Serve, which carry no UDP at all.
+
+Who it breaks, roughly in order of likelihood: a listener on a corporate or
+school network that only allows TCP 443; hotel and some public wifi; a few
+mobile carriers; and both ends behind symmetric NAT. Ordinary home broadband
+with STUN — which browser TX already uses — is fine, and is probably most of
+this node's listeners.
+
+The three ways to answer it:
+
+1. **coturn on this box.** Free, no third party. But it needs its own public
+   ports (3478, and realistically 5349/TLS on **443** to rescue the hard
+   cases — which collides with Apache already holding 443 here), and relayed
+   audio comes *in and goes back out* over the same residential uplink,
+   doubling bandwidth for every relayed listener.
+2. **A hosted TURN service** (Cloudflare, Twilio, Xirsys, metered.ca). No
+   ports to forward, no bandwidth on your uplink, cheap or free at this
+   scale. Costs: an external dependency with credentials to manage, and a
+   third party handling the (encrypted) media packets.
+3. **Keep the legacy HTTP audio path as the fallback.** The listener whose
+   WebRTC cannot connect gets 1.x's streaming path instead. This cuts
+   against Phase 5's "delete the old pipeline" and is the honest trade for
+   it: the old path is the only thing that works where UDP does not.
+
+**Recommended way to look at it: measure before buying.** Do not decide this
+from first principles — instrument it. Browser TX already has the telemetry
+shape for it (`pktsSent=0` means ICE never completed). Phase 3 should log,
+per listener, whether media ever flowed. Then the question stops being "might
+someone fail?" and becomes "how many actually did, and from where". If the
+answer is nobody, STUN alone is the right answer and TURN is unbought
+complexity.
 
 ## Architecture
 
