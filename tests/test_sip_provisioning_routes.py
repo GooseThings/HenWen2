@@ -411,3 +411,52 @@ class TestConnectorExclusion:
         monkeypatch.setattr(app.time, "sleep", lambda s: None)
         app._connector_do_connect("643930", "55553", disconnect_first=True, skip_permanent=True)
         assert sent == ["ilink 11 27664", "ilink 3 55553"]
+
+
+class TestListenOnlyFlip:
+    def test_turning_listen_only_on_revokes_the_live_credential(self, owner, fresh_db, _isolated_sip):
+        owner.post("/api/users", json={"username": "bob", "password": "bobs-password-1",
+                                       "role": "user", "callsign": "N8GMZ"})
+        uid = [u for u in owner.get("/api/users").get_json()["users"] if u["username"] == "bob"][0]["id"]
+        old = _row(fresh_db, "bob")["sip_secret"]
+        assert owner.put(f"/api/users/{uid}", json={"role": "user", "listen_only": True}).status_code == 200
+        row = _row(fresh_db, "bob")
+        assert row["listen_only"] == 1
+        assert row["callsign"] == "N8GMZ"            # identity kept for when the flag comes off
+        assert row["sip_secret"] != old              # ...but the issued credential is dead
+        assert _isolated_sip["hangup"] == ["henwen-u-n8gmz"]
+
+    def test_resending_listen_only_on_does_not_rotate_again(self, owner, fresh_db, _isolated_sip):
+        owner.post("/api/users", json={"username": "bob", "password": "bobs-password-1",
+                                       "role": "user", "callsign": "N8GMZ", "listen_only": True})
+        uid = [u for u in owner.get("/api/users").get_json()["users"] if u["username"] == "bob"][0]["id"]
+        old = _row(fresh_db, "bob")["sip_secret"]
+        assert owner.put(f"/api/users/{uid}", json={"role": "user", "listen_only": True}).status_code == 200
+        assert _row(fresh_db, "bob")["sip_secret"] == old
+        assert _isolated_sip["hangup"] == []
+
+
+class TestConnectGateIgnoresSessionLinks:
+    def _kiosk(self, client, create_user):
+        create_user("owner1", role="owner")
+        create_user("kiosk1", password="kiosk1s-password1", role="user")
+        _login(client, "kiosk1", "kiosk1s-password1")
+
+    def test_own_listening_session_does_not_block_a_first_connect(self, client, create_user, monkeypatch):
+        self._kiosk(client, create_user)
+        monkeypatch.setattr(app, "get_cached_status", lambda n: {"connected": ["0N8GMZ", "0HenWen-Web"]})
+        sent = []
+        class Ami:
+            def rpt_cmd(self, node, cmd):
+                sent.append(cmd); return {"success": True, "raw": ""}
+        monkeypatch.setattr(app, "ami_send_command", lambda fn: fn(Ami()))
+        monkeypatch.setattr(app, "is_any_node_locked", lambda: False)
+        r = client.post("/api/status/connect", json={"local_node": "643930", "remote_node": "27664"})
+        assert r.status_code != 403, r.get_json()
+        assert any("27664" in c for c in sent)
+
+    def test_a_real_link_still_blocks(self, client, create_user, monkeypatch):
+        self._kiosk(client, create_user)
+        monkeypatch.setattr(app, "get_cached_status", lambda n: {"connected": ["0N8GMZ", "27664"]})
+        r = client.post("/api/status/connect", json={"local_node": "643930", "remote_node": "2000"})
+        assert r.status_code == 403

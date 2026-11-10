@@ -3214,11 +3214,18 @@ def _poll_loop():
                             # DB insert (and its lookup_node, which can hit the
                             # network on a cache miss) deferred past the lock.
                             _conn_opens.append((node_str, peer, directions.get(peer, "")))
-                            _alert_events.append(("connect", node_str, peer))
+                            # A HenWen audio session (0HenWen-Web, 0<CALLSIGN>)
+                            # is a link too: it is recorded in connection
+                            # history (who listened is worth knowing) but never
+                            # pushed as a "Node Connected" alert -- in 2.0 that
+                            # would be one notification per Listen press.
+                            if not _sip_session_link(peer):
+                                _alert_events.append(("connect", node_str, peer))
                         for peer in prev_est - all_set:
                             # Was established before and has now fully gone
                             _conn_closes.append((node_str, peer))
-                            _alert_events.append(("disconnect", node_str, peer))
+                            if not _sip_session_link(peer):
+                                _alert_events.append(("disconnect", node_str, peer))
                             with _kiosk_temp_lock:
                                 _kiosk_temp_conns.pop((node_str, peer), None)
                             _link_prunes.append((node_str, peer))
@@ -7767,6 +7774,17 @@ def api_users_update(uid):
         # role='user'.
         listen_only = bool(data["listen_only"]) and new_role == "user"
         updates.append("listen_only=?"); params.append(int(listen_only))
+        # Turning listen-only ON is a revocation too: a listen-only account
+        # is never handed a credential (D1-a -- any issued one can key), but
+        # one already issued stays valid in Asterisk, and a call already up
+        # stays keyable. Rotate and hang up, like a password change. The
+        # callsign itself is kept, so clearing the flag later re-enables the
+        # identity without re-entering it.
+        if (listen_only and not user["listen_only"] and old_callsign
+                and not any(u.startswith("sip_secret=") for u in updates)):
+            updates.append("sip_secret=?"); params.append(generate_sip_secret())
+            sip_changed = True
+            revoke_eps.append(sip_identity(old_callsign)["endpoint"])
     if "can_record" in data:
         # Unlike restrict_disconnect, meaningful for every role — the owner
         # grants recording access explicitly, even to their own account.
@@ -9055,7 +9073,13 @@ def api_status_connect():
     # Status Board UI disables Connect/Monitor once any node is connected,
     # but that's client-side only, so enforce it here too (a user-role
     # session could otherwise hit this endpoint directly and stack links).
-    if caller_role == 'user' and get_cached_status(local_node).get('connected'):
+    # A HenWen audio session (0HenWen-Web, 0<CALLSIGN>) is an app_rpt link
+    # too and shows up in the connected list, but it is this user's own
+    # listening, not a node they linked -- it must not count against the
+    # one-at-a-time rule or a user-role account could never connect a node
+    # while listening. Same exclusion the Smart Connector applies.
+    if caller_role == 'user' and any(not _sip_session_link(p)
+                                     for p in get_cached_status(local_node).get('connected', [])):
         return jsonify({"error": "Only one connection at a time is allowed for your account. Disconnect the current node first."}), 403
     permanent   = bool(data.get("permanent", False)) and caller_role in ('admin', 'superuser', 'owner')
     monitor     = bool(data.get("monitor", False))

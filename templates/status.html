@@ -8481,7 +8481,7 @@ function _doStartListenWS(audio, node) {
   var ctrl = new AbortController();
   _listenCtrl = ctrl;
 
-  audio.muted = !!(window._tx && _tx.keyed);
+  audio.muted = !!(window._tx && _tx.keyed) || _userMuted;
 
   function _now() {
     return (window.performance && performance.now) ? performance.now() : Date.now();
@@ -9158,7 +9158,7 @@ function _sipShowPtt(show) {
     totEl.style.display = 'none';
   }
   if (show) {
-    _txStatus(_sip.micOk ? '' : 'Microphone unavailable — listening only', _sip.micOk ? '' : 'var(--warn)');
+    _txStatus('');
     var agcMsgEl = document.getElementById('tx-agc-msg');
     if (agcMsgEl) agcMsgEl.style.display = 'none';
   }
@@ -9235,7 +9235,8 @@ function _doStartListenSIP(audio, node, cfg) {
         _listenSetBtn('<svg class="icon"><use href="#icon-headphones"></use></svg> Stop', 'var(--green)', false);
         if (_sip.canTx) _sipShowPtt(true);
         sbToast('Monitoring node ' + node + ' as ' + sip.callsign + ' — direct call'
-                + (_sip.canTx ? ', PTT ready' : ''), true);
+                + (_sip.canTx ? ', PTT ready' : (_sip.micOk ? '' : ' (microphone unavailable, listening only)')),
+                true);
         _audioClientLog(node, 'sip-connected', 'callsign=' + sip.callsign + ' link=' + sip.link_name
                         + ' mic=' + _sip.micOk + ' tx=' + _sip.canTx);
         _sipWatchMedia(s, node, stale);
@@ -9257,15 +9258,23 @@ function _doStartListenSIP(audio, node, cfg) {
   });
 }
 
-/* Did media actually flow? ICE can "succeed" on signaling alone; packets
-   are the proof. No inbound packets _SIP_MEDIA_MS after confirm means the
-   UDP path is blocked, and the honest answer is the fallback -- plus one
-   telemetry line, which is the whole D3 measurement. */
+/* Did media actually flow? SIP `confirmed` only proves signaling (which
+   rides the Apache WSS proxy and works anywhere the page loads); the audio
+   is direct UDP and can fail independently. ICE reaching connected/
+   completed is the proof that the UDP path exists. Inbound packet count is
+   the second check: app_rpt writes the conference's continuous 20ms frames
+   down a phone link whether or not anyone is talking (app_rpt.c, the
+   altlink && !lastrx branch of the pchan read loop -- verified in the
+   3.10.8 source, and spike 1 recorded a quiet leg's silence frames), so
+   zero packets after _SIP_MEDIA_MS with ICE connected is a real media
+   failure, never just a quiet node. Either way: one telemetry line and the
+   fallback, which is the whole D3 measurement. */
 function _sipWatchMedia(s, node, stale) {
   function sample(cb) {
     try {
       s.connection.getStats().then(function(stats) {
-        var o = { rx: 0, lost: 0, jitter: null, tx: 0, cand: '' };
+        var o = { rx: 0, lost: 0, jitter: null, tx: 0, cand: '',
+                  ice: (s.connection && s.connection.iceConnectionState) || '?' };
         stats.forEach(function(r) {
           if (r.type === 'inbound-rtp' && r.kind === 'audio') {
             o.rx = r.packetsReceived || 0; o.lost = r.packetsLost || 0;
@@ -9286,19 +9295,21 @@ function _sipWatchMedia(s, node, stale) {
     sample(function(o) {
       if (stale()) return;
       if (!o) return;
-      if (o.rx === 0) {
-        _audioClientLog(node, 'sip-nomedia', 'no inbound RTP after ' + _SIP_MEDIA_MS + 'ms, tx=' + o.tx);
-        _sipFallback('no-media');
+      var iceOk = (o.ice === 'connected' || o.ice === 'completed');
+      if (!iceOk || o.rx === 0) {
+        _audioClientLog(node, 'sip-nomedia', 'ice=' + o.ice + ' rx=' + o.rx + ' tx=' + o.tx
+                        + ' after ' + _SIP_MEDIA_MS + 'ms');
+        _sipFallback(iceOk ? 'no-media' : 'ice-' + o.ice);
         return;
       }
-      _audioClientLog(node, 'sip-media', 'rx=' + o.rx + ' tx=' + o.tx + ' jitter=' + o.jitter + 'ms');
+      _audioClientLog(node, 'sip-media', 'ice=' + o.ice + ' rx=' + o.rx + ' tx=' + o.tx + ' jitter=' + o.jitter + 'ms');
     });
   }, _SIP_MEDIA_MS);
   clearInterval(_sip.statsTimer);
   _sip.statsTimer = setInterval(function() {
     if (stale()) { clearInterval(_sip.statsTimer); return; }
     sample(function(o) {
-      if (o) _audioClientLog(node, 'sip-stats', 'rx=' + o.rx + ' lost=' + o.lost + ' tx=' + o.tx + ' jitter=' + o.jitter + 'ms');
+      if (o) _audioClientLog(node, 'sip-stats', 'ice=' + o.ice + ' rx=' + o.rx + ' lost=' + o.lost + ' tx=' + o.tx + ' jitter=' + o.jitter + 'ms');
     });
   }, _SIP_STATS_MS);
 }
@@ -9323,6 +9334,7 @@ function _sipFallback(reason) {
   _audioClientLog(node, 'sip-fallback', reason);
   _sip.failures.push(Date.now());
   _sipTeardown();
+  _listenActive = false;   /* a post-confirm fallback would otherwise leave it true */
   _listenFallbackNotice = 'Direct call unavailable (' + reason.split(':')[0] + ') — using the standard stream. ';
   _listenSetBtn('... Connecting', 'var(--text2)', true);
   _startListenLegacy(audio, node);
