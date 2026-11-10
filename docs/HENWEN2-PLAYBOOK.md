@@ -177,3 +177,91 @@ downlink?" an automated assertion — tone in, assert absent on that leg,
 assert present on a second leg — **with no RF keyed**. Playwright for the
 WebRTC path later. HenWen 1's pure-logic and route-smoke tests carry over
 mostly unchanged; the audio-pipeline tests retire with the pipeline.
+
+---
+
+## Phase 0 — as built (2026-11-10)
+
+**Repo.** `GooseThings/HenWen2`, created **private** (D4 was unanswered; this
+is the reversible direction — `gh repo edit GooseThings/HenWen2 --visibility
+public` flips it, and nothing is exposed by doing so, since the forked history
+is already public via HenWen 1). Deliberately **not** a GitHub fork: a fork's
+pull requests default to targeting upstream, which is exactly how 2.0 work
+would accidentally land in 1.x. Full history and tags were pushed to a
+standalone repo instead; the `henwen1` remote is fetch-only (its push URL is
+set to `DISABLED`).
+
+**Parallel install.** `/opt/HenWen2` is both the dev checkout and the install,
+mirroring how `/opt/HenWen` works in 1.x. Unit `HenWen2.service`, user
+`asterisk`, gunicorn on **127.0.0.1:5001** — loopback only, so Apache is the
+only way in. Everything that could collide with the live 1.x install is
+separate:
+
+| | 1.x | 2.0 |
+|---|---|---|
+| Unit / path | `HenWen` / `/opt/HenWen` | `HenWen2` / `/opt/HenWen2` |
+| HTTP | `0.0.0.0:5000` | `127.0.0.1:5001` |
+| Database | `/etc/asterisk/henwen.db` | `/etc/asterisk/henwen2.db` (**empty**) |
+| Sounds | `.../sounds/henwen` | `.../sounds/henwen2` |
+| TTS voices | `henwen_tts_voices` | `henwen2_tts_voices` |
+| Audio relay ports | 8099 / 8098 | 8199 / 8198 |
+
+The empty database is a safety property, not an oversight: with no
+announcements, connectors, Node ID monitors or stream-relay targets, 2.0's
+background threads no-op, so the two instances cannot both fire scheduled
+playback or connector actions at the same node. 2.0 starts at its own
+first-run Create Account screen.
+
+`/opt/HenWen2` is chowned to `asterisk`, so git there needs
+`git config --global --add safe.directory /opt/HenWen2`.
+
+**Reachable at `https://henwen.ironicsandwich.com/2/index.html`.** The
+existing vhost got a `ProxyPass /2` above its `ProxyPass "/"` — order matters,
+`/` would otherwise swallow `/2/` first. The vhost was backed up with a path
+manifest to `/root/henwen2-apache-backup-<ts>/` and `apache2ctl configtest`
+gated the reload. 1.x keeps the vhost root.
+
+`/index.html` is an alias on the existing `/` view rather than a new route, so
+it keeps the endpoint name `status_board` and every `check_auth()`
+endpoint-name check (including the first-run `_SETUP_PAGES` bounce) applies to
+it unchanged. **Decorator order is load-bearing:** decorators apply bottom-up,
+so the lower `@app.route` registers first and `url_for('status_board')` builds
+from that one. With the alias registered first, every redirect to the board
+came out as `/index.html` — caught by `tests/test_routes_smoke.py`. Keep `"/"`
+below the alias.
+
+**Path-prefix support is a real feature, not scaffolding.** Phase 0 first
+shipped a blunt version (a WSGI prefix strip plus a regex pass over rendered
+HTML). It was replaced the same day by the proper fix, written against 1.x and
+cherry-picked here — **HenWen 1 PR #222**:
+
+- `_ScriptNamePrefixFix` sets `SCRIPT_NAME` from `URL_PREFIX` or the
+  `X-Forwarded-Prefix` header (the latter trusted only from the local proxy,
+  like `_LocalProxyFix`'s own headers), so Flask's routing, `url_for()`,
+  redirects and the session cookie path are correct — with either proxy shape,
+  prefix passed through or already stripped.
+- The 27 `href`/`src`/`action` attributes are prefixed from
+  `request.script_root`, and `templates/_basepath.html` carries a base-path
+  adapter for the ~274 hardcoded URLs in inline JS: it patches `fetch`,
+  `XMLHttpRequest` and `EventSource`, and exposes `henwenUrl()` for the five
+  sites that bypass all three.
+- `/asterisk-ws` and `/ws-audio` are deliberately **not** prefixed — they are
+  Apache-level proxies installed at the vhost root by their own `apply.sh`,
+  and they don't move with the Flask mount.
+
+Doing it in 1.x means the fix lands in the version people actually run, and
+Phase 3's frontend rewrite inherits a mount-anywhere app instead of a deletion
+chore.
+
+One finding worth keeping: prefixing `href`/`src`/`action` is **load-bearing
+for correctness, not cosmetics.** `login.html`'s form is `action="/login"`, so
+before it was prefixed, submitting the 2.0 Create Account form POSTed to the
+**1.x** app at the vhost root — this instance's credentials to the other
+instance. Found by diffing the rendered page's root-absolute references, now
+covered by `tests/test_url_prefix.py`. Any new page still deserves the same
+check:
+
+```bash
+curl -s https://henwen.ironicsandwich.com/2/<page> \
+  | grep -oE '(src|href|action)="/[^"]*"' | sort -u   # every hit must start /2/
+```
