@@ -1548,12 +1548,47 @@ def get_db():
         "failed_login_count INTEGER NOT NULL DEFAULT 0",
         "locked_until REAL",
         "password_epoch INTEGER NOT NULL DEFAULT 1",
+        # HenWen 2.0 Phase 2: every account becomes a real Asterisk endpoint,
+        # so it needs an on-air identity and its own SIP credential. callsign
+        # is the operator's amateur callsign -- it ends up in the app_rpt link
+        # name, so `rpt lstats` and the Connected Nodes list show *who* is
+        # listening instead of a shared "HenWen-Web". sip_secret is that
+        # account's SIP password; rotating it is how a credential is revoked.
+        # Both NULL until set, so an account that predates this still works
+        # and simply has no SIP identity yet.
+        "callsign TEXT",
+        "sip_secret TEXT",
     ):
         try:
             conn.execute(f"ALTER TABLE users ADD COLUMN {_col_def}")
             conn.commit()
         except Exception:
             pass  # column already exists
+
+    # One callsign, one account -- enforced in the schema, not just in the
+    # route that assigns it. sip_identity() derives the PJSIP endpoint, auth,
+    # aor and dialplan context names from the callsign alone, so two accounts
+    # sharing one would share a single SIP identity: the same credential,
+    # revoked together, and indistinguishable in `rpt lstats`. That is the
+    # opposite of the per-user attribution the whole design rests on.
+    #
+    # COLLATE NOCASE because validate_callsign() uppercases but a direct DB
+    # write need not have gone through it -- same reasoning as the
+    # case-insensitive username matching above. Partial (WHERE NOT NULL) so
+    # any number of accounts can still have no callsign yet; SQLite treats
+    # NULLs as distinct in a UNIQUE index anyway, but saying so is clearer
+    # than relying on it.
+    try:
+        conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_users_callsign
+                        ON users(callsign COLLATE NOCASE)
+                        WHERE callsign IS NOT NULL""")
+        conn.commit()
+    except Exception as e:
+        # A pre-existing duplicate would make this fail. Log loudly rather
+        # than silently continuing without the constraint.
+        log("ERROR", f"[DB] Could not create the unique callsign index: {e}. "
+                     f"Two accounts may share a callsign -- fix before "
+                     f"assigning SIP credentials.")
 
     # Self-service "Forgot password?" flow (login.html) — a logged-out user
     # requests a reset, which pings the owner via whatever's configured in
@@ -15493,6 +15528,320 @@ def _get_irc_relay_config():
 def _get_stream_relay_config():
     row = get_db().execute("SELECT * FROM stream_relay_config WHERE id=1").fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Per-user SIP identity  (HenWen 2.0, Phase 2)
+#
+# 2.0's premise is that every audio stream is a native Asterisk VoIP call, so
+# every account needs to *be* an Asterisk endpoint rather than sharing the one
+# `henwen-tx` credential 1.x handed to everybody. Three things follow, and all
+# three are decided here:
+#
+#   1. An on-air identity. The app_rpt link name is derived from the account's
+#      callsign, so `rpt lstats` and the Connected Nodes list name the person
+#      instead of showing a shared "HenWen-Web". It is '0'-prefixed because
+#      app_rpt announces any link whose name starts with a letter -- that was
+#      a real bug in 1.x (fixed in v2026.10.28.2) and it would come back once
+#      per listener here.
+#
+#   2. Its own credential, so a leak is attributable and revocable for one
+#      account instead of for everyone. Rotating sip_secret *is* revocation.
+#
+#   3. Its own dialplan context exposing exactly one extension -- that
+#      account's own node, in phone-control mode. This preserves 1.x's "a
+#      leaked credential can't dial anywhere else" property, which a shared
+#      context would lose the moment there were two nodes.
+#
+# Everything here is pure: no DB, no filesystem, no AMI. The writer that
+# renders these into an Asterisk include file and reloads PJSIP comes next;
+# keeping the rendering testable without Asterisk is the point, same
+# reasoning as _validate_rx_audio_path() and _webm_af_filter() above.
+# ---------------------------------------------------------------------------
+# Deliberately stricter than APRS_CALLSIGN_RE, which allows a bare "-SSID"
+# suffix (an APRS-ism, meaningless on the air) and a callsign with no digit.
+# This value becomes a SIP auth username, a PJSIP object name, a dialplan
+# context name and an app_rpt link name, so the charset is held to what is
+# unambiguously safe in all four: letters and digits only.
+_CALLSIGN_RE = re.compile(r'^[A-Z0-9]{3,9}$')
+
+# A SIP secret is generated, never chosen: nobody types it (the browser is
+# handed it over HTTPS), so there is no usability argument for making it
+# short or memorable.
+SIP_SECRET_BYTES = 24
+
+# The alphabet secrets.token_urlsafe() actually produces. Enforced on the way
+# INTO the rendered config, not just on generation: pjsip.conf is a flat
+# key=value file, so a newline in a secret would append arbitrary
+# configuration lines, and a ';' would truncate the password Asterisk
+# actually reads (silently -- the endpoint would exist with the wrong
+# credential). generate_sip_secret() can't produce either, but a secret that
+# arrives from the database, an import or a future caller has not necessarily
+# been through it, and a config-injection sink is the wrong place to trust
+# provenance.
+_SIP_SECRET_RE = re.compile(r'^[A-Za-z0-9_-]{20,128}$')
+
+_PJSIP_USER_TEMPLATE = """[{endpoint}]
+type=endpoint
+context={context}
+disallow=all
+allow=ulaw
+webrtc=yes
+dtls_auto_generate_cert=yes
+auth={auth}
+aors={aor}
+callerid="{link_name}" <{callsign}>
+rtp_timeout=60
+rtp_timeout_hold=60
+
+[{auth}]
+type=auth
+auth_type=userpass
+username={callsign}
+password={secret}
+
+[{aor}]
+type=aor
+max_contacts=2
+remove_existing=yes
+"""
+
+_USER_DIALPLAN_TEMPLATE = """[{context}]
+; {callsign} -- generated by HenWen, do not edit by hand.
+exten => {node},1,Answer()
+ same => n,Rpt({node},P,{link_name})
+ same => n,Hangup()
+"""
+
+
+_GENERATED_HEADER = """; Generated by HenWen -- {what}. Do not edit by hand: this file is
+; rewritten from the users table whenever an account's SIP identity changes,
+; and anything added here will be lost.
+;
+"""
+
+
+def validate_callsign(value):
+    """Normalize an amateur callsign, or raise ValueError with a message safe
+    to show the caller. Uppercased, since callsigns are case-insensitive on
+    the air but everything downstream wants one canonical form."""
+    v = str(value or '').strip().upper()
+    if not v:
+        raise ValueError("callsign is required")
+    if not _CALLSIGN_RE.match(v):
+        raise ValueError("callsign must be 3-9 letters and digits, no punctuation")
+    if not any(c.isdigit() for c in v) or not any(c.isalpha() for c in v):
+        # Not pedantry: this is what rejects "ADMIN" or "123456", which is
+        # what gets typed when someone treats the field as a username.
+        raise ValueError("callsign must contain both a letter and a digit")
+    return v
+
+
+def generate_sip_secret():
+    return secrets.token_urlsafe(SIP_SECRET_BYTES)
+
+
+def sip_identity(callsign):
+    """Every Asterisk-side name derived from one callsign, in one place, so
+    the renderers and the runtime can never disagree about them."""
+    cs = validate_callsign(callsign)
+    slug = cs.lower()
+    return {
+        'callsign':  cs,
+        'endpoint':  'henwen-u-' + slug,
+        'auth':      'henwen-u-' + slug + '-auth',
+        'aor':       'henwen-u-' + slug,
+        'context':   'henwen-u-' + slug,
+        # '0'-prefixed: app_rpt announces a link whose name starts with a
+        # letter. See point 1 in the block comment above.
+        'link_name': '0' + cs,
+    }
+
+
+def render_pjsip_user(callsign, secret):
+    """One account's PJSIP endpoint/auth/aor, as it will appear in HenWen's
+    generated include file. Mirrors tx-spike/pjsip.snippet's shared endpoint,
+    with the two differences that matter: the context is this account's own,
+    and rtp_timeout is kept, because a browser that vanishes without a BYE
+    otherwise leaves Rpt(<node>,P) up forever -- confirmed in 1.x on a
+    27-hour-old phone-mode channel."""
+    secret = str(secret or '')
+    if not secret:
+        raise ValueError("a SIP secret is required")
+    if not _SIP_SECRET_RE.match(secret):
+        raise ValueError("SIP secret must be 20-128 URL-safe characters "
+                         "(A-Z a-z 0-9 _ -)")
+    return _PJSIP_USER_TEMPLATE.format(secret=secret, **sip_identity(callsign))
+
+
+def render_user_dialplan(callsign, node):
+    """This account's context: exactly one extension, its own node in
+    phone-control mode, under its own link name.
+
+    Phone-control mode ('P') means PTT is DTMF *99, so this credential CAN
+    key the transmitter. That is decision D1-a in docs/HENWEN2-PLAYBOOK.md,
+    taken deliberately: per-user credentials make abuse attributable and
+    instantly revocable, and users.listen_only stays an application-level
+    gate rather than an enforced one. app_rpt's phone_functions stanza is
+    node-wide, so a restricted function set cannot be selected per call; the
+    enforced alternatives are recorded in the playbook as D1-b and D1-d."""
+    ident = dict(sip_identity(callsign))
+    ident['node'] = str(int(node))   # same guard _start_broadcast() uses
+    return _USER_DIALPLAN_TEMPLATE.format(**ident)
+
+
+def _fail_closed_on_duplicates(entries):
+    """Refuse to render anything if two accounts would resolve to the same SIP
+    identity. Checked on the *derived* names rather than on the callsigns, so
+    a future change to sip_identity()'s naming scheme cannot quietly
+    reintroduce a collision that the callsign comparison would have missed.
+
+    The schema's unique index on users(callsign COLLATE NOCASE) is the real
+    guard; this is the second one, because the consequence is bad enough to
+    be worth refusing the whole file over: two accounts sharing one endpoint
+    share one credential, are revoked together, and are indistinguishable in
+    `rpt lstats`. Rendering a file where one silently shadows the other would
+    be worse than rendering nothing."""
+    seen = {}
+    for callsign, _rest in entries:
+        ident = sip_identity(callsign)
+        key = ident['endpoint']
+        if key in seen:
+            raise ValueError(
+                f"callsigns {seen[key]!r} and {ident['callsign']!r} both resolve to "
+                f"SIP endpoint {key!r} -- refusing to render a config where one "
+                f"account shadows another")
+        seen[key] = ident['callsign']
+
+
+def render_pjsip_users(accounts):
+    """The whole generated PJSIP include file, for accounts that have a
+    callsign and a secret. `accounts` is an iterable of (callsign, secret)."""
+    entries = [(c, s) for c, s in accounts]
+    _fail_closed_on_duplicates(entries)
+    body = "\n".join(render_pjsip_user(c, s) for c, s in entries)
+    return _GENERATED_HEADER.format(what="PJSIP endpoints") + body
+
+
+def render_user_dialplans(accounts):
+    """The whole generated dialplan include file. `accounts` is an iterable of
+    (callsign, node)."""
+    entries = [(c, n) for c, n in accounts]
+    _fail_closed_on_duplicates(entries)
+    body = "\n".join(render_user_dialplan(c, n) for c, n in entries)
+    return _GENERATED_HEADER.format(what="per-user dialplan contexts") + body
+
+
+# The generated files live in Asterisk's own custom/ directory, which already
+# exists and is asterisk-owned (it holds tx-spike's and the AudioSocket tap's
+# dialplan contexts). Env-overridable so tests never go near /etc/asterisk.
+SIP_USERS_CONF     = os.environ.get("SIP_USERS_CONF",
+                                    "/etc/asterisk/custom/henwen-sip-users.conf")
+SIP_USERS_DIALPLAN = os.environ.get("SIP_USERS_DIALPLAN",
+                                    "/etc/asterisk/custom/henwen-sip-users-dialplan.conf")
+
+# What pjsip.conf / extensions.conf need to contain for the generated files to
+# be read at all. '#tryinclude' and not '#include': the files do not exist
+# until HenWen first writes one, and a missing '#include' target is a config
+# parse error -- i.e. wiring this up before provisioning would break Asterisk's
+# config load. tryinclude degrades to "not there yet", which is the honest
+# state. The paths are relative because Asterisk resolves them against its own
+# config directory, exactly as the stock
+# `#tryinclude "custom/extensions.conf"` already does.
+SIP_USERS_INCLUDE_LINE    = '#tryinclude "custom/henwen-sip-users.conf"'
+SIP_DIALPLAN_INCLUDE_LINE = '#tryinclude "custom/henwen-sip-users-dialplan.conf"'
+
+
+def _atomic_write_if_changed(path, content, mode=0o640):
+    """Write only when the content actually differs, and never leave a
+    half-written file where Asterisk might read it.
+
+    Both halves matter here. The no-op-on-unchanged check is what lets the
+    caller reload Asterisk only when something really changed, instead of on
+    every settings save. The temp-file-plus-os.replace is because these files
+    are read by another process: a partially written pjsip.conf fragment is a
+    config error, and os.replace() is atomic within a filesystem, so a reader
+    sees either the old file or the new one. Same pattern the TTS re-synthesis
+    path already uses for a sound file being replaced under the scheduler."""
+    try:
+        if os.path.exists(path) and open(path, 'r').read() == content:
+            return False
+    except OSError:
+        pass          # unreadable: fall through and rewrite it
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    # The temp file holds every account's SIP password, so three things have
+    # to be true of how it is created, and a plain open(tmp, 'w') gets all
+    # three wrong:
+    #
+    #   * It must never be world-readable, not even briefly. open() applies
+    #     the process umask (0o022 under systemd here), so the secrets would
+    #     land in a 0644 file and only be narrowed afterwards -- a real
+    #     window, and /etc/asterisk is traversable. O_CREAT with an explicit
+    #     0o600 means it is never readable by anyone else at any point.
+    #   * It must not follow or clobber something already at that path.
+    #     O_EXCL fails instead, which is what stops a pre-created symlink in
+    #     a writable directory from redirecting the write -- the classic
+    #     insecure-temp-file pattern. The random suffix means the name cannot
+    #     be guessed in the first place; O_EXCL is the guarantee, not the
+    #     name.
+    #   * It must not survive a failure. Without the cleanup, a raising
+    #     write or replace leaves a file full of SIP passwords sitting next
+    #     to the real one under a name nothing will ever tidy up.
+    tmp = f"{path}.tmp.{os.getpid()}.{secrets.token_hex(8)}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, 'w') as fh:
+            fh.write(content)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return True
+
+
+def sip_include_status(pjsip_conf="/etc/asterisk/pjsip.conf",
+                       extensions_conf="/etc/asterisk/extensions.conf"):
+    """Whether Asterisk is actually wired to read the generated files.
+
+    HenWen can write them all day and nothing happens until the two
+    #tryinclude lines exist, which is a one-time edit to files HenWen does not
+    own. Reported rather than assumed, so a diagnostics page can say "written
+    but not included" instead of showing green -- the same reason
+    _apache_marker_status() reports per-vhost state rather than going green as
+    soon as any vhost has the proxy line."""
+    out = {}
+    for key, path, line in (("pjsip", pjsip_conf, SIP_USERS_INCLUDE_LINE),
+                            ("dialplan", extensions_conf, SIP_DIALPLAN_INCLUDE_LINE)):
+        try:
+            body = open(path, 'r').read()
+            out[key] = {"path": path, "included": line in body, "readable": True}
+        except OSError as e:
+            out[key] = {"path": path, "included": False, "readable": False,
+                        "error": str(e)}
+    out["ready"] = all(v.get("included") for k, v in out.items() if k != "ready")
+    return out
+
+
+def write_sip_user_files(accounts, node):
+    """Render and write both generated files for `accounts`, an iterable of
+    (callsign, secret). Returns which files changed.
+
+    Raises before writing anything if two accounts collide (see
+    _fail_closed_on_duplicates) -- so a bad set never half-lands, leaving one
+    file describing endpoints the other file has no contexts for."""
+    rows = [(c, s) for c, s in accounts]
+    pjsip_text    = render_pjsip_users(rows)
+    dialplan_text = render_user_dialplans([(c, node) for c, _s in rows])
+    return {
+        "pjsip_changed":    _atomic_write_if_changed(SIP_USERS_CONF, pjsip_text),
+        "dialplan_changed": _atomic_write_if_changed(SIP_USERS_DIALPLAN, dialplan_text),
+        "accounts":         len(rows),
+    }
 
 
 RX_AUDIO_PATHS = ("legacy", "lowlatency")

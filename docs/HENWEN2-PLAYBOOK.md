@@ -1,8 +1,53 @@
 # HenWen 2.0 — audio as native Asterisk VoIP
 
-**Status:** Phase 0/1 in progress. Approved 2026-11-10.
+**Status (2026-11-10):** Phase 0 **done**. Phase 1 **done** — both spikes
+answered by measurement, not inference. Phase 2 **in progress**, on branch
+`phase2-per-user-sip` / **PR #1** (open, unmerged).
 **Repo:** `GooseThings/HenWen2`, forked from `GooseThings/HenWen` at `c875598`
 (full history preserved; `henwen1` remote is fetch-only).
+
+## Where things stand, and the next action
+
+Written for whoever picks this up next — a different session, or a different
+model. Read this section, then `docs/phase1-spikes.md` for what was measured
+and `docs/app-rpt-audio-notes.md` for how app_rpt actually moves audio.
+
+**HenWen2 is production.** It serves `https://henwen.ironicsandwich.com/` on
+`0.0.0.0:5000` as unit `HenWen2` from `/opt/HenWen2`; `HenWen` (1.x) is
+stopped and `disable`d. The 2.0 database is a copy of 1.x's, so
+`SOUNDS_DIR`/`TTS_VOICES_DIR` point at the **1.x** directories on purpose.
+Rollback is `systemctl stop HenWen2 && systemctl enable --now HenWen`; 1.x's
+own database is untouched. Backups: `/root/henwen-cutover-20261110-103223/`.
+
+**Functionally, 2.0 is still 1.x plus fixes.** No audio architecture has
+changed yet. Everything Phase 2 has landed so far is inert: the columns are
+unused and nothing calls the renderers or the writer.
+
+**Next action, in order:**
+
+1. The callsign assignment path — validate, enforce uniqueness, generate a
+   secret, store it. `validate_callsign()` and the unique index already
+   exist; what is missing is the route and the Manager UI field.
+2. Call `write_sip_user_files()` when an account's SIP identity changes, then
+   reload Asterisk (`pjsip reload` + `dialplan reload` over AMI) **only when
+   the writer reports a change**.
+3. Add the two `#tryinclude` lines to `pjsip.conf` and `extensions.conf`.
+   `sip_include_status()` reports whether they are there. This is a one-time
+   edit to files HenWen does not own, so it belongs in an `apply.sh`-style
+   script alongside `tx-spike/apply.sh`, not in the app.
+4. Then the Phase 2 exit criterion: a second account registers on its own
+   credential and hears node audio.
+
+**Do not** press "Launch Updater": `update.sh`'s `REPO_URL` still points at
+the 1.x repo, so it would reset this checkout onto 1.x. Held for Phase 6 by
+the owner's decision.
+
+**Testing reality:** `./venv/bin/pytest` from `/opt/HenWen2`, 1114 passing.
+Node **643930 is radioless** (UCI-120, hand mic, no transceiver), so keying
+it is not RF — that is what made both Phase 1 spikes possible without a
+separate lab Asterisk. The spike harness is still installed; see
+`henwen-spike-selfecho` in `/etc/asterisk/custom/extensions.conf` and the
+threadless `[1998]` stanza in `rpt.conf`.
 
 ## Why this fork exists
 
@@ -42,8 +87,8 @@ Links for people, `outstreamcmd` for machines.
 | ID | Decision | Status |
 |----|----------|--------|
 | D1 | How TX is restricted | **Software-only** (owner's call). Per-user credentials make abuse attributable and revocable; every `*99` is logged server-side. D1-c spiked in Phase 1; D1-b held in reserve. |
-| D2 | Does an explicit "arm" step stay before keying RF? | Open |
-| D3 | HTTPS mandatory (no choice — WebRTC); do we ship coturn? | Open |
+| D2 | Does an explicit "arm" step stay before keying RF? | **Answered: no.** Connecting is enough. Three controls: **PTT** (hold to talk), **MUTE** (silences received audio), **RECORD** (unchanged). See "D2 as decided" below. |
+| D3 | HTTPS mandatory (no choice — WebRTC); do we ship coturn? | **Answered: start with STUN + the legacy fallback**, instrumented. Owner's preference was coturn + TLS-ALPN demux and they accepted starting simpler. See "D3 as decided" below. |
 | D4 | Repo visibility | Defaulted to **private** at creation; unanswered. `gh repo edit GooseThings/HenWen2 --visibility public` flips it. Note `update.sh`'s self-update fetches over plain HTTPS and needs public (Phase 6 concern only). |
 
 ### D1 — the security consequence, stated plainly
@@ -62,6 +107,142 @@ selected per call.
   rejected.
 - **D1-c (spike)** — whether `rpt_auth.c` offers per-link command
   authorization.
+
+### D2 as decided — no arm step
+
+The kiosk gets three controls and no arming:
+
+- **PTT** — hold to transmit. This is the only thing that keys the node.
+- **MUTE** — silences incoming audio. Local to the browser; it does not
+  change the call or the node.
+- **RECORD** — unchanged from 1.x.
+
+Connecting establishes the call, and the call is keyable from that moment,
+which is consistent with D1-a: the credential is keyable anyway, so an arm
+step was never a real gate — it was a UI speed bump.
+
+**Microphone permission is requested up front, at connect.** Decided by the
+owner: RX and TX are what HenWen *is*, so microphone access is a core
+prerequisite rather than a per-feature escalation, and an account only exists
+because an admin created it.
+
+That also settles spike 3's loose end in the simplest direction: a call with a
+live audio track sends RTP continuously, which is exactly what
+`rtp_timeout=60` needs to see, so a listening-only session stays up with
+nothing extra. The rejected alternative — start receive-only and renegotiate
+on the first PTT press — would have avoided the prompt for pure listeners but
+sends no RTP, which is precisely what that timeout hangs up.
+
+Reminder for Phase 3: mute is **gain-to-zero**, never
+`track.enabled = false`, for the same reason.
+
+### D3: how to think about TURN
+
+**The problem is not HTTPS.** The web page rides your HTTPS connection; the
+*audio* does not. WebRTC media is a separate UDP stream from the listener's
+browser straight to this box (ports 10000-10100). So a listener can load the
+board perfectly and still get no audio, because the two travel different
+paths.
+
+That is a genuine regression against 1.x, whose audio rode the same HTTPS
+connection as the page and therefore worked through anything that passed web
+traffic — including HTTP-only tunnels like Cloudflare Tunnel and Tailscale
+Serve, which carry no UDP at all.
+
+Who it breaks, roughly in order of likelihood: a listener on a corporate or
+school network that only allows TCP 443; hotel and some public wifi; a few
+mobile carriers; and both ends behind symmetric NAT. Ordinary home broadband
+with STUN — which browser TX already uses — is fine, and is probably most of
+this node's listeners.
+
+The three ways to answer it:
+
+1. **coturn on this box.** Free, no third party, and — correcting an earlier
+   claim in this document — it costs **no extra bandwidth**. The doubling
+   worry applies to relaying between two *external* peers; here one peer is
+   this box, so a relayed listener's media arrives on the uplink once and
+   leaves once, exactly as a direct connection would. The hop to Asterisk is
+   loopback.
+
+   The real cost is ports. On 3478/5349 it is easy to run and fixes symmetric
+   NAT and some UDP-blocked cases. It does **not** fix the case that actually
+   motivates TURN — a network permitting only TCP 443 — unless coturn listens
+   on 443 itself, which Apache already holds here. Sharing 443 needs a
+   TLS-ALPN demultiplexer in front (sslh, HAProxy) or a second IP. That
+   demux, not the relay, is where the complexity lives.
+2. **A hosted TURN service** (Cloudflare, Twilio, Xirsys, metered.ca). No
+   ports to forward, no bandwidth on your uplink, cheap or free at this
+   scale. Costs: an external dependency with credentials to manage, and a
+   third party handling the (encrypted) media packets.
+3. **Keep the legacy HTTP audio path as the fallback.** The listener whose
+   WebRTC cannot connect gets 1.x's streaming path instead. This cuts
+   against Phase 5's "delete the old pipeline" and is the honest trade for
+   it: the old path is the only thing that works where UDP does not.
+
+**Is WebRTC-plus-TURN the right approach, or guesswork?** It is the standard
+one, and that is worth stating plainly, because "we might need a relay
+server" can read like drift. A browser cannot open a raw socket, so WebRTC is
+the *only* way a browser can be a native SIP endpoint — which is the entire
+property 2.0 is built on, and the thing spike 1 measured. WebRTC in turn
+mandates ICE, and ICE's defined answer to "no direct path exists" is a TURN
+relay. Every serious browser-audio product ships one. TURN is not a patch
+over a bad choice; it is the designed completion of the chosen one.
+
+The more reassuring datapoint is local: **WebRTC already works on this node.**
+1.x's browser TX has run over it for months for remote operators, on STUN
+alone — the ICE problems it hit were diagnosed and fixed (STUN on both sides
+plus the UDP 10000-10100 forward). So the open question is not "will this
+transport work here", it is "does the listener population reach networks the
+TX operators never did".
+
+That population is narrower than it first looks: 2.0 audio requires a login
+and accounts are admin-created, so listeners are the same vetted handful as
+the operators, not the public.
+
+### D3 as decided — STUN plus the legacy fallback, instrumented
+
+The owner's instinct was coturn here with a TLS-ALPN demux plus the legacy
+fallback, "if the complexity can be overcome", and they accepted starting
+with STUN plus the fallback. Starting simpler, for a reason worth writing
+down:
+
+**With the legacy path kept as a fallback, TURN stops being a robustness
+feature.** The legacy path rides the same HTTPS connection as the page, so it
+already covers every case TURN would cover — TCP-443-only networks,
+HTTP-only tunnels, blocked UDP, symmetric NAT. What TURN adds on top is
+*low-latency audio instead of the ~1-3s legacy stream* for listeners on
+hostile networks. That is a quality upgrade for an edge population, not a
+rescue.
+
+**And the "robust" option is the more fragile one.** Putting sslh or HAProxy
+in front of 443 means every HTTPS request to this site — the kiosk included —
+traverses another daemon. If it is misconfigured or dies, the whole web UI
+goes down. That is a large blast radius to accept for an edge-case latency
+improvement. A hosted TURN service solves the same TCP-443 case with **no
+demux and no new daemon in the request path**, which makes it strictly safer
+than self-hosting here, the opposite of the usual intuition.
+
+So the order is:
+
+1. **Now:** STUN (already proven on this node for browser TX) + keep the
+   legacy path as the fallback + per-listener telemetry recording whether
+   media ever flowed.
+2. **If telemetry shows real failures:** hosted TURN first — an afternoon's
+   work, no ports, nothing new in front of 443.
+3. **Only if a third party is unacceptable:** coturn here with the demux,
+   accepting the availability risk knowingly.
+
+This keeps Phase 5's "delete the old pipeline" honest rather than silent: the
+legacy path **stays**, demoted to a fallback, and that is now a decision
+rather than an omission.
+
+**Recommended way to look at it: measure before buying.** Do not decide this
+from first principles — instrument it. Browser TX already has the telemetry
+shape for it (`pktsSent=0` means ICE never completed). Phase 3 should log,
+per listener, whether media ever flowed. Then the question stops being "might
+someone fail?" and becomes "how many actually did, and from where". If the
+answer is nobody, STUN alone is the right answer and TURN is unbought
+complexity.
 
 ## Architecture
 
@@ -134,9 +315,9 @@ per-listener (bridge member + link thread + DTLS-SRTP).
 
 | Phase | Work | Exit criteria |
 |---|---|---|
-| **0** | Repo, history, remotes; `/opt/HenWen2` + unit + DB + port; docs; floor rewrite | HenWen2 runs alongside HenWen 1, 1.x untouched |
-| **1** | Spikes on the throwaway lab Asterisk (own dirs, AMI 15038 — **never** 643930) | Every question answered in writing before 2.0 audio code |
-| **2** | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential |
+| **0** ✅ | Repo, history, remotes; `/opt/HenWen2` + unit + DB + port; docs; floor rewrite | HenWen2 runs alongside HenWen 1, 1.x untouched |
+| **1** ✅ | Spikes — run against 643930 itself, which is radioless, so no lab Asterisk was needed | Both answered by measurement: the call downlink is self-free (0.0000 rms), and `outstreamcmd` carries the on-air mix including telemetry |
+| **2** | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential. **In progress (PR #1):** schema + unique index, `validate_callsign()`, `sip_identity()`, the PJSIP/dialplan renderers and the atomic writer are landed and tested but inert. Remaining: assignment route + UI, the reload trigger, the two `#tryinclude` lines. |
 | **3** | Frontend: one call = audio; connect / RX mute / PTT; gain-to-zero mute | Two accounts connected at once, neither hears itself, PTT keys |
 | **4** | Recording + stream relay onto `outstreamcmd` | A mid-QSO forced ID provably appears in a recording |
 | **5** | Delete the old pipeline and its tests; wire `listen_only`; exclude session links from Smart Connector `ilink 11`, idle detection, link counts, board display | Full suite green on a smaller codebase |
