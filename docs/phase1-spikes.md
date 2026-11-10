@@ -105,37 +105,83 @@ add `load = res_config_sqlite3.so`, map the PJSIP object types in
 Asterisk config change, so it gets proven on the lab rig first (Phase 2).
 Fallback remains a generated include file plus `pjsip reload`.
 
-## 5. `outstreamcmd` content and cost — **OPEN (needs the lab rig)**
+## 5. `outstreamcmd` content and cost — **ANSWERED 2026-11-10**
 
-Mechanism is read and documented (`app-rpt-audio-notes.md`): the configured
-command gets the node's transmit-side audio on stdin as raw 8kHz slin through
-a non-blocking pipe. What still needs measuring on a running node:
+Measured on node 643930 (radioless, so no RF). Config added to its stanza,
+`module reload app_rpt.so`, nothing else:
 
-- that the stream really contains TXCONF-only telemetry (courtesy tone,
-  `LOCALPLAY`) — the whole reason recordings stay on this path rather than a
-  link;
-- its cost, and whether a tiny always-on reader plus on-demand encode is the
-  right shape (it runs whenever the node runs, not only when someone is
-  listening);
-- behavior of the 60s write-failure kill when the reader is slow.
+```
+outstreamcmd = /usr/bin/tee,/tmp/henwen_outstream.raw
+```
 
-## The lab rig — next piece of work
+**A `module reload` is enough** — no Asterisk restart. The master thread
+(`app_rpt.c:6730-6753`) starts the outstream child for any non-deleted,
+non-remote node that has `outstreamcmd` set and no live pid, so the reload's
+re-parse is picked up on its next pass.
 
-Spikes 1 and 5 both need a node that can be keyed without putting RF on the
-air, and neither should touch 643930. This box hosts exactly two local nodes:
-**643930** (`rxchannel = SimpleUSB/643930`, the real radio) and **1999**
-(`rxchannel = USRP/127.0.0.1:34001:32001`, the DVSwitch bridge) — and 1999 is
-*not* a safe stand-in, because keying it pushes audio into Analog_Bridge and
-out to a BrandMeister talkgroup whenever the bridge is up. Networked is still
-on air.
+**`execv()` with no shell**, args comma-delimited by `finddelim`, so
+`strs[0]` must be an absolute path to an executable — no redirection, no
+pipelines. stdout/stderr go to `/dev/null`; the audio is on stdin.
 
-So the rig is a **throwaway second Asterisk**, the same approach used in 1.x to
-reproduce the stranded-ChanSpy-leg bug: its own config/spool/log dirs, its own
-AMI port (15038), only the modules needed, log size capped with `ulimit -f`,
-and a node whose `rxchannel` emits continuously with no transmitter attached.
-Driven by `sipp`/`pjsua` as a headless SIP client, it turns spike 1 into an
-assertion — tone in on one leg, assert absent from that leg's downlink, assert
-present on a second leg — with no RF keyed and no browser.
+### Content: it carries the real on-air mix, telemetry included
 
-That rig is also the Phase 3+ regression harness, so it is worth building
-properly rather than as a one-off.
+Two sources injected and detected separately (Goertzel, per 100 ms window):
+
+| injected | via | result in the capture |
+|---|---|---|
+| 1 kHz, 3 s | a keyed phone leg (conference audio) | **30 windows @ 1 kHz**, rms 0.0884 |
+| 1600 Hz, 3 s | `rpt localplay` (**TXCONF-only** telemetry) | **30 windows @ 1600 Hz**, rms 0.0626 |
+
+No cross-contamination: 1 kHz absent from the localplay window, 1600 Hz
+absent from the conference window.
+
+**The second row is the one that decides the architecture.** `LOCALPLAY`
+joins `RPT_CONF`'s sibling `RPT_TXCONF` only (`rpt_telemetry.c:1604-1614`),
+so it reaches links solely through the idle-gated altaudio whisper — a
+link-based recording can miss it. It appears in the `outstreamcmd` feed at
+full level, because monchannel is a TXCONF member. So recordings and the
+stream relay belong on this path, exactly as the playbook assumed. That
+assumption is now measured.
+
+### Cost: negligible, and continuous
+
+The feed is **continuous whether or not anyone is talking** — 15.4 kB/s
+exactly (8000 samples/s x 2 bytes), because monchannel is a softmix member
+and the mixing loop queues a frame to every member every 20 ms. Over 83 s the
+reader (`tee`) used 0.1% CPU, 0 s of CPU time and 2 MB RSS.
+
+That continuity is the same property that makes a conference leg immune to
+the stranded-ChanSpy problem `TAP_CHANNEL_TECHS` exists for, and it means the
+shape is "always-on cheap reader, encode only on demand" rather than
+start/stop per listener.
+
+### Two operational gotchas
+
+- **Removing `outstreamcmd` and reloading stops the audio but does not kill
+  the child.** Confirmed: the capture stopped growing immediately, and the
+  `tee` process was still alive and holding its stdin pipe until killed by
+  hand. `stop_outstream()` only runs on a sustained write failure or node
+  shutdown, so a config change leaves an orphan. Whatever HenWen2 puts here
+  has to be safe to leave running, or be reaped deliberately.
+- **A command that exits within one second disables the feature**: app_rpt
+  logs `outstreamcmd '%s' appears to be broken, disabling` and clears
+  `p.outstreamcmd` until the next reload.
+
+## Postscript: no separate lab Asterisk was needed
+
+The plan called for a throwaway Asterisk because both open spikes needed a
+node that could be keyed without putting RF on the air. It turned out 643930
+**is** such a node: the owner confirmed it is radioless — a UCI-120 with only
+a hand mic, no transceiver, linking to other nodes and otherwise islanded.
+So `*99` asserts PTT on nothing, and both spikes ran against the real
+production Asterisk with real app_rpt, real softmix and the real phone portal.
+
+The control leg for spike 1 came from putting **two** phone-portal legs on the
+same node rather than linking a second node, which also avoided needing a new
+node's thread started (`module reload` does not spawn one — see
+`selfecho-spike-harness` notes).
+
+A `[1998]` stanza with `rxchannel = Local/pseudo` is still in `rpt.conf` from
+the first approach. It is threadless and harmless (one "hung" warning at
+reload, not repeating) and is left in place for whenever an app_rpt
+unload/load is acceptable.
