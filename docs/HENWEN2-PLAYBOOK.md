@@ -76,22 +76,20 @@ Connecting establishes the call, and the call is keyable from that moment,
 which is consistent with D1-a: the credential is keyable anyway, so an arm
 step was never a real gate — it was a UI speed bump.
 
-**One consequence to design around: when does the browser ask for the
-microphone?** A WebRTC call that can transmit needs an audio track, and
-getting one triggers the permission prompt. With no arm step there are two
-shapes, and they are not equivalent:
+**Microphone permission is requested up front, at connect.** Decided by the
+owner: RX and TX are what HenWen *is*, so microphone access is a core
+prerequisite rather than a per-feature escalation, and an account only exists
+because an admin created it.
 
-1. **Ask at connect.** Simple, and the outbound RTP it produces is what keeps
-   `rtp_timeout=60` satisfied (see spike 3). Cost: someone who only wants to
-   listen still gets a microphone prompt, which on a public-ish kiosk reads
-   as alarming.
-2. **Start receive-only, renegotiate on the first PTT press.** No prompt
-   until someone actually wants to talk. Cost: a receive-only call sends no
-   RTP, which is exactly what `rtp_timeout=60` hangs up — so this needs the
-   timeout handled deliberately rather than inherited.
+That also settles spike 3's loose end in the simplest direction: a call with a
+live audio track sends RTP continuously, which is exactly what
+`rtp_timeout=60` needs to see, so a listening-only session stays up with
+nothing extra. The rejected alternative — start receive-only and renegotiate
+on the first PTT press — would have avoided the prompt for pure listeners but
+sends no RTP, which is precisely what that timeout hangs up.
 
-Phase 3 has to pick one. Option 1 is the safe default; option 2 is the nicer
-behavior and needs the `rtp_timeout` question answered first.
+Reminder for Phase 3: mute is **gain-to-zero**, never
+`track.enabled = false`, for the same reason.
 
 ### D3: how to think about TURN
 
@@ -114,11 +112,19 @@ this node's listeners.
 
 The three ways to answer it:
 
-1. **coturn on this box.** Free, no third party. But it needs its own public
-   ports (3478, and realistically 5349/TLS on **443** to rescue the hard
-   cases — which collides with Apache already holding 443 here), and relayed
-   audio comes *in and goes back out* over the same residential uplink,
-   doubling bandwidth for every relayed listener.
+1. **coturn on this box.** Free, no third party, and — correcting an earlier
+   claim in this document — it costs **no extra bandwidth**. The doubling
+   worry applies to relaying between two *external* peers; here one peer is
+   this box, so a relayed listener's media arrives on the uplink once and
+   leaves once, exactly as a direct connection would. The hop to Asterisk is
+   loopback.
+
+   The real cost is ports. On 3478/5349 it is easy to run and fixes symmetric
+   NAT and some UDP-blocked cases. It does **not** fix the case that actually
+   motivates TURN — a network permitting only TCP 443 — unless coturn listens
+   on 443 itself, which Apache already holds here. Sharing 443 needs a
+   TLS-ALPN demultiplexer in front (sslh, HAProxy) or a second IP. That
+   demux, not the relay, is where the complexity lives.
 2. **A hosted TURN service** (Cloudflare, Twilio, Xirsys, metered.ca). No
    ports to forward, no bandwidth on your uplink, cheap or free at this
    scale. Costs: an external dependency with credentials to manage, and a
@@ -127,6 +133,26 @@ The three ways to answer it:
    WebRTC cannot connect gets 1.x's streaming path instead. This cuts
    against Phase 5's "delete the old pipeline" and is the honest trade for
    it: the old path is the only thing that works where UDP does not.
+
+**Is WebRTC-plus-TURN the right approach, or guesswork?** It is the standard
+one, and that is worth stating plainly, because "we might need a relay
+server" can read like drift. A browser cannot open a raw socket, so WebRTC is
+the *only* way a browser can be a native SIP endpoint — which is the entire
+property 2.0 is built on, and the thing spike 1 measured. WebRTC in turn
+mandates ICE, and ICE's defined answer to "no direct path exists" is a TURN
+relay. Every serious browser-audio product ships one. TURN is not a patch
+over a bad choice; it is the designed completion of the chosen one.
+
+The more reassuring datapoint is local: **WebRTC already works on this node.**
+1.x's browser TX has run over it for months for remote operators, on STUN
+alone — the ICE problems it hit were diagnosed and fixed (STUN on both sides
+plus the UDP 10000-10100 forward). So the open question is not "will this
+transport work here", it is "does the listener population reach networks the
+TX operators never did".
+
+That population is narrower than it first looks: 2.0 audio requires a login
+and accounts are admin-created, so listeners are the same vetted handful as
+the operators, not the public.
 
 **Recommended way to look at it: measure before buying.** Do not decide this
 from first principles — instrument it. Browser TX already has the telemetry
