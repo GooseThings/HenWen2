@@ -43,7 +43,7 @@ Links for people, `outstreamcmd` for machines.
 |----|----------|--------|
 | D1 | How TX is restricted | **Software-only** (owner's call). Per-user credentials make abuse attributable and revocable; every `*99` is logged server-side. D1-c spiked in Phase 1; D1-b held in reserve. |
 | D2 | Does an explicit "arm" step stay before keying RF? | **Answered: no.** Connecting is enough. Three controls: **PTT** (hold to talk), **MUTE** (silences received audio), **RECORD** (unchanged). See "D2 as decided" below. |
-| D3 | HTTPS mandatory (no choice — WebRTC); do we ship coturn? | Open — see "D3: how to think about TURN" below |
+| D3 | HTTPS mandatory (no choice — WebRTC); do we ship coturn? | **Answered: start with STUN + the legacy fallback**, instrumented. Owner's preference was coturn + TLS-ALPN demux and they accepted starting simpler. See "D3 as decided" below. |
 | D4 | Repo visibility | Defaulted to **private** at creation; unanswered. `gh repo edit GooseThings/HenWen2 --visibility public` flips it. Note `update.sh`'s self-update fetches over plain HTTPS and needs public (Phase 6 concern only). |
 
 ### D1 — the security consequence, stated plainly
@@ -153,6 +153,43 @@ TX operators never did".
 That population is narrower than it first looks: 2.0 audio requires a login
 and accounts are admin-created, so listeners are the same vetted handful as
 the operators, not the public.
+
+### D3 as decided — STUN plus the legacy fallback, instrumented
+
+The owner's instinct was coturn here with a TLS-ALPN demux plus the legacy
+fallback, "if the complexity can be overcome", and they accepted starting
+with STUN plus the fallback. Starting simpler, for a reason worth writing
+down:
+
+**With the legacy path kept as a fallback, TURN stops being a robustness
+feature.** The legacy path rides the same HTTPS connection as the page, so it
+already covers every case TURN would cover — TCP-443-only networks,
+HTTP-only tunnels, blocked UDP, symmetric NAT. What TURN adds on top is
+*low-latency audio instead of the ~1-3s legacy stream* for listeners on
+hostile networks. That is a quality upgrade for an edge population, not a
+rescue.
+
+**And the "robust" option is the more fragile one.** Putting sslh or HAProxy
+in front of 443 means every HTTPS request to this site — the kiosk included —
+traverses another daemon. If it is misconfigured or dies, the whole web UI
+goes down. That is a large blast radius to accept for an edge-case latency
+improvement. A hosted TURN service solves the same TCP-443 case with **no
+demux and no new daemon in the request path**, which makes it strictly safer
+than self-hosting here, the opposite of the usual intuition.
+
+So the order is:
+
+1. **Now:** STUN (already proven on this node for browser TX) + keep the
+   legacy path as the fallback + per-listener telemetry recording whether
+   media ever flowed.
+2. **If telemetry shows real failures:** hosted TURN first — an afternoon's
+   work, no ports, nothing new in front of 443.
+3. **Only if a third party is unacceptable:** coturn here with the demux,
+   accepting the availability risk knowingly.
+
+This keeps Phase 5's "delete the old pipeline" honest rather than silent: the
+legacy path **stays**, demoted to a fallback, and that is now a decision
+rather than an omission.
 
 **Recommended way to look at it: measure before buying.** Do not decide this
 from first principles — instrument it. Browser TX already has the telemetry
