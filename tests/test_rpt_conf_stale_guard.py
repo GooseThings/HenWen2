@@ -97,3 +97,17 @@ def test_restore_from_stale_page_is_refused(owner):
     r = client.post(f"/api/backups/{name}/restore", json={"base_hash": base})
     assert r.status_code == 409
     assert "idtime = 600000" in conf.read_text()
+
+
+def test_manager_page_keeps_the_guard_wired():
+    """PR #15 review. No JS test harness here, so pin the three invariants
+    in the Manager source: the General editor records its version, the raw
+    editor is never advanced by a stanza save, and a reload doesn't
+    re-baseline an editor that still has unsaved changes."""
+    import os
+    src = open(os.path.join(os.path.dirname(__file__), "..", "templates", "henwen-manager.html")).read()
+    assert "_confHashLoaded('general', conf.conf_hash);" in src
+    assert "k !== '__raw__' && _confHash[k] === oldHash" in src
+    loaded = src.split("function _confHashLoaded(section, hash) {", 1)[1].split("}\n", 1)[0]
+    assert "pendingChanges[section]" in loaded and "return;" in loaded
+    assert src.count("_confHashLoaded(") >= 4   # definition + general, stanza, list editors

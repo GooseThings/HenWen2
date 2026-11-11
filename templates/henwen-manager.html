@@ -3770,9 +3770,19 @@ function _confHashAdvance(oldHash, newHash) {
   // touching any other stanza, so every editor that was current before it
   // is still current after it. Not for raw saves or restores.
   if (!newHash) return;
+  // Never the raw editor: its textarea still holds the old text, and
+  // advancing it would let a raw save silently revert this one.
   Object.keys(_confHash).forEach(function(k) {
-    if (_confHash[k] === oldHash) _confHash[k] = newHash;
+    if (k !== '__raw__' && _confHash[k] === oldHash) _confHash[k] = newHash;
   });
+}
+// Record the version an editor loaded -- unless it still has unsaved
+// changes. Those were made against the version recorded when they began,
+// and a reload must not make them look current: if the file changed
+// underneath them, saving them has to be refused, not accepted.
+function _confHashLoaded(section, hash) {
+  if (pendingChanges[section] && Object.keys(pendingChanges[section]).length) return;
+  _confHash[section] = hash;
 }
 function _confConflictMsg(r) {
   return (r.data && r.data.error) || 'rpt.conf changed since this page loaded it. Reload and try again.';
@@ -4374,6 +4384,7 @@ async function loadGeneralEditor() {
     el.innerHTML = '<div class="alert alert-danger">Failed to load rpt.conf. Check permissions.</div>';
     return;
   }
+  _confHashLoaded('general', conf.conf_hash);
   // /api/conf now returns general_settings parsed from the [general] stanza only
   var s    = conf.general_settings || {};
   var html = '<div class="card"><div class="card-body">';
@@ -4653,7 +4664,7 @@ async function loadStanzaEditor(sectionName, elId, apiUrl, loadingLabel, fallbac
     }
   }
 
-  _confHash[sectionName] = r.data.conf_hash;
+  _confHashLoaded(sectionName, r.data.conf_hash);
   var s    = r.data.settings || {};
   var html = '';
 
@@ -4749,7 +4760,7 @@ async function loadListEditor(kind, name, contentElId, usedByElId, apiPrefix) {
     if (usedByEl) usedByEl.textContent = '';
     return;
   }
-  _confHash[name] = r.data.conf_hash;
+  _confHashLoaded(name, r.data.conf_hash);
 
   var usedBy = r.data.used_by || [];
   if (usedByEl) {
