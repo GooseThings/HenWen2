@@ -7994,8 +7994,12 @@ async function aslWebUiDecorate() {
   var isSuper = (window._henwenRole === 'superuser' || window._henwenRole === 'owner');
   var nav = document.getElementById('nav-asl-web-ui');
   if (nav && d.url && isSuper) { nav.href = d.url; nav.style.display = ''; }
-  var firstNode = (document.querySelector('section[id^="page-node-"]') || {}).id;
-  firstNode = firstNode ? _aslPageKey(firstNode).node : null;
+  // The first real node page; page-node-control and page-node-id share the
+  // prefix, so match the id shape rather than the first prefix hit.
+  var firstNode = null;
+  document.querySelectorAll('section[id^="page-node-"]').forEach(function(sec) {
+    if (!firstNode) firstNode = _aslPageKey(sec.id).node;
+  });
 
   document.querySelectorAll('section.page').forEach(function(sec) {
     var k = _aslPageKey(sec.id);
