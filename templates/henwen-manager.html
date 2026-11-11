@@ -7990,8 +7990,8 @@ async function repointNode(node) {
   });
   if (r.ok) {
     log('Re-pointed node ' + node + ' to ' + sel.value + '.', 'OK');
-    if ((r.data.owner_only_skipped || []).length)
-      log('Left for the owner to re-point: ' + r.data.owner_only_skipped.join(', '), 'WARN');
+    if ((r.data.skipped || []).length)
+      log('Left for a higher role to re-point: ' + r.data.skipped.join(', '), 'WARN');
   }
   else      log('Re-point failed: ' + (r.data.error || r.status), 'ERROR');
   checkNodeDrift();

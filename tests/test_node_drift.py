@@ -68,7 +68,7 @@ def test_sip_dialplan_counts(fresh_db, tmp_path, monkeypatch):
 
 def test_repoint_moves_rows_and_keeps_existing_keys(fresh_db):
     _seed(fresh_db)
-    moved, skipped = app.node_drift_repoint(fresh_db, "643930", "643931", owner=True)
+    moved, skipped = app.node_drift_repoint(fresh_db, "643930", "643931", "owner")
     assert skipped == []
     assert moved["connectors"] == 1 and moved["id_configs"] == 1
     assert app.node_drift_report(fresh_db, ["643931"]) == {}
@@ -86,7 +86,9 @@ def test_api_report_and_repoint(admin):
     body = client.get("/api/node-drift").get_json()
     assert body["local_nodes"] == ["643931"] and "643930" in body["stale"]
     r = client.post("/api/node-drift/repoint", json={"from": "643930", "to": "643931"})
-    assert r.status_code == 200 and r.get_json()["stale"] == {}
+    body = r.get_json()
+    assert r.status_code == 200 and body["skipped"] == ["Node ID"]   # superuser+ (/api/id)
+    assert [u["label"] for u in body["stale"]["643930"]] == ["Node ID"]
 
 
 @pytest.mark.parametrize("payload", [
@@ -136,8 +138,21 @@ def test_admin_repoint_leaves_owner_only_settings(fresh_db):
     if not fresh_db.execute("SELECT 1 FROM stream_relay_config").fetchone():
         fresh_db.execute("INSERT INTO stream_relay_config (id, target_node) VALUES (1, '643930')")
     fresh_db.commit()
-    moved, skipped = app.node_drift_repoint(fresh_db, "643930", "643931", owner=False)
-    assert set(skipped) == {"Node lockout", "Stream relay"}
+    moved, skipped = app.node_drift_repoint(fresh_db, "643930", "643931", "admin")
+    assert set(skipped) == {"Node lockout", "Stream relay", "Node ID"}
     assert "node_lockouts" not in moved and "stream_relay_config" not in moved
     assert fresh_db.execute("SELECT node FROM node_lockouts").fetchone()[0] == "643930"
     assert moved["connectors"] == 1
+
+
+def test_superuser_moves_node_id_but_not_owner_settings(fresh_db):
+    """Second security review on PR #16: /api/id is superuser+."""
+    _seed(fresh_db)
+    moved, skipped = app.node_drift_repoint(fresh_db, "643930", "643931", "superuser")
+    assert moved["id_configs"] == 1 and skipped == ["Node lockout"]
+
+
+def test_unknown_role_moves_nothing(fresh_db):
+    _seed(fresh_db)
+    moved, skipped = app.node_drift_repoint(fresh_db, "643930", "643931", None)
+    assert moved == {} and "Smart Connector" in skipped

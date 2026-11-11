@@ -20332,21 +20332,21 @@ def api_id_morse():
 # plays). This finds them, and re-points them on request.
 # ---------------------------------------------------------------------------
 
-# (table, column, label, name column or None, extra WHERE, owner only).
+# (table, column, label, name column or None, extra WHERE, minimum role).
 # Local-node references only: favorites, connection history and recordings
 # name remote nodes or past events, and a rename doesn't make them wrong.
-# "Owner only" mirrors the gate on the route that edits that setting
-# (stream relay config, node lockout), so re-pointing can't be a way around
-# it.
+# The minimum role mirrors the gate on the route that edits that setting
+# (/api/id is superuser+, stream relay config and node lockout are owner-
+# only, the rest admin+), so re-pointing can't be a way around it.
 NODE_DRIFT_REFS = (
-    ("connectors",          "local_node",  "Smart Connector",       "name", "", False),
-    ("id_configs",          "node",        "Node ID",               "name", "", False),
-    ("announcements",       "node",        "Announcements",         "name", "", False),
-    ("permanent_links",     "local_node",  "Permanent links",       "peer_node", "", False),
-    ("kiosk_temp_conns",    "local_node",  "Kiosk temporary links", "peer_node", "", False),
-    ("node_lockouts",       "node",        "Node lockout",          None, "", True),
-    ("nws_alert_config",    "node",        "NWS alerts",            None, "node != ''", False),
-    ("stream_relay_config", "target_node", "Stream relay",          None, "target_node != ''", True),
+    ("connectors",          "local_node",  "Smart Connector",       "name", "", "admin"),
+    ("id_configs",          "node",        "Node ID",               "name", "", "superuser"),
+    ("announcements",       "node",        "Announcements",         "name", "", "admin"),
+    ("permanent_links",     "local_node",  "Permanent links",       "peer_node", "", "admin"),
+    ("kiosk_temp_conns",    "local_node",  "Kiosk temporary links", "peer_node", "", "admin"),
+    ("node_lockouts",       "node",        "Node lockout",          None, "", "owner"),
+    ("nws_alert_config",    "node",        "NWS alerts",            None, "node != ''", "admin"),
+    ("stream_relay_config", "target_node", "Stream relay",          None, "target_node != ''", "owner"),
 )
 
 _SIP_DIALPLAN_NODE_RE = re.compile(r'^\s*same\s*=>\s*n,Rpt\((\d+),', re.M)
@@ -20373,7 +20373,7 @@ def node_drift_report(db, local_nodes):
     if not local:
         return {}
     stale = {}
-    for table, col, label, name_col, where, owner_only in NODE_DRIFT_REFS:
+    for table, col, label, name_col, where, min_role in NODE_DRIFT_REFS:
         cond = f"WHERE {where}" if where else ""
         try:
             rows = db.execute(
@@ -20390,24 +20390,26 @@ def node_drift_report(db, local_nodes):
         for node, names in per_node.items():
             stale.setdefault(node, []).append({
                 "label": label, "table": table, "count": len(names),
-                "owner_only": owner_only,
+                "min_role": min_role,
                 "names": sorted({str(n) for n in names if n is not None})[:10],
             })
     for node in sorted(_sip_dialplan_nodes() - local):
         stale.setdefault(node, []).append({
             "label": "Per-user SIP dialplan", "table": None, "count": 1, "names": [],
-            "owner_only": False})
+            "min_role": "admin"})
     return dict(sorted(stale.items()))
 
 
-def node_drift_repoint(db, old, new, owner=False):
+def node_drift_repoint(db, old, new, role):
     """Move every NODE_DRIFT_REFS row from local node `old` to `new`. Rows
     whose key already exists under `new` (permanent/temp links, lockouts) keep
-    the `new` row and drop the `old` one. Owner-only settings are left alone
-    unless `owner`. Returns ({table: rows moved}, [labels skipped])."""
+    the `new` row and drop the `old` one. A setting whose minimum role `role`
+    doesn't meet is left alone. Returns ({table: rows moved}, [labels
+    skipped])."""
     moved, skipped = {}, []
-    for table, col, label, _name, _where, owner_only in NODE_DRIFT_REFS:
-        if owner_only and not owner:
+    rank = ROLE_RANK.get(role, -1)
+    for table, col, label, _name, _where, min_role in NODE_DRIFT_REFS:
+        if rank < ROLE_RANK[min_role]:
             try:
                 if db.execute(f"SELECT 1 FROM {table} WHERE {col}=? LIMIT 1", (old,)).fetchone():
                     skipped.append(label)
@@ -20447,13 +20449,13 @@ def api_node_drift_repoint():
     if old in local:
         return jsonify({"error": f"Node {old} still exists in rpt.conf; nothing to re-point"}), 400
     db = get_db()
-    moved, skipped = node_drift_repoint(db, old, new, owner=session.get('role') == 'owner')
+    moved, skipped = node_drift_repoint(db, old, new, session.get('role'))
     log("INFO", f"[NODE-DRIFT] {session.get('username')} re-pointed node {old} -> {new}: {moved}")
     prov = None
     if old in _sip_dialplan_nodes():
         prov = sip_provision_accounts(f"node {old} re-pointed to {new}", force_reload=True)
     return jsonify({"ok": True, "moved": moved,
-                    "owner_only_skipped": skipped,
+                    "skipped": skipped,
                     "sip_reprovisioned": bool(prov and prov.get("ok")),
                     "stale": node_drift_report(db, local)})
 
