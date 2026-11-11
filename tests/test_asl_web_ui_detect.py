@@ -100,3 +100,10 @@ def test_route_refuses_plain_users(client, create_user, paths):
 def test_overlap_routes_are_hash_routes():
     for page, o in app.ASL_WEB_UI_OVERLAP.items():
         assert o["route"].startswith("#/"), page
+
+
+def test_manager_picks_a_real_node_page_for_node_routes():
+    """PR #17 review: page-node-control matches the page-node- prefix first."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "templates", "henwen-manager.html")).read()
+    assert "document.querySelector('section[id^=\"page-node-\"]')" not in src
+    assert "if (!firstNode) firstNode = _aslPageKey(sec.id).node;" in src
