@@ -70,21 +70,22 @@ with `0`, so nothing else needs it). Verified from source and live:
   callsign (e.g. a node whose link name is NT0Y) is treated as a session.
 - **Not reachable through app_rpt:** the keyed flag. `RPT_ALINKS`'s `K` is
   `l->lastrx1`, set only by a `RADIO_KEY` frame or by voice on non-phone
-  links; a phone link's `*99` keys the node (`TXKEY,MAIN`) but never sets
-  it. The node's archive log (`/var/spool/asterisk/monitor/<node>/`) does
-  record `DTMF(P),<link>,<digit>` per link.
+  links; a phone link's `*99` sets `lastrealrx` and keys the node
+  (`TXKEY,MAIN`) but never sets it. **Solved** by following `*99`/`#` from
+  AMI `DTMFEnd` events on a dedicated events-on connection
+  (`start_sip_keyed_monitor()`); verified live 2026-11-11 (board row keyed
+  after `*99`, unkeyed after `#` and on hangup, keyups counted, one
+  `[SIP-KEY]` journal line per transition).
 - Startup re-renders the SIP files (`start_sip_startup_provision()`), so an
   upgraded install picks up the new link name without a callsign edit.
 
 **Next action, in order:**
 
-1. **Step 3 of the session-link work (issue #5 remainder):**
-   - Keyed light from AMI `DTMFEnd` on `PJSIP/henwen-u-*` channels (`*99`
-     keys, `#` unkeys, hangup clears). This is also the server-side,
-     per-callsign key log D1-a promised; the browser's `tx-dtmf` lines are
-     self-reported.
-   - Classify sessions by their live PJSIP channel instead of by name, which
-     removes the NT0Y-style collision.
+1. **Rest of the session-link work (issue #5):** keyed state is done
+   (AMI `DTMFEnd` per session channel, `[SIP-KEY]` journal lines; branch
+   `session-keyed-state`). Left:
+   - Classify sessions by their live call (the `henwen-u-<cs>` context)
+     instead of by name, which removes the NT0Y-style collision.
    - The row's Disconnect hangs up the call; Smart Connector's idle-wait
      handles listener links.
 2. **Issue #4** — check stats.allstarlink.org now shows listeners; close it

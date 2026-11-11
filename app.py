@@ -2726,7 +2726,12 @@ class AMIClient:
 
     # ── connect / login ───────────────────────────────────────────────────────
 
-    def connect(self):
+    def connect(self, events="off"):
+        """Open and log in. `events` is the Login action's event mask: "off"
+        for every command connection (an unsolicited event in the stream
+        would be read as the answer to the next action), or a class list
+        such as "dtmf,call" for a dedicated listener like
+        _sip_keyed_event_loop()."""
         log("INFO", f"[AMI] Connecting to {self.host}:{self.port} as '{self.user}'")
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.settimeout(self.timeout)
@@ -2758,7 +2763,7 @@ class AMIClient:
             f"Action: Login\r\n"
             f"Username: {self.user}\r\n"
             f"Secret: {self.secret}\r\n"
-            f"Events: off\r\n"
+            f"Events: {events}\r\n"
             f"\r\n"
         )
         log("DEBUG", f"[AMI] Sending Login for user '{self.user}'")
@@ -3161,7 +3166,7 @@ def _poll_loop():
                 try:
                     ami = _ami_ensure_connected()
                     for node in nodes:
-                        status = ami.get_node_status(node)
+                        status = _sip_overlay_keyed(node, ami.get_node_status(node))
                         _ami_cache[node]    = status
                         _ami_cache_ts[node] = time.time()
 
@@ -3201,7 +3206,11 @@ def _poll_loop():
                             now_keyed = bool(lnk.get("keyed"))
                             was_keyed = _keyed_prev_states.get(lnk_key, False)
                             if now_keyed and not was_keyed:
-                                _record_keyed(cn)
+                                # A listener is not a node: Latest Activity
+                                # would offer Connect/Monitor on its callsign.
+                                # Its keyups still count on its board row.
+                                if cn.upper() not in _sip_tracked_callsigns():
+                                    _record_keyed(cn)
                                 with _link_stats_lock:
                                     if cn in _link_stats:
                                         _link_stats[cn]["keyups"]     += 1
@@ -16425,6 +16434,244 @@ def start_sip_startup_provision():
                      daemon=True).start()
 
 
+# ── Session keyed state (who is transmitting on a one-call session) ─────────
+#
+# app_rpt cannot tell us. RPT_ALINKS's K flag (and lstats') is the link's
+# lastrx1, which only rxkey_helper() sets -- on a RADIO_KEY control frame, or
+# on voice from a link whose link_newkey allows it. A phone-mode link's *99
+# goes the other way: collect_function_digits() returns DC_DOKEY and
+# app_rpt.c sets mylink->lastrealrx = 1 directly, so the node keys
+# (TXKEY,MAIN) while the link itself is reported unkeyed for its whole
+# transmission (app_rpt 3.10.8, app_rpt.c:1745 / 2213-2220 / 4828-4832).
+#
+# Asterisk does see the digits: every RFC 4733 digit read from the call
+# raises a DTMFEnd AMI event on the PJSIP channel. So one dedicated,
+# events-on AMI connection follows *99 / # per session channel and Hangup
+# clears it. The command connection stays Events: off -- an unsolicited
+# event there would be read as the reply to the next action.
+#
+# This is also the attributable key log decision D1-a promised: every key
+# and unkey is logged here per callsign, from what Asterisk received, not
+# from the browser's own tx-dtmf report (which a non-HenWen SIP client
+# holding a valid credential would simply not send).
+
+_SIP_CHANNEL_RE = re.compile(r'^PJSIP/henwen-u-([a-z0-9]{3,9})-[0-9a-f]+$', re.IGNORECASE)
+SIP_KEYED_IDLE_SEC = 30      # send an AMI Ping after this long with no traffic
+SIP_KEYED_DEAD_SEC = 75      # ...and reconnect if nothing at all arrives by this
+SIP_KEYED_RETRY_SEC = 5
+
+_sip_keyed_lock = threading.Lock()
+_sip_keyed = {}              # Uniqueid -> {"callsign","node","channel","digits","keyed","since"}
+
+
+_SIP_CONTEXT_RE = re.compile(r'^henwen-u-([a-z0-9]{3,9})$', re.IGNORECASE)
+
+
+def _sip_event_callsign(ev):
+    """The session callsign an AMI event belongs to, else None. The
+    dialplan context comes first: it is the account's own henwen-u-<cs>
+    context, the one that runs Rpt(<node>,P,<CALLSIGN>), and it is present
+    whatever the channel technology (verified live: a Local/ call into that
+    context reports Context: henwen-u-n8gmz on every DTMFEnd). The PJSIP
+    channel name is the fallback."""
+    m = _SIP_CONTEXT_RE.match(str(ev.get("Context") or ''))
+    if m:
+        return m.group(1).upper()
+    return _sip_channel_callsign(ev.get("Channel"))
+
+
+def _sip_channel_callsign(channel):
+    """'PJSIP/henwen-u-n8gmz-0000001a' -> 'N8GMZ', else None. The endpoint is
+    sip_identity()'s 'henwen-u-' + callsign.lower(), and a callsign is
+    [A-Z0-9]{3,9}, so the name inverts without a database read."""
+    m = _SIP_CHANNEL_RE.match(str(channel or ''))
+    return m.group(1).upper() if m else None
+
+
+def _sip_keyed_reset(reason=None):
+    """Forget everything. Called whenever the event stream (re)starts or
+    stops: digits may have been missed, and showing a stale 'keyed' forever
+    is worse than showing a real transmission as unkeyed until its next
+    press."""
+    with _sip_keyed_lock:
+        stuck = [e["callsign"] for e in _sip_keyed.values() if e["keyed"]]
+        _sip_keyed.clear()
+    if reason and stuck:
+        log("INFO", f"[SIP-KEY] Cleared keyed state for {', '.join(stuck)} ({reason})")
+
+
+def _sip_keyed_handle_event(ev, now=None):
+    """Apply one AMI event to the session keyed table. Returns
+    ('key'|'unkey', callsign, node, seconds_or_None) on a transition, else
+    None. Pure apart from the table, so tests drive it with dicts.
+
+    Mirrors app_rpt's phone-control handling: '*' starts a function, *99
+    keys (DC_DOKEY), '#' unkeys a keyed link. Only digits Asterisk received
+    from the browser count (Direction: Received); app_rpt also sends DTMF
+    toward a link in some modes, and that must not key anyone."""
+    now = time.time() if now is None else now
+    name = ev.get("Event")
+    uid  = ev.get("Uniqueid") or ev.get("Channel")
+    if name == "Hangup":
+        with _sip_keyed_lock:
+            e = _sip_keyed.pop(uid, None)
+        if e and e["keyed"]:
+            return ("unkey", e["callsign"], e["node"], now - e["since"])
+        return None
+    if name != "DTMFEnd" or ev.get("Direction", "Received") != "Received":
+        return None
+    cs = _sip_event_callsign(ev)
+    if not cs:
+        return None
+    digit = str(ev.get("Digit") or "")[:1]
+    if not digit:
+        return None
+    node = str(ev.get("Exten") or "")
+    if not node.isdigit():
+        node = ""
+    with _sip_keyed_lock:
+        e = _sip_keyed.setdefault(uid, {"callsign": cs, "node": node,
+                                        "channel": ev.get("Channel"),
+                                        "digits": "", "keyed": False, "since": now})
+        if node:
+            e["node"] = node
+        if digit == "#":
+            e["digits"] = ""
+            if e["keyed"]:
+                e["keyed"] = False
+                return ("unkey", cs, e["node"], now - e["since"])
+            return None
+        e["digits"] = (e["digits"] + digit)[-3:]
+        if e["digits"] == "*99" and not e["keyed"]:
+            e["keyed"], e["since"], e["digits"] = True, now, ""
+            return ("key", cs, e["node"], None)
+    return None
+
+
+def _sip_session_keyed(node, link):
+    """True while the session linked to `node` as `link` (its callsign) has
+    keyed with *99 and not yet sent #. A session whose node is unknown (no
+    Exten on its events) counts for any local node."""
+    node, link = str(node), str(link or '').upper()
+    with _sip_keyed_lock:
+        return any(e["keyed"] and e["callsign"] == link and e["node"] in ("", node)
+                   for e in _sip_keyed.values())
+
+
+def _sip_tracked_callsigns():
+    """Callsigns with a session channel in the keyed table (they have sent at
+    least one digit). Memory only, so the AMI poll loop may call it while
+    holding _ami_pool_lock."""
+    with _sip_keyed_lock:
+        return {e["callsign"] for e in _sip_keyed.values()}
+
+
+def _sip_overlay_keyed(node, status):
+    """Write session keyed state into a get_node_status() result, so the
+    board, link stats, idle detection and announcement deferral all see a
+    transmitting listener the way they see a keyed node. app_rpt already
+    lists the link in RPT_ALINKS (always 'U'); a link missing there still
+    gets an entry if lstats has it. Memory only -- runs under
+    _ami_pool_lock."""
+    connected = {str(c).upper(): c for c in status.get("connected", [])}
+    links = status.setdefault("links", {})
+    for cs in _sip_tracked_callsigns():
+        cn = connected.get(cs)
+        if cn is not None and _sip_session_keyed(node, cs):
+            links.setdefault(cn, {"keyed": False, "mode": "P"})["keyed"] = True
+    return status
+
+
+def _sip_keyed_log(transition):
+    kind, cs, node, secs = transition
+    where = f" on {node}" if node else ""
+    if kind == "key":
+        log("INFO", f"[SIP-KEY] {cs} keyed{where}")
+    else:
+        log("INFO", f"[SIP-KEY] {cs} unkeyed{where} after {secs:.1f}s")
+
+
+def _ami_split_packets(buf):
+    """Split an AMI byte stream into complete packets (dicts) plus the
+    unfinished remainder."""
+    *done, rest = buf.split("\r\n\r\n")
+    packets = []
+    for raw in done:
+        pkt = {}
+        for line in raw.split("\r\n"):
+            k, sep, v = line.partition(":")
+            if sep and k.strip():
+                pkt[k.strip()] = v.strip()
+        if pkt:
+            packets.append(pkt)
+    return packets, rest
+
+
+def _sip_keyed_event_loop(stop=None):
+    """Hold one events-on AMI connection for DTMFEnd/Hangup, forever.
+    `stop` (a threading.Event) exists for tests."""
+    while not (stop and stop.is_set()):
+        ami = None
+        try:
+            # Nothing to watch until some account has a SIP identity; checked
+            # every cycle so a callsign assigned later starts the stream.
+            if not _sip_session_callsigns():
+                time.sleep(SIP_KEYED_RETRY_SEC * 6)
+                continue
+            creds = parse_manager_conf()
+            if not creds.get("user") or not creds.get("secret"):
+                raise Exception("AMI credentials not configured")
+            ami = AMIClient(creds["host"], creds["port"], creds["user"], creds["secret"])
+            ami.connect(events="dtmf,call")
+            # Server-side filter so the "call" class (Newchannel, Newstate,
+            # ...) for every IAX link doesn't all cross the socket. Best
+            # effort: without it the reader just ignores the extra events.
+            for f in ("Event: DTMFEnd", "Event: Hangup"):
+                ami._send_action({"Action": "Filter", "Operation": "Add", "Filter": f})
+            _sip_keyed_reset("event stream restarted")
+            log("INFO", "[SIP-KEY] Listening for session DTMF")
+            sock, buf, last_rx, pinged = ami._sock, "", time.time(), False
+            sock.settimeout(1.0)
+            while not (stop and stop.is_set()):
+                try:
+                    chunk = sock.recv(65536)
+                except socket.timeout:
+                    idle = time.time() - last_rx
+                    if idle > SIP_KEYED_DEAD_SEC:
+                        raise ConnectionError(f"no AMI traffic for {int(idle)}s")
+                    if idle > SIP_KEYED_IDLE_SEC and not pinged:
+                        ami._send_action({"Action": "Ping"})
+                        pinged = True
+                    continue
+                if not chunk:
+                    raise ConnectionError("AMI closed the event connection")
+                last_rx, pinged = time.time(), False
+                packets, buf = _ami_split_packets(buf + chunk.decode("utf-8", errors="replace"))
+                if len(buf) > 65536:          # never a real packet; resync
+                    buf = ""
+                for pkt in packets:
+                    t = _sip_keyed_handle_event(pkt)
+                    if t:
+                        _sip_keyed_log(t)
+        except Exception as e:
+            log("WARN", f"[SIP-KEY] Event stream down: {e}")
+        finally:
+            if ami is not None:
+                try:
+                    ami.close()
+                except Exception:
+                    pass
+            _sip_keyed_reset("event stream down")
+        if stop and stop.is_set():
+            break
+        time.sleep(SIP_KEYED_RETRY_SEC)
+
+
+def start_sip_keyed_monitor():
+    threading.Thread(target=_sip_keyed_event_loop, name="sip-keyed-monitor",
+                     daemon=True).start()
+
+
 def _sip_rotate_secret_for(db, username, reason):
     """Rotate one account's SIP secret (if it has an identity), re-provision
     and end its live calls -- the shared tail of every password-change path.
@@ -20235,6 +20482,7 @@ if not os.environ.get("HENWEN_SKIP_STARTUP"):
     start_bm_talkgroups_poller()
     start_audio_ws_relay()
     start_sip_startup_provision()
+    start_sip_keyed_monitor()
 
 if __name__ == "__main__":
     log("INFO", "Starting in direct-run mode (not via gunicorn)")
