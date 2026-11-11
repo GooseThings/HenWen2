@@ -2875,6 +2875,7 @@ sudo bash /opt/HenWen/tx-spike/setup-https.sh --http-only              # frontin
       <div class="card-body">
         <p id="asl-summary" style="margin-bottom:10px;color:var(--text2)">Loading&hellip;</p>
         <div id="asl-refresh-warn" class="muted" style="display:none;margin-bottom:10px;color:var(--warn)"></div>
+        <div id="asl-webui-review" class="alert alert-info" style="display:none;margin-bottom:10px"></div>
         <table class="data-table" id="asl-pkg-table" style="display:none">
           <thead><tr><th>Package</th><th>Installed</th><th>Available</th></tr></thead>
           <tbody id="asl-pkg-body"></tbody>
@@ -7499,6 +7500,19 @@ function aslRenderStatus(d) {
       + '). The result above comes from the lists already on this machine and may be out of date.';
   } else {
     warn.style.display = 'none';
+  }
+  // AllStarLink's web UI moved past the version HenWen's overlap map
+  // (docs/ASL-WEB-UI-PLAN.md) was written against: worth a re-read.
+  var rev = document.getElementById('asl-webui-review');
+  var w = st.asl_web_ui || {};
+  if (rev && w.needs_review) {
+    rev.style.display = '';
+    rev.innerHTML = 'AllStarLink\'s <strong>ASL Web UI ' + esc(w.newest || '') + '</strong> is '
+      + (w.newest === w.installed ? 'installed' : 'available')
+      + '. HenWen\'s map of what it overlaps was written against ' + esc(w.reviewed || '')
+      + '; re-check <span class="mono">docs/ASL-WEB-UI-PLAN.md</span> against the new release.';
+  } else if (rev) {
+    rev.style.display = 'none';
   }
   var tbl = document.getElementById('asl-pkg-table');
   var body = document.getElementById('asl-pkg-body');

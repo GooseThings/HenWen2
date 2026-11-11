@@ -13306,6 +13306,13 @@ ASL_UPDATE_UNIT           = "henwen-asl-upgrade"
 ASL_UPDATE_PKG_GLOB       = "asl3-asterisk*"
 ASL_UPDATE_LOG_CHUNK      = 65536
 
+# AllStarLink's web UI overlaps part of HenWen Manager; docs/ASL-WEB-UI-PLAN.md
+# maps the overlap page by page against this exact version. The weekly check
+# also reports when a newer one is installed or offered, so the map gets
+# re-read against it -- bump this constant once that review is done.
+ASL_WEB_UI_PKG             = "asl-web-ui"
+ASL_WEB_UI_REVIEWED_VERSION = "1.0-1.deb13"
+
 _asl_check_lock = threading.Lock()   # held for the whole of a check
 _asl_checking   = False              # True while one is in flight (for the UI)
 
@@ -13416,6 +13423,30 @@ def _asl_collect_update_info():
             "available": bool(will_upgrade), "error": ""}
 
 
+def _deb_version_gt(a, b):
+    """dpkg's own ordering (epochs, ~, -revisions); False if dpkg can't say."""
+    try:
+        return _asl_run(["dpkg", "--compare-versions", a, "gt", b], 10).returncode == 0
+    except Exception:
+        return False
+
+
+def _asl_web_ui_versions():
+    """{installed, candidate, reviewed, needs_review} for asl-web-ui, from
+    the package lists apt already has. needs_review is True when either the
+    installed or the offered version is newer than the one the overlap map
+    in docs/ASL-WEB-UI-PLAN.md was written against."""
+    policy = parse_apt_policy(_asl_run(["apt-cache", "policy", ASL_WEB_UI_PKG], 20).stdout)
+    installed, candidate = policy.get(ASL_WEB_UI_PKG, (None, None))
+    newer = [v for v in (installed, candidate)
+             if v and v != ASL_WEB_UI_REVIEWED_VERSION
+             and _deb_version_gt(v, ASL_WEB_UI_REVIEWED_VERSION)]
+    return {"installed": installed, "candidate": candidate,
+            "reviewed": ASL_WEB_UI_REVIEWED_VERSION, "needs_review": bool(newer),
+            # apt's candidate is never older than what's installed.
+            "newest": (candidate if candidate in newer else installed) if newer else None}
+
+
 def _asl_load_state():
     try:
         return json.loads(get_setting(ASL_UPDATE_STATE_KEY, "") or "{}")
@@ -13454,6 +13485,14 @@ def _asl_check_for_updates(refresh=True):
             log("WARN", f"[ASL-UPDATE] couldn't read package state: {e}")
             state.update({"packages": [], "will_upgrade": [], "available": False,
                           "error": str(e)})
+        try:
+            state["asl_web_ui"] = _asl_web_ui_versions()
+        except Exception as e:
+            state["asl_web_ui"] = {"error": str(e)}
+        if state["asl_web_ui"].get("needs_review"):
+            log("INFO", f"[ASL-UPDATE] {ASL_WEB_UI_PKG} {state['asl_web_ui']['newest']} is newer than "
+                        f"{ASL_WEB_UI_REVIEWED_VERSION}, the version docs/ASL-WEB-UI-PLAN.md maps; "
+                        "re-check what it now overlaps")
         prev = _asl_load_state()
         set_setting(ASL_UPDATE_STATE_KEY, json.dumps(state))
         if state["available"]:
