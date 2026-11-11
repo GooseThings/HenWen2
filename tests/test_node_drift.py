@@ -68,7 +68,8 @@ def test_sip_dialplan_counts(fresh_db, tmp_path, monkeypatch):
 
 def test_repoint_moves_rows_and_keeps_existing_keys(fresh_db):
     _seed(fresh_db)
-    moved = app.node_drift_repoint(fresh_db, "643930", "643931")
+    moved, skipped = app.node_drift_repoint(fresh_db, "643930", "643931", owner=True)
+    assert skipped == []
     assert moved["connectors"] == 1 and moved["id_configs"] == 1
     assert app.node_drift_report(fresh_db, ["643931"]) == {}
     # The (643931, 2000) link already existed: one row, not a duplicate.
@@ -125,3 +126,18 @@ def test_owner_clears_a_stale_lockout(client, create_user, tmp_path, monkeypatch
     r = client.post("/api/node-drift/repoint", json={"from": "643930", "to": "643931"})
     assert r.status_code == 200
     assert app.get_db().execute("SELECT node FROM node_lockouts").fetchone()[0] == "643931"
+
+
+def test_admin_repoint_leaves_owner_only_settings(fresh_db):
+    """Security review on PR #16: the stream relay config and node lockouts
+    are owner-only to edit, so re-pointing must not be a way around that."""
+    _seed(fresh_db)
+    fresh_db.execute("UPDATE stream_relay_config SET target_node='643930'")
+    if not fresh_db.execute("SELECT 1 FROM stream_relay_config").fetchone():
+        fresh_db.execute("INSERT INTO stream_relay_config (id, target_node) VALUES (1, '643930')")
+    fresh_db.commit()
+    moved, skipped = app.node_drift_repoint(fresh_db, "643930", "643931", owner=False)
+    assert set(skipped) == {"Node lockout", "Stream relay"}
+    assert "node_lockouts" not in moved and "stream_relay_config" not in moved
+    assert fresh_db.execute("SELECT node FROM node_lockouts").fetchone()[0] == "643930"
+    assert moved["connectors"] == 1

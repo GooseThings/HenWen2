@@ -7988,7 +7988,11 @@ async function repointNode(node) {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({from: node, to: sel.value})
   });
-  if (r.ok) log('Re-pointed node ' + node + ' to ' + sel.value + '.', 'OK');
+  if (r.ok) {
+    log('Re-pointed node ' + node + ' to ' + sel.value + '.', 'OK');
+    if ((r.data.owner_only_skipped || []).length)
+      log('Left for the owner to re-point: ' + r.data.owner_only_skipped.join(', '), 'WARN');
+  }
   else      log('Re-point failed: ' + (r.data.error || r.status), 'ERROR');
   checkNodeDrift();
 }
