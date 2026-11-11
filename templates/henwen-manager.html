@@ -612,6 +612,10 @@ input:checked + .slider::before  { transform: translateX(16px); background: var(
 #update-bar.show { display: flex; }
 #asl-web-ui-scope-bar:empty { display: none; }
 .asl-overlap { margin: 4px 0 14px; }
+/* W2 handover: the editors stay visible for reference but can't be changed. */
+.asl-readonly .val-input, .asl-readonly .switch { pointer-events: none; opacity: 0.55; }
+.asl-readonly [onclick^="backupRestore"],
+#page-raw-editor.asl-readonly .btn-success { display: none; }
 
 .asl-log { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; font-family: var(--mono); font-size: 0.8rem; line-height: 1.45; height: 380px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
 .asl-log div { padding: 0 2px; }
@@ -4205,6 +4209,7 @@ function _applyFieldError(inputEl, err) {
 }
 
 function markChange(key, inputEl) {
+  if (_aslActivePageReadOnly()) return;   // W2 handover; the server refuses it too
   var val     = inputEl.value;
   var row     = inputEl.closest('.toggle-row');
   var cb      = row ? row.querySelector('input[type=checkbox]') : null;
@@ -4219,6 +4224,7 @@ function markChange(key, inputEl) {
 }
 
 function markToggle(key, cb) {
+  if (_aslActivePageReadOnly()) return;   // W2 handover; the server refuses it too
   var row     = cb.closest('.toggle-row');
   var input   = row ? row.querySelector('input[type=text], input[type=number], select') : null;
   var enabled = cb.checked;
@@ -7962,7 +7968,23 @@ function _aslPageKey(pageId) {
   // 'page-node-643930' -> 'node' (but not page-node-id / page-node-control).
   var m = pageId.match(/^page-(node)-(\d+)$/);
   if (m) return {key: 'node', node: m[2]};
+  if (/^page-template-/.test(pageId)) return {key: 'template', node: null};
   return {key: pageId.replace(/^page-/, ''), node: null};
+}
+
+// Pages HenWen stops writing once the UI is reachable (W2); the server
+// refuses the same writes (asl_web_ui_handover_gate). Macro and schedule
+// pages stay editable.
+var ASL_HANDOVER_PAGES = ['general', 'node', 'template', 'raw-editor', 'backups'];
+function _aslActivePageReadOnly() {
+  return !!document.querySelector('section.page.active.asl-readonly');
+}
+function _aslMakeReadOnly(sec) {
+  sec.classList.add('asl-readonly');
+  if (sec.id === 'page-raw-editor') {
+    var ta = document.getElementById('raw-ta');
+    if (ta) ta.readOnly = true;
+  }
 }
 
 async function aslWebUiDecorate() {
@@ -7980,13 +8002,18 @@ async function aslWebUiDecorate() {
     var o = (d.overlap || {})[k.key];
     if (!o || sec.querySelector('.asl-overlap')) return;
     var route = o.route.replace('{node}', k.node || firstNode || '');
+    var readOnly = d.handover && ASL_HANDOVER_PAGES.indexOf(k.key) >= 0;
     var div = document.createElement('div');
-    div.className = 'alert alert-info asl-overlap';
-    div.innerHTML = 'AllStarLink\'s ASL Web UI also does this: <strong>' + esc(o.what) + '</strong>. '
+    div.className = 'alert ' + (readOnly ? 'alert-warn' : 'alert-info') + ' asl-overlap';
+    div.innerHTML = (readOnly
+        ? '<strong>Read-only here.</strong> On this node these settings are managed in AllStarLink\'s ASL Web UI: '
+        : 'AllStarLink\'s ASL Web UI also does this: ')
+      + '<strong>' + esc(o.what) + '</strong>. '
       + (d.url
         ? '<a href="' + esc(d.url + route) + '" target="_blank" rel="noopener">Open it there &#8599;</a>'
         : 'It isn\'t reachable from this address yet.')
-      + ' HenWen is handing these pages over to it.';
+      + (readOnly ? '' : ' HenWen is handing these pages over to it.');
+    if (readOnly) _aslMakeReadOnly(sec);
     var title = sec.querySelector('.page-sub') || sec.querySelector('.page-title');
     if (title && title.nextSibling) sec.insertBefore(div, title.nextSibling);
     else sec.insertBefore(div, sec.firstChild);

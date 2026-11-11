@@ -20341,6 +20341,11 @@ ASL_WEB_UI_VHOST_MARKER = "HenWen: ASL Web UI"
 ASL_WEB_UI_APPLY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                        "asl-web-ui", "apply.sh")
 ASL_WEB_UI_PATH = "/asl-web-ui/"
+# Phase W2: where the UI is reachable, HenWen stops writing the parts of
+# rpt.conf it covers (node stanzas, [general], templates, raw edits, backup
+# restore). Macro and schedule stanzas stay editable (plan decision 4).
+# ASL_WEB_UI_HANDOVER=0 in the unit file turns the handover off.
+ASL_WEB_UI_HANDOVER = os.environ.get("ASL_WEB_UI_HANDOVER", "1").strip().lower() not in ("0", "no", "false", "off")
 
 # Manager page -> where the same job lives in the ASL Web UI. Routes are the
 # UI's own hash routes (read from its 1.0-1 app.js). "{node}" is filled in by
@@ -20351,6 +20356,8 @@ ASL_WEB_UI_OVERLAP = {
                     "route": "#/backups"},
     "general":     {"what": "Nodes (call sign, duplex, radio interface)", "route": "#/nodes"},
     "node":        {"what": "Nodes > General and Radio interface", "route": "#/nodes/{node}"},
+    "template":    {"what": "Nodes (it sets each node's own settings and never edits "
+                            "templates)", "route": "#/nodes"},
     "ast-console": {"what": "Asterisk > Console, and Diagnostics > Asterisk log",
                     "route": "#/asterisk"},
     "asl-update":  {"what": "Diagnostics > Software updates (it checks; Cockpit installs)",
@@ -20384,7 +20391,43 @@ def asl_web_ui_status():
                          if (installed and (global_on or missing)
                              and os.path.isfile(ASL_WEB_UI_APPLY_SCRIPT)) else None,
         "overlap":       ASL_WEB_UI_OVERLAP if installed else {},
+        "handover":      bool(reachable and ASL_WEB_UI_HANDOVER),
     }
+
+
+def _asl_handover_blocks(endpoint, data, content):
+    """True when this write is one the ASL Web UI now owns: a raw save, a
+    backup restore, or a stanza save to anything but a macro or schedule
+    stanza. Pure, for tests; the caller decides whether handover is on."""
+    if endpoint == "api_backup_restore":
+        return True
+    if endpoint != "api_save":
+        return False
+    data = data or {}
+    if data.get("raw_content") is not None:
+        return True
+    section = data.get("section", "")
+    return not (section in get_macro_stanza_usage(content)
+                or section in get_schedule_stanza_usage(content))
+
+
+@app.before_request
+def asl_web_ui_handover_gate():
+    """Registered after check_auth(), so it only ever sees authorized writes."""
+    if request.method != "POST" or request.endpoint not in ("api_save", "api_backup_restore"):
+        return None
+    status = asl_web_ui_status()
+    if not status.get("handover"):
+        return None
+    content = read_conf_file(RPT_CONF_PATH) or ""
+    if not _asl_handover_blocks(request.endpoint, request.get_json(silent=True), content):
+        return None
+    return jsonify({
+        "error": ("This part of rpt.conf is managed in the ASL Web UI on this node. "
+                  "Make the change there."),
+        "handed_over": True,
+        "url": status.get("url"),
+    }), 409
 
 
 @app.route("/api/asl-web-ui/status")
