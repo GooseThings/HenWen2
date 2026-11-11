@@ -20323,6 +20323,128 @@ def api_id_morse():
 
 
 # ---------------------------------------------------------------------------
+# Node-number drift (docs/ASL-WEB-UI-PLAN.md, hazard 4)
+#
+# The ASL Web UI can rename or remove a node: it rewrites rpt.conf, AstDB and
+# Allmon3, but not HenWen's own rows, which name local nodes by number. After
+# a rename those rows point at a node Asterisk no longer runs, and every one
+# of them fails quietly (a connector that never fires, an ID that never
+# plays). This finds them, and re-points them on request.
+# ---------------------------------------------------------------------------
+
+# (table, column, label, name column or None, extra WHERE). Local-node
+# references only: favorites, connection history and recordings name remote
+# nodes or past events, and a rename doesn't make them wrong.
+NODE_DRIFT_REFS = (
+    ("connectors",          "local_node",  "Smart Connector",       "name", ""),
+    ("id_configs",          "node",        "Node ID",               "name", ""),
+    ("announcements",       "node",        "Announcements",         "name", ""),
+    ("permanent_links",     "local_node",  "Permanent links",       "peer_node", ""),
+    ("kiosk_temp_conns",    "local_node",  "Kiosk temporary links", "peer_node", ""),
+    ("node_lockouts",       "node",        "Node lockout",          None, ""),
+    ("nws_alert_config",    "node",        "NWS alerts",            None, "node != ''"),
+    ("stream_relay_config", "target_node", "Stream relay",          None, "target_node != ''"),
+)
+
+_SIP_DIALPLAN_NODE_RE = re.compile(r'^\s*same\s*=>\s*n,Rpt\((\d+),', re.M)
+
+
+def _sip_dialplan_nodes():
+    """Node numbers the generated per-user dialplan currently dials, or an
+    empty set when the file doesn't exist yet."""
+    try:
+        with open(SIP_USERS_DIALPLAN) as f:
+            return set(_SIP_DIALPLAN_NODE_RE.findall(f.read()))
+    except OSError:
+        return set()
+
+
+def node_drift_report(db, local_nodes):
+    """Every HenWen reference to a local node number that is not in
+    `local_nodes` (rpt.conf's node stanzas). Returns {node: [{label, table,
+    count, names}]}, ordered by node; empty when nothing is stale.
+
+    An empty `local_nodes` (rpt.conf unreadable) reports nothing rather than
+    calling every reference stale."""
+    local = {str(n) for n in local_nodes}
+    if not local:
+        return {}
+    stale = {}
+    for table, col, label, name_col, where in NODE_DRIFT_REFS:
+        cond = f"WHERE {where}" if where else ""
+        try:
+            rows = db.execute(
+                f"SELECT {col} AS node, {name_col or 'NULL'} AS name FROM {table} {cond}"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            continue   # table/column absent on an older schema
+        per_node = {}
+        for r in rows:
+            node = str(r["node"] or "").strip()
+            if not node or node in local:
+                continue
+            per_node.setdefault(node, []).append(r["name"])
+        for node, names in per_node.items():
+            stale.setdefault(node, []).append({
+                "label": label, "table": table, "count": len(names),
+                "names": sorted({str(n) for n in names if n is not None})[:10],
+            })
+    for node in sorted(_sip_dialplan_nodes() - local):
+        stale.setdefault(node, []).append({
+            "label": "Per-user SIP dialplan", "table": None, "count": 1, "names": []})
+    return dict(sorted(stale.items()))
+
+
+def node_drift_repoint(db, old, new):
+    """Move every NODE_DRIFT_REFS row from local node `old` to `new`. Rows
+    whose key already exists under `new` (permanent/temp links, lockouts) keep
+    the `new` row and drop the `old` one. Returns {table: rows moved}."""
+    moved = {}
+    for table, col, _label, _name, _where in NODE_DRIFT_REFS:
+        try:
+            cur = db.execute(f"UPDATE OR IGNORE {table} SET {col}=? WHERE {col}=?", (new, old))
+            moved[table] = cur.rowcount
+            db.execute(f"DELETE FROM {table} WHERE {col}=?", (old,))
+        except sqlite3.OperationalError:
+            continue
+    db.commit()
+    return {t: n for t, n in moved.items() if n}
+
+
+@app.route("/api/node-drift")
+def api_node_drift():
+    """Admin+ (default gate). Which HenWen settings name a local node that
+    rpt.conf no longer has, plus the nodes it does have to re-point them to."""
+    content = read_conf_file(RPT_CONF_PATH)
+    local = get_node_numbers(content) if content else []
+    return jsonify({"local_nodes": local,
+                    "stale": node_drift_report(get_db(), local),
+                    "conf_readable": content is not None})
+
+
+@app.route("/api/node-drift/repoint", methods=["POST"])
+def api_node_drift_repoint():
+    data = request.get_json(silent=True) or {}
+    old = str(data.get("from") or "").strip()
+    new = str(data.get("to") or "").strip()
+    content = read_conf_file(RPT_CONF_PATH)
+    local = get_node_numbers(content) if content else []
+    if not re.fullmatch(r"\d{4,7}", old) or new not in local:
+        return jsonify({"error": "'to' must be one of this box's nodes and 'from' a node number"}), 400
+    if old in local:
+        return jsonify({"error": f"Node {old} still exists in rpt.conf; nothing to re-point"}), 400
+    db = get_db()
+    moved = node_drift_repoint(db, old, new)
+    log("INFO", f"[NODE-DRIFT] {session.get('username')} re-pointed node {old} -> {new}: {moved}")
+    prov = None
+    if old in _sip_dialplan_nodes():
+        prov = sip_provision_accounts(f"node {old} re-pointed to {new}", force_reload=True)
+    return jsonify({"ok": True, "moved": moved,
+                    "sip_reprovisioned": bool(prov and prov.get("ok")),
+                    "stale": node_drift_report(db, local)})
+
+
+# ---------------------------------------------------------------------------
 # Node access (incoming-connection allowlist / denylist)
 # ---------------------------------------------------------------------------
 # ASL3's stock extensions.conf [radio-secure] context already enforces this,
