@@ -2155,6 +2155,25 @@ sudo bash /opt/HenWen/tx-spike/setup-https.sh --http-only              # frontin
       </div>
     </div>
 
+    <div class="card" id="sip-users-card" style="display:none">
+      <div class="card-header"><h2>Per-user SIP Identities</h2></div>
+      <div class="card-body">
+        <p style="margin-bottom:10px;color:var(--text2);font-size:0.9rem">
+          HenWen 2.0: every account given a callsign in Users becomes its own Asterisk endpoint
+          (own credential, own app_rpt link name) instead of sharing the <span class="mono">henwen-tx</span>
+          one. HenWen writes the endpoints to <span class="mono">/etc/asterisk/custom/</span> itself;
+          this one-time step adds the two <span class="mono">#tryinclude</span> lines to
+          <span class="mono">pjsip.conf</span> and <span class="mono">extensions.conf</span> so Asterisk
+          reads them, then reloads. Safe to re-run, no restart. Needs Browser TX Setup applied first.
+        </p>
+        <p id="sip-users-status" style="margin-bottom:12px;color:var(--text2)">Checking&hellip;</p>
+        <div class="btn-row" id="sip-users-btn-row" style="display:none">
+          <button class="btn btn-sm btn-primary" id="sip-users-apply-btn" onclick="applySipUsers()">Apply Per-user SIP Wiring</button>
+        </div>
+        <pre id="sip-users-output" class="codeblock" style="display:none;margin-top:12px;white-space:pre-wrap;max-height:260px;overflow-y:auto"></pre>
+      </div>
+    </div>
+
   </section>
 
   <!-- RX Diagnostics -->
@@ -3517,6 +3536,11 @@ sudo bash /opt/HenWen/tx-spike/setup-https.sh --http-only              # frontin
             <input id="uf-idle-timeout" type="number" min="0" max="480" placeholder="Default (30 min)" class="val-input" style="width:100%">
             <div style="font-size:0.75rem;color:var(--text2);margin-top:3px">Leave blank to use the global default &middot; 0 = never expire</div>
           </div>
+          <div>
+            <label style="font-size:0.82rem;font-weight:600;display:block;margin-bottom:4px">Callsign (SIP identity)</label>
+            <input id="uf-callsign" type="text" placeholder="e.g. N8GMZ — blank = shared credential" class="val-input" style="width:100%;text-transform:uppercase" autocapitalize="characters" maxlength="9">
+            <div style="font-size:0.75rem;color:var(--text2);margin-top:3px">Gives this account its own Asterisk endpoint and shows its callsign in Connected Nodes while it listens. The SIP credential is generated, never shown, and rotates with the password.</div>
+          </div>
         </div>
         <div class="form-row" id="uf-restrict-disc-row" style="margin-bottom:14px;display:none">
           <div>
@@ -3871,7 +3895,7 @@ function showPage(id) {
   else if (id === 'ami-diag')         loadSysInfo();
   else if (id === 'ast-console')  astFetchLog();
   else if (id === 'settings')       { loadSecretKeyStatus(); loadPortsStatus(); syncThemePicker(); mfaLoadStatus(); }
-  else if (id === 'tx-diag')         { if (window._henwenRole === 'owner') { loadTxApplyStatus(); } }
+  else if (id === 'tx-diag')         { if (window._henwenRole === 'owner') { loadTxApplyStatus(); loadSipUsersStatus(); } }
   else if (id === 'rx-diag')         { if (window._henwenRole === 'owner') { loadAudioSocketTapStatus(); loadRxAudioPathStatus(); } }
   else if (id === 'stress-test')     { if (window._henwenRole === 'owner') { populateStressTestNodeSelect(); stressTestLoadStatus(); } }
   else if (id === 'asl-update')     { if (window._henwenRole === 'owner') { aslUpdateLoad(); } }
@@ -7875,6 +7899,8 @@ async function applyRoleNav() {
      explicit role==='owner' check on /api/tx/apply-status and /api/tx/apply. */
   var txApplyCard = document.getElementById('tx-apply-card');
   if (txApplyCard) txApplyCard.style.display = isOwnerRole ? '' : 'none';
+  var sipUsersCard = document.getElementById('sip-users-card');
+  if (sipUsersCard) sipUsersCard.style.display = isOwnerRole ? '' : 'none';
   /* RX Audio Path (low-latency Listen) is owner-only too — matches the
      backend's explicit role==='owner' check on /api/rx-audio/config and
      /api/ws-audio/apply. */
@@ -8088,6 +8114,62 @@ async function applyTxSetup() {
     log('Browser TX apply failed: ' + err, 'ERROR');
   }
   loadTxApplyStatus();
+}
+
+/* ── Per-user SIP wiring (sip-users/apply.sh) ────────────────────────────── */
+async function loadSipUsersStatus() {
+  var statusEl = document.getElementById('sip-users-status');
+  var btnRow   = document.getElementById('sip-users-btn-row');
+  if (!statusEl) return;
+  statusEl.textContent = 'Checking…';
+  var r = await api('/api/sip-users/status');
+  if (!r.ok) {
+    statusEl.textContent = (r.data && r.data.error) || 'Could not check status.';
+    if (btnRow) btnRow.style.display = 'none';
+    return;
+  }
+  var d = r.data;
+  if (!d.installed) {
+    statusEl.innerHTML = '<span style="color:var(--warn,#e0a030)">Not available on this install.</span>';
+    if (btnRow) btnRow.style.display = 'none';
+    return;
+  }
+  var parts = [];
+  if (!d.tx_applied) {
+    parts.push('<span style="color:var(--warn,#e0a030)">Browser TX Setup has not been applied yet — do that first (card above).</span>');
+  }
+  parts.push(d.included
+    ? '<span style="color:var(--green,#3fb950)">Wired.</span> Both include lines are present.'
+    : 'Not wired yet — Asterisk is not reading the generated files.');
+  parts.push(d.accounts + ' account(s) have a callsign' + (d.accounts && !d.files_written ? ' (files not written yet)' : '') + '.');
+  statusEl.innerHTML = parts.join(' ');
+  var btn = document.getElementById('sip-users-apply-btn');
+  if (btn) btn.textContent = d.included ? 'Re-apply Per-user SIP Wiring' : 'Apply Per-user SIP Wiring';
+  if (btnRow) btnRow.style.display = d.tx_applied ? '' : 'none';
+}
+
+async function applySipUsers() {
+  if (!confirm('Add the per-user SIP include lines to pjsip.conf and extensions.conf now?\n\n'
+             + 'Backs both files up first, then reloads PJSIP and the dialplan live. '
+             + 'Safe to re-run; nothing is restarted.')) return;
+  var statusEl = document.getElementById('sip-users-status');
+  var outEl = document.getElementById('sip-users-output');
+  if (statusEl) statusEl.textContent = 'Applying…';
+  var r = await api('/api/sip-users/apply', {method: 'POST'});
+  if (outEl && ((r.data && r.data.output) || '').trim()) {
+    outEl.textContent = r.data.output;
+    outEl.style.display = '';
+  }
+  if (r.ok) {
+    log('Per-user SIP wiring applied', 'OK');
+    var p = r.data && r.data.provision;
+    if (p && p.error) log('Provisioning after apply: ' + p.error, 'ERROR');
+  } else {
+    var err = (r.data && (r.data.error || r.data.hint)) || 'Failed to apply per-user SIP wiring.';
+    alert(err);
+    log('Per-user SIP apply failed: ' + err, 'ERROR');
+  }
+  loadSipUsersStatus();
 }
 
 /* ── RX Audio Path (low-latency Listen) ──────────────────────────────────── */
@@ -9880,6 +9962,11 @@ async function loadUsers() {
       roleBadge += ' <span style="background:rgba(88,166,255,.12);color:var(--accent);padding:1px 7px;' +
         'border-radius:3px;font-size:0.72rem;font-weight:600" title="Two-factor authentication is enabled on this account">2FA</span>';
     }
+    if (u.callsign) {
+      roleBadge += ' <span style="background:rgba(63,185,80,.12);color:var(--green);padding:1px 7px;' +
+        'border-radius:3px;font-size:0.72rem;font-weight:600;font-family:monospace" title="Has its own SIP ' +
+        'identity: registers as this callsign and appears as 0' + esc(u.callsign) + ' in Connected Nodes">' + esc(u.callsign) + '</span>';
+    }
     var created = u.created_at ? new Date(u.created_at + 'Z').toLocaleDateString() : '—';
     var timeoutDisplay = u.session_idle_timeout === null || u.session_idle_timeout === undefined
       ? '<span style="color:var(--text2);font-size:0.82rem">30 min (default)</span>'
@@ -9892,7 +9979,7 @@ async function loadUsers() {
       + '<td>' + timeoutDisplay + '</td>'
       + '<td style="color:var(--text2);font-size:0.82rem">' + created + '</td>'
       + '<td><div class="btn-row">'
-      + '<button class="btn btn-sm" onclick="editUser(' + u.id + ',\'' + esc(u.username) + '\',\'' + esc(u.role) + '\',' + (u.session_idle_timeout === null || u.session_idle_timeout === undefined ? 'null' : u.session_idle_timeout) + ',' + (u.restrict_disconnect ? 'true' : 'false') + ',' + (u.can_record ? 'true' : 'false') + ',' + (u.listen_only ? 'true' : 'false') + ')">Edit</button>'
+      + '<button class="btn btn-sm" onclick="editUser(' + u.id + ',\'' + esc(u.username) + '\',\'' + esc(u.role) + '\',' + (u.session_idle_timeout === null || u.session_idle_timeout === undefined ? 'null' : u.session_idle_timeout) + ',' + (u.restrict_disconnect ? 'true' : 'false') + ',' + (u.can_record ? 'true' : 'false') + ',' + (u.listen_only ? 'true' : 'false') + ',\'' + esc(u.callsign || '') + '\')">Edit</button>'
       + (u.totp_enabled ? '<button class="btn btn-sm" onclick="resetUserMfa(' + u.id + ',\'' + esc(u.username) + '\')">Reset 2FA</button>' : '')
       + '<button class="btn btn-warn btn-sm" onclick="deleteUser(' + u.id + ',\'' + esc(u.username) + '\')">Delete</button>'
       + '</div></td>'
@@ -9937,6 +10024,7 @@ function showCreateUserForm() {
   document.getElementById('uf-restrict-disconnect').checked = false;
   document.getElementById('uf-listen-only').checked = false;
   document.getElementById('uf-can-record').checked = false;
+  document.getElementById('uf-callsign').value = '';
   document.getElementById('uf-can-record-row').style.display = (window._henwenRole === 'owner') ? '' : 'none';
   document.getElementById('uf-pw-label').textContent = 'Password';
   document.getElementById('uf-status').textContent  = '';
@@ -9944,7 +10032,7 @@ function showCreateUserForm() {
   document.getElementById('user-form-card').scrollIntoView({behavior:'smooth'});
 }
 
-function editUser(id, username, role, idleTimeoutSecs, restrictDisconnect, canRecord, listenOnly) {
+function editUser(id, username, role, idleTimeoutSecs, restrictDisconnect, canRecord, listenOnly, callsign) {
   document.getElementById('user-form-card').style.display = '';
   document.getElementById('user-form-title').textContent = 'Edit: ' + username;
   document.getElementById('uf-id').value            = id;
@@ -9959,6 +10047,7 @@ function editUser(id, username, role, idleTimeoutSecs, restrictDisconnect, canRe
   document.getElementById('uf-restrict-disconnect').checked = !!restrictDisconnect;
   document.getElementById('uf-can-record').checked = !!canRecord;
   document.getElementById('uf-listen-only').checked = !!listenOnly;
+  document.getElementById('uf-callsign').value = callsign || '';
   document.getElementById('uf-can-record-row').style.display = (window._henwenRole === 'owner') ? '' : 'none';
   onUfRoleChange();
   /* Convert stored seconds → minutes for the input; blank = global default */
@@ -9992,6 +10081,10 @@ async function saveUser() {
   var payload = {role: role, restrict_disconnect: document.getElementById('uf-restrict-disconnect').checked,
                   listen_only: document.getElementById('uf-listen-only').checked};
   if (window._henwenRole === 'owner') payload.can_record = document.getElementById('uf-can-record').checked;
+  /* Always sent: an empty value clears an existing callsign (and its SIP
+     credential), which is how an identity is revoked without deleting the
+     account. Normalized server-side (uppercased, validated). */
+  payload.callsign = document.getElementById('uf-callsign').value.trim().toUpperCase();
   if (!id) payload.username = uname;
   if (pw) payload.password = pw;
 
@@ -10017,9 +10110,13 @@ async function saveUser() {
   });
 
   if (r.ok) {
-    st.style.color = 'var(--green)';
-    st.textContent = id ? 'Updated.' : 'User created.';
-    setTimeout(function(){ hideUserForm(); loadUsers(); }, 800);
+    /* The save succeeded; a SIP provisioning warning ("written but Asterisk
+       isn't wired yet", or a reload failure) rides along rather than
+       failing the save, and gets a longer look before the form closes. */
+    var warn = r.data && r.data.warning;
+    st.style.color = warn ? 'var(--warn)' : 'var(--green)';
+    st.textContent = (id ? 'Updated.' : 'User created.') + (warn ? ' SIP: ' + warn : '');
+    setTimeout(function(){ hideUserForm(); loadUsers(); }, warn ? 6000 : 800);
   } else {
     st.style.color = 'var(--red)';
     st.textContent = (r.data && r.data.error) || ('Error ' + r.status);

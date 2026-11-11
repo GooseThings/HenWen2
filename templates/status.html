@@ -7713,7 +7713,12 @@ async function armTx() {
 
     var domain = location.hostname;
     var socket = new JsSIP.WebSocketInterface('wss://' + location.host + cfg.ws_path);
+    /* 2.0: a per-user identity registers as its endpoint name (the SIP
+       user) but authenticates as the callsign (auth_user) -- see
+       sip-users/README.md. The shared credential sends the same value in
+       both, so this is a no-op for it. */
     _tx.ua = new JsSIP.UA({ sockets: [socket], uri: 'sip:' + cfg.username + '@' + domain,
+                            authorization_user: cfg.auth_user || cfg.username,
                             password: cfg.password, register: true, session_timers: false });
     _tx.ua.on('registrationFailed', function(e) {
       _txStatus('Registration failed: ' + (e.cause || ''), 'var(--red)');
