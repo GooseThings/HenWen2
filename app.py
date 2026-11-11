@@ -3003,18 +3003,28 @@ class AMIClient:
             # looser peer-shaped pattern would let through: the header puts
             # "DIRECTION" at index 3 (because "CONNECT TIME" is two words), and
             # the "----" separator has dashes there.
-            is_row = len(parts) >= 5 and parts[3].upper() in ("IN", "OUT")
+            #
+            # PEER can also be blank: it is ${IAXPEER(CURRENTCHANNEL)}, which
+            # is empty for a non-IAX link -- a HenWen session is a PJSIP call
+            # -- so that row is one field short ("N8GMZ  0  IN  00:00:05:940
+            # ESTABLISHED") and DIRECTION sits at index 2. Confirmed live
+            # 2026-11-11; testing only index 3 dropped every session link.
+            d = None
+            if len(parts) >= 5 and parts[3].upper() in ("IN", "OUT"):
+                d = 3
+            elif len(parts) >= 4 and parts[2].upper() in ("IN", "OUT"):
+                d = 2
             # Keep the original numeric test as a fallback so an app_rpt build
             # with a different column order behaves exactly as it did before.
-            if not is_row:
-                is_row = len(parts) >= 5 and re.match(r'^\d{4,7}$', parts[0]) is not None
-            if is_row:
+            if d is None and len(parts) >= 5 and re.match(r'^\d{4,7}$', parts[0]):
+                d = 3
+            if d is not None:
                 cn = parts[0]
                 if cn != str(node) and cn not in status["connected"]:
                     status["connected"].append(cn)
-                # DIRECTION is the 4th column (index 3), "IN" or "OUT"
-                status["link_direction"][cn] = parts[3]
-                # CONNECT_TIME is the 5th column (index 4). Confirmed against
+                # DIRECTION: "IN" or "OUT"
+                status["link_direction"][cn] = parts[d]
+                # CONNECT_TIME follows DIRECTION. Confirmed against
                 # app_rpt's rpt_do_lstats (rpt_cli.c): snprintf(conntime, 20,
                 # "%02d:%02d:%02d:%02d", hours, minutes, seconds, <sub-second>)
                 # — four colon-separated fields, not three. Asterisk itself
@@ -3022,13 +3032,13 @@ class AMIClient:
                 # re-reading it fresh on every poll makes elapsed connect time
                 # immune to both a HenWen restart and a kiosk browser refresh —
                 # there's no HenWen-side or client-side state to lose.
-                m_ct = re.match(r'^(\d+):(\d{2}):(\d{2}):\d+$', parts[4])
+                m_ct = re.match(r'^(\d+):(\d{2}):(\d{2}):\d+$', parts[d + 1]) if len(parts) > d + 1 else None
                 if m_ct:
                     h, mnt, s = int(m_ct.group(1)), int(m_ct.group(2)), int(m_ct.group(3))
                     status["link_connect_seconds"][cn] = h * 3600 + mnt * 60 + s
-                # CONNECT_STATE is the 6th column (index 5)
-                if len(parts) >= 6:
-                    status["link_connect_state"][cn] = parts[5].upper()
+                # CONNECT_STATE follows CONNECT_TIME
+                if len(parts) > d + 2:
+                    status["link_connect_state"][cn] = parts[d + 2].upper()
             else:
                 # Fallback: extract any node number from the line
                 for n in re.findall(r'\b(\d{4,7})\b', line):
