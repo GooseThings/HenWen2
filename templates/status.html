@@ -230,7 +230,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
    its neighbors don't move. nowrap fixes the internal wrap; the extra
    padding/font-size here gives these three enough room that the longest
    states actually fit, so the row reflows (if anything) instead. */
-#tx-btn, #listen-btn, #record-btn { padding: 8px 13px; font-size: 0.88rem; }
+#tx-btn, #listen-btn, #mute-btn, #record-btn { padding: 8px 13px; font-size: 0.88rem; }
 
 /* Header's utility row (search/net-schedule/login/layout-edit/fullscreen/
    manager) — lives in .header-actions, on the right of .header-brand via
@@ -5250,7 +5250,11 @@ async function refreshBoard() {
         var badges = modeBadge + tgBtn + tgHeard + tgCurrent;
         var dotClass = !isConn ? ' connecting' : (c.keyed ? ' keyed' : ' connected');
         var isAdminRole = window._kioskRole === 'admin' || window._kioskRole === 'superuser' || window._kioskRole === 'owner';
-        var dcBtn = (c.connector_managed && !isAdminRole)
+        var dcBtn = (c.session_label && !isAdminRole)
+          ? '<button class="sb-btn disconnect" data-label="X" disabled ' +
+              'style="opacity:.4;cursor:not-allowed" ' +
+              'title="Only an admin or the owner can disconnect a HenWen listener"><svg class="icon"><use href="#icon-lock"></use></svg></button>'
+          : (c.connector_managed && !isAdminRole)
           ? '<button class="sb-btn disconnect" data-label="X" disabled ' +
               'style="opacity:.4;cursor:not-allowed" ' +
               'title="Managed by Smart Connector — only an admin or superuser can disconnect this"><svg class="icon"><use href="#icon-lock"></use></svg></button>'
@@ -8359,6 +8363,14 @@ function _startListen() {
     })
     .then(function(d) {
       if (!d) return;   /* 401 already handled above */
+      if (d.kicked) {
+        /* An admin disconnected this listener (/api/status/disconnect). Stop
+           here: falling back to the 1.x stream or redialing would undo it. */
+        _stopListen(); _txDisarmForRxStop();   /* same as the user pressing Stop */
+        sbToast('An admin disconnected your audio. You can listen again in ' +
+                (d.retry_after || 60) + ' s.', false);
+        return;
+      }
       if (d.sip && _sipCapable() && !_sipBlocked()) {
         _doStartListenSIP(audio, node, d);
         return;

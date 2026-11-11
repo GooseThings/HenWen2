@@ -124,3 +124,95 @@ class TestKioskPage:
         for needle in ('id="mute-btn"', "_doStartListenSIP", "/api/audio/session",
                        "authorization_user", "_sipFallback", "_startListenLegacy"):
             assert needle in html, needle
+
+
+@pytest.fixture()
+def _no_kicks():
+    app._sip_kicked.clear()
+    yield
+    app._sip_kicked.clear()
+
+
+class TestListenerDisconnect:
+    """The board's X on a '<node> HenWen User' row hangs up that listener's
+    call (admin+ only) and holds off the kiosk's automatic redial."""
+
+    def _setup(self, monkeypatch, hung=1, found=None, error=None):
+        calls = []
+        detail = {"found": hung if found is None else found, "hung": hung, "error": error}
+        monkeypatch.setattr(app, "_sip_session_callsigns", lambda: frozenset({"N8GMZ"}))
+        monkeypatch.setattr(app, "_sip_hangup_endpoint_channels_detail",
+                            lambda ep: calls.append(ep) or detail)
+        return calls
+
+    def _dc(self, client, remote="N8GMZ"):
+        return client.post("/api/status/disconnect",
+                           json={"local_node": "643930", "remote_node": remote})
+
+    def test_admin_hangs_up_the_call(self, client, create_user, monkeypatch, _no_kicks):
+        calls = self._setup(monkeypatch)
+        create_user("owner1", role="owner")
+        _login(client, "owner1")
+        r = self._dc(client, "n8gmz")
+        assert r.status_code == 200 and r.get_json() == {"ok": True, "hung_up": 1}
+        assert calls == ["henwen-u-n8gmz"]
+        assert app._sip_kick_remaining("N8GMZ") > 0
+
+    def test_user_role_is_refused(self, client, create_user, monkeypatch, _no_kicks):
+        calls = self._setup(monkeypatch)
+        create_user("owner1", role="owner")
+        create_user("kiosk1", role="user")
+        _login(client, "kiosk1")
+        r = self._dc(client)
+        assert r.status_code == 403
+        assert calls == [] and app._sip_kick_remaining("N8GMZ") == 0
+
+    def test_no_live_call_is_404_and_no_hold(self, client, create_user, monkeypatch, _no_kicks):
+        self._setup(monkeypatch, hung=0)
+        create_user("owner1", role="owner")
+        _login(client, "owner1")
+        assert self._dc(client).status_code == 404
+        assert app._sip_kick_remaining("N8GMZ") == 0
+
+    def test_partial_hangup_keeps_the_hold(self, client, create_user, monkeypatch, _no_kicks):
+        """PR #10 review: a call may have ended even though the hangup
+        reported an error -- that listener must not be handed a credential
+        back by the 3s redial."""
+        self._setup(monkeypatch, hung=1, found=2, error="hangup of x failed")
+        create_user("owner1", role="owner")
+        _login(client, "owner1")
+        r = self._dc(client)
+        assert r.status_code == 502 and r.get_json()["hung_up"] == 1
+        assert "hangup of x failed" not in r.get_data(as_text=True)   # no internals to the client
+        assert app._sip_kick_remaining("N8GMZ") > 0
+
+    def test_listing_failure_keeps_the_hold(self, client, create_user, monkeypatch, _no_kicks):
+        self._setup(monkeypatch, hung=0, found=0, error="could not list channels")
+        create_user("owner1", role="owner")
+        _login(client, "owner1")
+        assert self._dc(client).status_code == 502
+        assert app._sip_kick_remaining("N8GMZ") > 0
+
+    def test_unprovisioned_callsign_is_still_invalid(self, client, create_user, monkeypatch, _no_kicks):
+        calls = self._setup(monkeypatch)
+        create_user("owner1", role="owner")
+        _login(client, "owner1")
+        assert self._dc(client, "NT0Y").status_code == 400     # an IAX client, not a listener
+        assert self._dc(client, "0HenWen-Web").status_code == 400
+        assert calls == []
+
+    def test_kicked_listener_is_told_to_stop(self, client, create_user, fresh_db, _no_kicks):
+        create_user("owner1", role="owner")
+        _user(fresh_db, "bob", "bobs-password-1", callsign="N8GMZ")
+        app._sip_kick_hold("N8GMZ", "owner1")
+        _login(client, "bob", "bobs-password-1")
+        b = client.get("/api/audio/session").get_json()
+        assert b["kicked"] is True and b["reason"] == "kicked"
+        assert b["sip"] is None and 0 < b["retry_after"] <= app.SIP_KICK_HOLD_SEC
+        assert "AbCdEf" not in client.get("/api/audio/session").get_data(as_text=True)
+
+    def test_hold_expires(self, _no_kicks):
+        app._sip_kick_hold("N8GMZ", "owner1", now=1000.0)
+        assert app._sip_kick_remaining("N8GMZ", now=1000.0 + app.SIP_KICK_HOLD_SEC - 1) == 1
+        assert app._sip_kick_remaining("N8GMZ", now=1000.0 + app.SIP_KICK_HOLD_SEC) == 0
+        assert "N8GMZ" not in app._sip_kicked

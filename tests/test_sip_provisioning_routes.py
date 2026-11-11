@@ -301,6 +301,31 @@ class TestHangup:
         monkeypatch.setattr(app, "ami_send_command", boom)
         assert _REAL_HANGUP("henwen-u-n8gmz") == 0
 
+    def test_partial_failure_keeps_the_count(self, monkeypatch):
+        """One channel hung up, the next one's hangup raises: the detail
+        says so instead of collapsing to 0 (PR #10 review)."""
+        row = lambda name: f"{name}!henwen-u-n8gmz!643930!1!Up!Rpt!643930,P,N8GMZ!N8GMZ!!!3!42!!1700000000.1"
+        sent = []
+        class Ami:
+            timeout = 2
+            def command(self, c, **kw):
+                return [row("PJSIP/henwen-u-n8gmz-00000012"), row("PJSIP/henwen-u-n8gmz-00000013")]
+            def _send_action(self, a):
+                sent.append(a["Channel"])
+                if len(sent) == 2:
+                    raise ConnectionError("AMI dropped")
+            def _recv_until(self, *a, **k): return "Response: Success\r\n\r\n"
+            def _parse_packet(self, raw): return {"Response": "Success"}
+        monkeypatch.setattr(app, "ami_send_command", lambda fn: fn(Ami()))
+        d = app._sip_hangup_endpoint_channels_detail("henwen-u-n8gmz")
+        assert d["found"] == 2 and d["hung"] == 1 and "AMI dropped" in d["error"]
+
+    def test_listing_failure_is_an_error_not_an_empty_list(self, monkeypatch):
+        def boom(fn): raise RuntimeError("AMI down")
+        monkeypatch.setattr(app, "ami_send_command", boom)
+        d = app._sip_hangup_endpoint_channels_detail("henwen-u-n8gmz")
+        assert d["found"] == 0 and d["hung"] == 0 and "AMI down" in d["error"]
+
 
 class TestTxConfig:
     def _secret(self, tmp_path, monkeypatch, present=True):
