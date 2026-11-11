@@ -124,3 +124,30 @@ class TestEdgeCases:
         st = _status(monkeypatch, [f"RPT_ALINKS=1,{callsign}TU"], lstats)
         assert st["connected"] == [callsign]
         assert st["links"] == {callsign: {"keyed": False, "mode": "T"}}
+
+
+# Verbatim from node 643930, 2026-11-11: a HenWen 2.0 session link. It is a
+# PJSIP call, so ${IAXPEER(CURRENTCHANNEL)} is empty and the PEER column is
+# blank -- the row is one field short and DIRECTION sits at index 2.
+LSTATS_SIP_SESSION = [
+    "NODE      PEER                RECONNECTS  DIRECTION  CONNECT TIME        CONNECT STATE",
+    "----      ----                ----------  ---------  ------------        -------------",
+    "N8GMZ                         0           IN         00:00:05:940        ESTABLISHED",
+    "27664     44.1.2.3            0           OUT        01:02:03:456        ESTABLISHED",
+]
+VARS_SIP_SESSION = ["RPT_NUMLINKS=2", "RPT_ALINKS=2,N8GMZTU,27664TU", "RPT_RXKEYED=0"]
+
+
+class TestBlankPeerColumn:
+    def test_session_link_appears_in_connected(self, monkeypatch):
+        st = _status(monkeypatch, VARS_SIP_SESSION, LSTATS_SIP_SESSION, node="643930")
+        assert st["connected"] == ["N8GMZ", "27664"]
+
+    def test_direction_time_and_state_come_from_the_shifted_columns(self, monkeypatch):
+        st = _status(monkeypatch, VARS_SIP_SESSION, LSTATS_SIP_SESSION, node="643930")
+        assert st["link_direction"]["N8GMZ"] == "IN"
+        assert st["link_connect_seconds"]["N8GMZ"] == 5
+        assert st["link_connect_state"]["N8GMZ"] == "ESTABLISHED"
+        # The full-width row next to it is unaffected.
+        assert st["link_direction"]["27664"] == "OUT"
+        assert st["link_connect_seconds"]["27664"] == 3723

@@ -63,7 +63,7 @@ class TestAudioSession:
         assert b["sip"]["auth_user"] == "N8GMZ"
         assert b["sip"]["password"] == "AbCdEf0123456789-_xyzQRS"
         assert b["sip"]["dial"] == "643930"          # own context: bare node, not 2<node>
-        assert b["sip"]["link_name"] == "0N8GMZ"
+        assert b["sip"]["link_name"] == "N8GMZ"
         assert b["sip"]["tot_sec"] == 120
         assert b["sip"]["ws_path"] == app.TX_WS_PATH
         assert r.headers["Cache-Control"] == "no-store"
