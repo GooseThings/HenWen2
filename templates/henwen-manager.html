@@ -612,8 +612,9 @@ input:checked + .slider::before  { transform: translateX(16px); background: var(
 #update-bar.show { display: flex; }
 #asl-web-ui-scope-bar:empty { display: none; }
 .asl-overlap { margin: 4px 0 14px; }
-/* W2 handover: the editors stay visible for reference but can't be changed. */
-.asl-readonly .val-input, .asl-readonly .switch { pointer-events: none; opacity: 0.55; }
+/* W2 handover: the editors stay visible for reference but can't be changed
+   (_aslMakeReadOnly disables the controls; this only dims them). */
+.asl-readonly .val-input, .asl-readonly .switch { opacity: 0.55; }
 .asl-readonly [onclick^="backupRestore"],
 #page-raw-editor.asl-readonly .btn-success { display: none; }
 
@@ -7979,11 +7980,20 @@ var ASL_HANDOVER_PAGES = ['general', 'node', 'template', 'raw-editor', 'backups'
 function _aslActivePageReadOnly() {
   return !!document.querySelector('section.page.active.asl-readonly');
 }
+function _aslDisableControls(sec) {
+  sec.querySelectorAll('input, select, textarea').forEach(function(el) {
+    if (el.tagName === 'TEXTAREA') el.readOnly = true;   // still scrollable/copyable
+    else el.disabled = true;
+  });
+}
 function _aslMakeReadOnly(sec) {
   sec.classList.add('asl-readonly');
-  if (sec.id === 'page-raw-editor') {
-    var ta = document.getElementById('raw-ta');
-    if (ta) ta.readOnly = true;
+  _aslDisableControls(sec);
+  // The editors re-render whenever the page is opened or reloaded, so keep
+  // disabling whatever they draw, not just what exists right now.
+  if (window.MutationObserver && !sec._aslObserver) {
+    sec._aslObserver = new MutationObserver(function() { _aslDisableControls(sec); });
+    sec._aslObserver.observe(sec, {childList: true, subtree: true});
   }
 }
 
@@ -8015,7 +8025,9 @@ async function aslWebUiDecorate() {
       + '<strong>' + esc(o.what) + '</strong>. '
       + (d.url
         ? '<a href="' + esc(d.url + route) + '" target="_blank" rel="noopener">Open it there &#8599;</a>'
-        : 'It isn\'t reachable from this address yet.')
+        : (d.direct_visit
+          ? 'Open it through this node\'s web address (not HenWen\'s own port) at <span class="mono">/asl-web-ui/</span>.'
+          : 'It isn\'t reachable from this address yet.'))
       + (readOnly ? '' : ' HenWen is handing these pages over to it.');
     if (readOnly) _aslMakeReadOnly(sec);
     var title = sec.querySelector('.page-sub') || sec.querySelector('.page-title');

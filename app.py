@@ -20391,8 +20391,28 @@ def asl_web_ui_status():
                          if (installed and (global_on or missing)
                              and os.path.isfile(ASL_WEB_UI_APPLY_SCRIPT)) else None,
         "overlap":       ASL_WEB_UI_OVERLAP if installed else {},
-        "handover":      bool(reachable and ASL_WEB_UI_HANDOVER),
+        # Only while the UI can actually save: its API socket must be up.
+        "handover":      bool(reachable and running and ASL_WEB_UI_HANDOVER),
     }
+
+
+def _request_via_apache():
+    """True when this request reached Flask through Apache's proxy, the only
+    path on which /asl-web-ui/ exists. A direct visit to HenWen's own port
+    has no such header. A client forging the header on a direct visit can
+    only take editing away from itself."""
+    return bool(request.headers.get("X-Forwarded-Host"))
+
+
+def asl_web_ui_status_for_request():
+    """asl_web_ui_status(), adjusted for how this request arrived: on a
+    direct visit the link would 404, so there is no URL and no handover."""
+    st = dict(asl_web_ui_status())
+    if not _request_via_apache():
+        st["url"] = None
+        st["handover"] = False
+        st["direct_visit"] = True
+    return st
 
 
 def _asl_handover_blocks(endpoint, data, content):
@@ -20416,7 +20436,7 @@ def asl_web_ui_handover_gate():
     """Registered after check_auth(), so it only ever sees authorized writes."""
     if request.method != "POST" or request.endpoint not in ("api_save", "api_backup_restore"):
         return None
-    status = asl_web_ui_status()
+    status = asl_web_ui_status_for_request()
     if not status.get("handover"):
         return None
     content = read_conf_file(RPT_CONF_PATH) or ""
@@ -20433,7 +20453,7 @@ def asl_web_ui_handover_gate():
 @app.route("/api/asl-web-ui/status")
 def api_asl_web_ui_status():
     """Admin+ (default gate): Manager is admin+, and it is the only caller."""
-    return jsonify(asl_web_ui_status())
+    return jsonify(asl_web_ui_status_for_request())
 
 
 # ---------------------------------------------------------------------------

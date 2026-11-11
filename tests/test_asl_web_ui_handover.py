@@ -53,6 +53,9 @@ def owner(client, create_user, tmp_path, monkeypatch):
     return client, conf
 
 
+VIA_APACHE = {"X-Forwarded-Host": "henwen.example.com"}
+
+
 def _handover(monkeypatch, on):
     monkeypatch.setattr(app, "asl_web_ui_status",
                         lambda: {"handover": on, "url": "/asl-web-ui/" if on else None})
@@ -62,7 +65,8 @@ def test_gate_refuses_a_handed_over_save(owner, monkeypatch):
     client, conf = owner
     _handover(monkeypatch, True)
     r = client.post("/api/save", json={"section": "643930",
-                                       "changes": {"duplex": {"value": "1", "enabled": True}}})
+                                       "changes": {"duplex": {"value": "1", "enabled": True}}},
+                    headers=VIA_APACHE)
     assert r.status_code == 409
     body = r.get_json()
     assert body["handed_over"] is True and body["url"] == "/asl-web-ui/"
@@ -73,7 +77,8 @@ def test_gate_lets_macro_saves_through(owner, monkeypatch):
     client, conf = owner
     _handover(monkeypatch, True)
     r = client.post("/api/save", json={"section": "macro",
-                                       "changes": {"2": {"value": "*32001", "enabled": True}}})
+                                       "changes": {"2": {"value": "*32001", "enabled": True}}},
+                    headers=VIA_APACHE)
     assert r.status_code == 200 and "*32001" in conf.read_text()
 
 
@@ -89,10 +94,40 @@ def test_handover_needs_reachable_and_not_disabled(tmp_path, monkeypatch):
     glob = tmp_path / "g.conf"; glob.write_text("")
     monkeypatch.setattr(app, "ASL_WEB_UI_WWW", str(www))
     monkeypatch.setattr(app, "ASL_WEB_UI_GLOBAL_CONF", str(glob))
+    monkeypatch.setattr(app, "ASL_WEB_UI_SOCKET", str(tmp_path / "web.sock"))
     monkeypatch.setattr(app, "ASL_WEB_UI_HANDOVER", True)
+    app.asl_web_ui_status.cache_clear()
+    # PR #18 review: installed and reachable but its API socket is down, so
+    # it can't save either -- HenWen keeps editing.
+    assert app.asl_web_ui_status()["handover"] is False
+    (tmp_path / "web.sock").write_text("")
     app.asl_web_ui_status.cache_clear()
     assert app.asl_web_ui_status()["handover"] is True
     monkeypatch.setattr(app, "ASL_WEB_UI_HANDOVER", False)
     app.asl_web_ui_status.cache_clear()
     assert app.asl_web_ui_status()["handover"] is False
     app.asl_web_ui_status.cache_clear()
+
+
+def test_direct_visit_keeps_editing(owner, monkeypatch):
+    """PR #18 review: on HenWen's own port /asl-web-ui/ doesn't exist, so a
+    request that didn't come through Apache is never handed over."""
+    client, conf = owner
+    _handover(monkeypatch, True)
+    r = client.post("/api/save", json={"section": "643930",
+                                       "changes": {"duplex": {"value": "1", "enabled": True}}})
+    assert r.status_code == 200 and "duplex = 1" in conf.read_text()
+    st = client.get("/api/asl-web-ui/status").get_json()
+    assert st["handover"] is False and st["url"] is None and st["direct_visit"] is True
+    st = client.get("/api/asl-web-ui/status", headers=VIA_APACHE).get_json()
+    assert st["handover"] is True and st["url"] == "/asl-web-ui/"
+
+
+def test_read_only_pages_disable_controls():
+    """PR #18 review: pointer-events alone left keyboard edits possible;
+    the controls are disabled, including whatever the editors re-render."""
+    import os
+    src = open(os.path.join(os.path.dirname(__file__), "..", "templates", "henwen-manager.html")).read()
+    assert "pointer-events: none" not in src.split("W2 handover", 1)[1].split("}", 1)[0]
+    assert "else el.disabled = true;" in src
+    assert "new MutationObserver(function() { _aslDisableControls(sec); })" in src
