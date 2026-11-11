@@ -7961,7 +7961,12 @@ async function checkNodeDrift() {
   if (!r.ok || !r.data || !r.data.stale) { bar.innerHTML = ''; return; }
   var stale = r.data.stale, local = r.data.local_nodes || [];
   var nodes = Object.keys(stale);
-  if (!nodes.length) { bar.innerHTML = ''; return; }
+  var sipErr = r.data.sip_reload_error
+    ? '<div class="alert alert-danger">After a node re-point, the per-user SIP dialplan was rewritten but Asterisk '
+      + 'did not reload it (' + esc(r.data.sip_reload_error) + '), so SIP calls may still dial the old node. '
+      + '<button class="btn btn-sm" onclick="retrySipReload()">Retry reload</button></div>'
+    : '';
+  if (!nodes.length) { bar.innerHTML = sipErr; return; }
   var opts = local.map(function(n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
   bar.innerHTML = nodes.map(function(node) {
     var uses = stale[node].map(function(u) {
@@ -7977,7 +7982,14 @@ async function checkNodeDrift() {
           + '<button class="btn btn-sm btn-warn" onclick="repointNode(' + esc(JSON.stringify(node)) + ')">Re-point</button></div>'
         : '')
       + '</div>';
-  }).join('');
+  }).join('') + sipErr;
+}
+
+async function retrySipReload() {
+  var r = await api('/api/node-drift/sip-reload', {method: 'POST'});
+  if (r.ok && r.data.ok) log('SIP dialplan reloaded.', 'OK');
+  else log('SIP reload failed again: ' + ((r.data && r.data.error) || r.status), 'ERROR');
+  checkNodeDrift();
 }
 
 async function repointNode(node) {
@@ -7992,6 +8004,10 @@ async function repointNode(node) {
     log('Re-pointed node ' + node + ' to ' + sel.value + '.', 'OK');
     if ((r.data.skipped || []).length)
       log('Left for a higher role to re-point: ' + r.data.skipped.join(', '), 'WARN');
+    var sip = r.data.sip;
+    if (sip && sip.node && sip.node !== sel.value)
+      log('Per-user SIP calls dial node ' + sip.node + ' (the first node in rpt.conf), not ' + sel.value + '.', 'WARN');
+    if (sip && !sip.ok) log('SIP dialplan rewritten but Asterisk did not reload: ' + (sip.error || ''), 'ERROR');
   }
   else      log('Re-point failed: ' + (r.data.error || r.status), 'ERROR');
   checkNodeDrift();

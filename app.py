@@ -20423,6 +20423,15 @@ def node_drift_repoint(db, old, new, role):
         except sqlite3.OperationalError:
             continue
     db.commit()
+    # The running server tracks links in memory too (_kiosk_temp_conns, read
+    # from the table only at startup): permanent-link status, temp-link
+    # timeouts and Smart Connector's skip-permanent all key on it. Move the
+    # old node's entries, keeping any the new node already has.
+    if rank >= ROLE_RANK["admin"]:
+        with _kiosk_temp_lock:
+            for key in [k for k in _kiosk_temp_conns if k[0] == old]:
+                entry = _kiosk_temp_conns.pop(key)
+                _kiosk_temp_conns.setdefault((new, key[1]), entry)
     return {t: n for t, n in moved.items() if n}, skipped
 
 
@@ -20434,7 +20443,33 @@ def api_node_drift():
     local = get_node_numbers(content) if content else []
     return jsonify({"local_nodes": local,
                     "stale": node_drift_report(get_db(), local),
-                    "conf_readable": content is not None})
+                    "conf_readable": content is not None,
+                    "sip_reload_error": _node_drift_sip_error})
+
+
+# A re-point that rewrote the SIP dialplan but couldn't reload Asterisk: the
+# file no longer names the old node, so the report goes quiet, while
+# Asterisk may still dial it. Kept until a reload succeeds.
+_node_drift_sip_error = None
+
+
+def _node_drift_provision_sip(reason):
+    """Re-render and reload the per-user SIP files. Returns what the caller
+    shows: which node SIP calls now dial (always rpt.conf's first node, not
+    the re-point target), whether Asterisk reloaded, and any error."""
+    global _node_drift_sip_error
+    prov = sip_provision_accounts(reason, force_reload=True)
+    ok = bool(prov.get("ok")) and (bool(prov.get("reloaded")) or not prov.get("included"))
+    _node_drift_sip_error = None if ok else (prov.get("error") or prov.get("detail")
+                                             or "SIP reload failed")
+    return {"node": prov.get("node"), "ok": ok, "reloaded": bool(prov.get("reloaded")),
+            "error": _node_drift_sip_error}
+
+
+@app.route("/api/node-drift/sip-reload", methods=["POST"])
+def api_node_drift_sip_reload():
+    """Retry the SIP reload a re-point couldn't finish."""
+    return jsonify(_node_drift_provision_sip("retry after node re-point"))
 
 
 @app.route("/api/node-drift/repoint", methods=["POST"])
@@ -20451,12 +20486,12 @@ def api_node_drift_repoint():
     db = get_db()
     moved, skipped = node_drift_repoint(db, old, new, session.get('role'))
     log("INFO", f"[NODE-DRIFT] {session.get('username')} re-pointed node {old} -> {new}: {moved}")
-    prov = None
+    sip = None
     if old in _sip_dialplan_nodes():
-        prov = sip_provision_accounts(f"node {old} re-pointed to {new}", force_reload=True)
+        sip = _node_drift_provision_sip(f"node {old} re-pointed to {new}")
     return jsonify({"ok": True, "moved": moved,
                     "skipped": skipped,
-                    "sip_reprovisioned": bool(prov and prov.get("ok")),
+                    "sip": sip,
                     "stale": node_drift_report(db, local)})
 
 

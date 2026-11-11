@@ -156,3 +156,39 @@ def test_unknown_role_moves_nothing(fresh_db):
     _seed(fresh_db)
     moved, skipped = app.node_drift_repoint(fresh_db, "643930", "643931", None)
     assert moved == {} and "Smart Connector" in skipped
+
+
+def test_in_memory_links_follow_the_repoint(fresh_db):
+    """PR #16 review: the running server's _kiosk_temp_conns (loaded from the
+    table only at startup) must move too, keeping the new node's entries."""
+    app._kiosk_temp_conns.clear()
+    app._kiosk_temp_conns[("643930", "2000")] = {"permanent": True, "tag": "old"}
+    app._kiosk_temp_conns[("643930", "3000")] = {"permanent": False, "tag": "old"}
+    app._kiosk_temp_conns[("643931", "2000")] = {"permanent": False, "tag": "new"}
+    try:
+        app.node_drift_repoint(fresh_db, "643930", "643931", "admin")
+        assert ("643930", "2000") not in app._kiosk_temp_conns
+        assert app._kiosk_temp_conns[("643931", "2000")]["tag"] == "new"
+        assert app._kiosk_temp_conns[("643931", "3000")]["tag"] == "old"
+    finally:
+        app._kiosk_temp_conns.clear()
+
+
+def test_sip_reload_failure_is_kept_and_retryable(admin, monkeypatch):
+    """PR #16 review: a re-point that rewrote the dialplan but couldn't
+    reload Asterisk must say so, keep saying so, and offer a retry."""
+    client, tmp = admin
+    plan = tmp / "dialplan.conf"
+    plan.write_text(app.render_user_dialplans([("N8GMZ", "643930")]))
+    monkeypatch.setattr(app, "SIP_USERS_DIALPLAN", str(plan))
+    results = [{"ok": False, "reloaded": False, "included": True, "node": "643931",
+                "error": "AMI down"},
+               {"ok": True, "reloaded": True, "included": True, "node": "643931", "error": None}]
+    monkeypatch.setattr(app, "sip_provision_accounts", lambda reason, force_reload=False: results.pop(0))
+    monkeypatch.setattr(app, "_node_drift_sip_error", None)
+    r = client.post("/api/node-drift/repoint", json={"from": "643930", "to": "643931"}).get_json()
+    assert r["sip"] == {"node": "643931", "ok": False, "reloaded": False, "error": "AMI down"}
+    assert client.get("/api/node-drift").get_json()["sip_reload_error"] == "AMI down"
+    retry = client.post("/api/node-drift/sip-reload").get_json()
+    assert retry["ok"] is True
+    assert client.get("/api/node-drift").get_json()["sip_reload_error"] is None
