@@ -107,3 +107,15 @@ def test_manager_picks_a_real_node_page_for_node_routes():
     src = open(os.path.join(os.path.dirname(__file__), "..", "templates", "henwen-manager.html")).read()
     assert "document.querySelector('section[id^=\"page-node-\"]')" not in src
     assert "if (!firstNode) firstNode = _aslPageKey(sec.id).node;" in src
+
+
+def test_direct_visit_gets_no_link(client, create_user, paths):
+    """Same issue the PR #18 review raised: /asl-web-ui/ exists only behind
+    Apache, so a direct visit to HenWen's port must not be sent there."""
+    _install(paths)
+    (paths / "conf-enabled.conf").write_text("")
+    _login(client, create_user, "admin")
+    d = client.get("/api/asl-web-ui/status").get_json()
+    assert d["url"] is None and d["direct_visit"] is True
+    d = client.get("/api/asl-web-ui/status", headers={"X-Forwarded-Host": "h.example"}).get_json()
+    assert d["url"] == "/asl-web-ui/" and "direct_visit" not in d

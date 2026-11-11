@@ -7989,7 +7989,9 @@ async function aslWebUiDecorate() {
     div.innerHTML = 'AllStarLink\'s ASL Web UI also does this: <strong>' + esc(o.what) + '</strong>. '
       + (d.url
         ? '<a href="' + esc(d.url + route) + '" target="_blank" rel="noopener">Open it there &#8599;</a>'
-        : 'It isn\'t reachable from this address yet.')
+        : (d.direct_visit
+          ? 'Open it through this node\'s web address (not HenWen\'s own port) at <span class="mono">/asl-web-ui/</span>.'
+          : 'It isn\'t reachable from this address yet.'))
       + ' HenWen is handing these pages over to it.';
     var title = sec.querySelector('.page-sub') || sec.querySelector('.page-title');
     if (title && title.nextSibling) sec.insertBefore(div, title.nextSibling);

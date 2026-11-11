@@ -20387,10 +20387,28 @@ def asl_web_ui_status():
     }
 
 
+def _request_via_apache():
+    """True when this request reached Flask through Apache's proxy, the only
+    path on which /asl-web-ui/ exists. A direct visit to HenWen's own port
+    has no such header. A client forging the header on a direct visit can
+    only take editing away from itself."""
+    return bool(request.headers.get("X-Forwarded-Host"))
+
+
+def asl_web_ui_status_for_request():
+    """asl_web_ui_status(), adjusted for how this request arrived: on a
+    direct visit the link would 404, so there is no URL."""
+    st = dict(asl_web_ui_status())
+    if not _request_via_apache():
+        st["url"] = None
+        st["direct_visit"] = True
+    return st
+
+
 @app.route("/api/asl-web-ui/status")
 def api_asl_web_ui_status():
     """Admin+ (default gate): Manager is admin+, and it is the only caller."""
-    return jsonify(asl_web_ui_status())
+    return jsonify(asl_web_ui_status_for_request())
 
 
 # ---------------------------------------------------------------------------
