@@ -1,11 +1,10 @@
 # HenWen 2.0 — audio as native Asterisk VoIP
 
-**Status (2026-11-10, evening):** Phase 0 **done**. Phase 1 **done** — both
-spikes answered by measurement, not inference. Phase 2 **built** (PR #1
-merged; PR #2 open and deployed) — the one step left is the owner running
-`sip-users/apply.sh`, after which the exit criterion can be checked. Phase 3
-**working live from one account** (PR #3, stacked on PR #2, deployed): see
-"Live result 2026-11-10 17:13" below. Still open: the two-account test.
+**Status (2026-11-11):** Phases 0-3 **done**. PRs #1, #2, #3 and #8 are
+merged to `main`, and `/opt/HenWen2` runs `main`. Phase 3's exit criterion was
+met live on 2026-11-10 (three accounts at once, details below). Listeners now
+show as Connected Nodes (PR #8). Next: keyed state for listeners (see "Next
+action"), then Phase 4.
 **Repo:** `GooseThings/HenWen2`, forked from `GooseThings/HenWen` at `c875598`
 (full history preserved; `henwen1` remote is fetch-only).
 
@@ -22,65 +21,76 @@ stopped and `disable`d. The 2.0 database is a copy of 1.x's, so
 Rollback is `systemctl stop HenWen2 && systemctl enable --now HenWen`; 1.x's
 own database is untouched. Backups: `/root/henwen-cutover-20261110-103223/`.
 
-**What is deployed:** `/opt/HenWen2` is on branch `phase3-one-call-audio`
-(PR #3, which contains PR #2's `phase2-finish`); `main` is still PR #1.
-Neither PR is merged — the owner reviews first. **Functionally, 2.0 is
-still 1.x plus fixes for every account**, because nothing in Phases 2-3
-changes what a session gets until (a) the include wiring has run and (b) an
-account has been given a callsign. Both are owner actions; neither has
-happened.
+**What is deployed:** `main` (merge of PR #8). The include wiring
+(`sip-users/apply.sh`) and the sudoers line have been run by the owner.
+Accounts with a callsign (N8GMZ, K8DIY, WO8E so far) get the one-call path;
+every other account still gets the 1.x Listen and Arm TX unchanged.
 
-**Live result 2026-11-10 17:13 (owner's account, callsign N8GMZ, remote
-browser, Bluetooth headset):** owner ran `sip-users/apply.sh` and
-`provision-sudoers.sh`, assigned the callsign; HenWen provisioned and
-reloaded; `check-register.py` got 200 OK as `henwen-u-n8gmz` / auth `N8GMZ`
-(the endpoint-name-vs-auth-user split is confirmed, not an open question any
-more). Then Listen on the kiosk: journal shows `sip-connected mic=true
-tx=true`, `sip-media ice=connected rx=290 tx=292 jitter=2ms`, PTT presses as
-`*99`/`#` DTMF with live mic level, and steady `sip-stats` (~50 pkt/s each
-way, 0.1% loss, 2ms jitter). **Phase 2's exit criterion is met**, and Phase
-3's single-account half works end to end on STUN alone from a remote network.
+**Phase 2 exit (2026-11-10 17:13):** `check-register.py` got 200 OK as
+`henwen-u-n8gmz` / auth `N8GMZ` — the endpoint-name-vs-auth-user split is
+confirmed. Listen from a remote browser: `sip-connected`, `sip-media
+ice=connected rx=290 tx=292 jitter=2ms`, PTT as `*99`/`#` DTMF, steady
+`sip-stats` (~50 pkt/s each way, 0.1% loss).
 
-**One surprise to look at next session:** `rpt lstats 643930` did NOT list
-`0N8GMZ` while the call was up (only the real peer 27339), although the
-`PJSIP/henwen-u-n8gmz-*` channel existed. So phone-mode links may not appear
-in `rpt lstats` at all, which would mean (a) the playbook's "Connected Nodes
-shows who is listening" side benefit does not hold as written, and (b) the
-`_sip_session_link()` exclusions (connector, connect gate, alerts) are
-harmless but may be guarding against something that never happens. Check
-`rpt_cli.c`'s lstats loop for a phonemode filter, and `RPT_ALINKS`, before
-building anything on either assumption.
+**Phase 3 exit (2026-11-10, ~18:20-19:55):** three accounts (N8GMZ, K8DIY,
+WO8E) on three different home networks, on the node at the same time;
+owner reports no issues — nobody heard themselves, PTT keyed from each.
+Journal: 12 `sip-connected`, every one followed by `sip-media
+ice=connected` (jitter 2-12ms), **zero `sip-fallback`/`sip-nomedia`** — all
+on STUN alone. One real mid-call drop (K8DIY, 18:47:51, JsSIP `sip-ended:
+Connection Error`, a phone client, right after a PTT press) recovered by the
+automatic retry within 3s; it was not caused by a provisioning reload (the
+last one was 18:44:45). This is a small sample for D3: it says STUN reaches
+ordinary home networks, not that TURN is never needed.
+
+**Resolved: session links are visible, by bare callsign (PR #8, 2026-11-11).**
+app_rpt 3.10.8 hides every link whose name starts with `0` from `rpt lstats`
+(`rpt_cli.c:396`), `RPT_ALINKS`/`RPT_LINKS` (`rpt_manager.c`), the link list
+sent to peers and stats.allstarlink.org (`rpt_link.c:344/391/507`) and
+telemetry. The original `0<CALLSIGN>` name hid listeners from all of it. PR #8
+links as the bare callsign (`Rpt(<node>,P,N8GMZ)`; no legal callsign starts
+with `0`, so nothing else needs it). Verified from source and live:
+
+- **No local connect announcement.** The `CONNECTED` telemetry's local
+  playback goes through VARCMD, which returns early at `telemmode < 2`
+  (`rpt_telemetry.c:3573`); `telemdefault=0` on 643930 makes that 0. Peers
+  that run their own telemetry may announce it. Inbound phone links never
+  fire `REMDISC`, so there is no disconnect announcement either.
+- **Listeners are in `rpt lstats`, `RPT_ALINKS`, and the link list sent to
+  peers/stats** (owner's choice). A PJSIP call has no IAX peer, so the lstats
+  PEER column is blank; the parser now finds the direction column instead of
+  assuming a fixed index.
+- **Kiosk:** each listener is a Connected Nodes row labelled
+  `<node> HenWen User` where a node's location would be. Those rows are
+  skipped by Favorites' connected set, the connect/monitor gates and the
+  "already connected" bridge prompt.
+- **Classification is by name:** `_sip_session_link()` = a provisioned
+  callsign (cached 30s, cleared on provisioning) or a `0` name (shared
+  `0HenWen-Web`). Known collision: an IAX link named like a provisioned
+  callsign (e.g. a node whose link name is NT0Y) is treated as a session.
+- **Not reachable through app_rpt:** the keyed flag. `RPT_ALINKS`'s `K` is
+  `l->lastrx1`, set only by a `RADIO_KEY` frame or by voice on non-phone
+  links; a phone link's `*99` keys the node (`TXKEY,MAIN`) but never sets
+  it. The node's archive log (`/var/spool/asterisk/monitor/<node>/`) does
+  record `DTMF(P),<link>,<digit>` per link.
+- Startup re-renders the SIP files (`start_sip_startup_provision()`), so an
+  upgraded install picks up the new link name without a callsign edit.
 
 **Next action, in order:**
 
-0. Two-account test (Phase 3 exit criterion): a second callsign on a
-   second account, two browsers, neither hears itself, both can PTT. Then
-   merge PR #2, then PR #3.
-0b. Resolve the `rpt lstats` question above; adjust docs/Phase 5 plan.
-
-1. Wire the includes — a change to Asterisk's own config that this session
-   was not permitted to make:
-   ```
-   sudo bash /opt/HenWen2/sip-users/apply.sh
-   sudo INSTALL_DIR=/opt/HenWen2 SERVICE_NAME=HenWen2 bash /opt/HenWen2/provision-sudoers.sh   # for the Manager button
-   ```
-2. Give one account a callsign (Manager > Users), then prove the Phase 2
-   exit criterion: `sudo /opt/HenWen2/sip-users/check-register.py --user
-   henwen-u-<callsign> --auth-user <CALLSIGN> --password <secret from the
-   users table>` must print PASS, and `pjsip show endpoints` must list
-   `henwen-u-<callsign>`. **This is also the first live test of the
-   endpoint-identification choice** (SIP user = endpoint name, auth user =
-   callsign, see "Per-user SIP identity" in CLAUDE.md): if REGISTER is
-   refused with 401/403 while the password is right, swap the renderer to
-   `username={endpoint}` in the auth object instead — one-line change, the
-   tests pin the current choice and would need the same edit.
-3. From that account, press Listen on the kiosk: it should connect as a
-   direct call (toast says so), appear as `0<CALLSIGN>` in `rpt lstats`,
-   and show the PTT bar. Check the journal for `sip-connected` then
-   `sip-media` (good) or `sip-fallback`/`sip-nomedia` (the D3 measurement).
-4. Phase 3 exit criterion: two such accounts at once, neither hears itself,
-   PTT keys. Then merge PRs #2 and #3.
-5. Phase 4.
+1. **Step 3 of the session-link work (issue #5 remainder):**
+   - Keyed light from AMI `DTMFEnd` on `PJSIP/henwen-u-*` channels (`*99`
+     keys, `#` unkeys, hangup clears). This is also the server-side,
+     per-callsign key log D1-a promised; the browser's `tx-dtmf` lines are
+     self-reported.
+   - Classify sessions by their live PJSIP channel instead of by name, which
+     removes the NT0Y-style collision.
+   - The row's Disconnect hangs up the call; Smart Connector's idle-wait
+     handles listener links.
+2. **Issue #4** — check stats.allstarlink.org now shows listeners; close it
+   if so.
+3. **Issue #6** — Mute button height. Small CSS fix.
+4. **Phase 4** — recording and stream relay onto `outstreamcmd`.
 
 **Do not** press "Launch Updater": `update.sh`'s `REPO_URL` still points at
 the 1.x repo, so it would reset this checkout onto 1.x. Held for Phase 6 by
@@ -298,16 +308,17 @@ Each HenWen account becomes a real Asterisk endpoint:
 - Its own PJSIP endpoint/auth/aor, in a context exposing **only** its own
   node's extension — keeping HenWen 1's "a leaked credential can't dial
   anywhere else" property.
-- app_rpt link name `0<callsign>`: `0`-prefixed so app_rpt doesn't announce
-  connects (HenWen 1 v2026.10.28.2 fixed exactly this), unique per user so
+- app_rpt link name `<CALLSIGN>` (was `0<callsign>` until PR #8; the `0`
+  hid the link from lstats/ALINKS/stats, see "Resolved" above), unique per user so
   links stay unambiguous in app_rpt's container. app_rpt's duplicate-name
   kill only applies to all-digit names, so same-named sessions would pile up
   ambiguously.
 - Secret rotates on password change (reuse the `password_epoch` pattern) and
   on revoke/delete.
 
-Side benefit: `rpt lstats` and the Connected Nodes list start showing the
-real callsigns of who is listening.
+Side benefit: `rpt lstats` and the Connected Nodes list show the real
+callsigns of who is listening (since PR #8; it did not hold with the `0`
+prefix).
 
 Provisioning: spike PJSIP realtime config (sorcery + `res_config_sqlite3`) so
 a user row *is* a SIP account with no reload. Fall back to a generated
@@ -391,10 +402,10 @@ per-listener (bridge member + link thread + DTLS-SRTP).
 |---|---|---|
 | **0** ✅ | Repo, history, remotes; `/opt/HenWen2` + unit + DB + port; docs; floor rewrite | HenWen2 runs alongside HenWen 1, 1.x untouched |
 | **1** ✅ | Spikes — run against 643930 itself, which is radioless, so no lab Asterisk was needed | Both answered by measurement: the call downlink is self-free (0.0000 rms), and `outstreamcmd` carries the on-air mix including telemetry |
-| **2** 🔧 | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential. **Built:** PR #1 (schema, renderers, writer) merged; PR #2 (assignment route + Manager field, provisioning trigger + reload, revocation incl. hangup of live calls, `sip-users/apply.sh`, `/api/tx/config` per-user identity, connector exclusion) open and deployed. **Not verified live:** the include wiring needs the owner; `sip-users/check-register.py` then proves the registration half. |
-| **3** 🔧 | Frontend: one call = audio; connect / MUTE / PTT | Two accounts connected at once, neither hears itself, PTT keys. **Built (PR #3):** `/api/audio/session` + `_doStartListenSIP()`; mic up front, PTT bar on confirm, playback-side Mute, no keyed RX mute, 1.x stream as the instrumented fallback. **Not verified live:** no browser has placed the call yet. |
+| **2** ✅ | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential. **Built:** PR #1 (schema, renderers, writer) merged; PR #2 (assignment route + Manager field, provisioning trigger + reload, revocation incl. hangup of live calls, `sip-users/apply.sh`, `/api/tx/config` per-user identity, connector exclusion) open and deployed. **Verified live 2026-11-10** (N8GMZ registered and heard node audio on its own credential). |
+| **3** ✅ | Frontend: one call = audio; connect / MUTE / PTT | Two accounts connected at once, neither hears itself, PTT keys. **Built (PR #3):** `/api/audio/session` + `_doStartListenSIP()`; mic up front, PTT bar on confirm, playback-side Mute, no keyed RX mute, 1.x stream as the instrumented fallback. **Verified live 2026-11-10** (three accounts at once, no self-echo, PTT from each, zero fallbacks). |
 | **4** | Recording + stream relay onto `outstreamcmd` | A mid-QSO forced ID provably appears in a recording |
-| **5** | Delete the old pipeline and its tests; wire `listen_only`; exclude session links from Smart Connector `ilink 11`, idle detection, link counts, board display | Full suite green on a smaller codebase |
+| **5** | Delete the old pipeline and its tests; wire `listen_only`; classify session links by live channel rather than name (may land earlier, with issue #5 step 3) | Full suite green on a smaller codebase |
 | **6** | Scaling measurement, concurrency cap, TURN, 1.x→2.0 migration | Documented concurrent-session ceiling |
 
 ### Phase 1 spike list
