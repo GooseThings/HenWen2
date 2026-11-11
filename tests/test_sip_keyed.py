@@ -242,3 +242,47 @@ class TestEventLoopBackoff:
         assert [l for l in logs if l[0] == "WARN"] == [
             ("WARN", "[SIP-KEY] Event stream down: refused (retrying quietly)")]
         assert sleeps[:6] == [5, 10, 20, 40, 80, 120]
+
+
+class TestLoginLeftover:
+    def test_events_in_the_login_read_reach_the_reader(self, monkeypatch):
+        """PR #10 review: events that share a read with the Login reply,
+        including a partial one, must not be dropped."""
+        srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1)
+        port = srv.getsockname()[1]
+        stop, result = threading.Event(), []
+
+        def ev(d):
+            return ("Event: DTMFEnd\r\nChannel: %s\r\nUniqueid: 1\r\nExten: 643930\r\n"
+                    "Digit: %s\r\nDirection: Received\r\n\r\n" % (CH, d))
+
+        def fake_ami():
+            conn, _ = srv.accept()
+            conn.sendall(b"Asterisk Call Manager/9.0.0\r\n")
+            data = b""
+            while b"\r\n\r\n" not in data:
+                data += conn.recv(4096)
+            whole = "Response: Success\r\nMessage: Authentication accepted\r\n\r\n" + ev("*") + ev("9")
+            last = ev("9")
+            conn.sendall((whole + last[:20]).encode())     # reply + 2 events + partial 3rd, one write
+            threading.Event().wait(0.3)
+            conn.sendall(last[20:].encode())
+            for _ in range(40):
+                if henwen_app._sip_session_keyed("643930", "N8GMZ"):
+                    break
+                threading.Event().wait(0.05)
+            result.append(henwen_app._sip_session_keyed("643930", "N8GMZ"))
+            stop.set()
+            conn.close()
+
+        monkeypatch.setattr(henwen_app, "_sip_session_callsigns", lambda: frozenset({"N8GMZ"}))
+        monkeypatch.setattr(henwen_app, "parse_manager_conf",
+                            lambda: {"host": "127.0.0.1", "port": port, "user": "u", "secret": "s"})
+        monkeypatch.setattr(henwen_app, "SIP_KEYED_RETRY_SEC", 0)
+        threading.Thread(target=fake_ami, daemon=True).start()
+        henwen_app._sip_keyed_event_loop(stop=stop)
+        srv.close()
+        assert result == [True]
+
+    def test_command_connection_leftover_is_empty_by_default(self):
+        assert henwen_app.AMIClient("h", 1, "u", "s").login_leftover == ""

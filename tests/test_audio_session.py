@@ -137,11 +137,12 @@ class TestListenerDisconnect:
     """The board's X on a '<node> HenWen User' row hangs up that listener's
     call (admin+ only) and holds off the kiosk's automatic redial."""
 
-    def _setup(self, monkeypatch, hung=1):
+    def _setup(self, monkeypatch, hung=1, found=None, error=None):
         calls = []
+        detail = {"found": hung if found is None else found, "hung": hung, "error": error}
         monkeypatch.setattr(app, "_sip_session_callsigns", lambda: frozenset({"N8GMZ"}))
-        monkeypatch.setattr(app, "_sip_hangup_endpoint_channels",
-                            lambda ep: calls.append(ep) or hung)
+        monkeypatch.setattr(app, "_sip_hangup_endpoint_channels_detail",
+                            lambda ep: calls.append(ep) or detail)
         return calls
 
     def _dc(self, client, remote="N8GMZ"):
@@ -172,6 +173,24 @@ class TestListenerDisconnect:
         _login(client, "owner1")
         assert self._dc(client).status_code == 404
         assert app._sip_kick_remaining("N8GMZ") == 0
+
+    def test_partial_hangup_keeps_the_hold(self, client, create_user, monkeypatch, _no_kicks):
+        """PR #10 review: a call may have ended even though the hangup
+        reported an error -- that listener must not be handed a credential
+        back by the 3s redial."""
+        self._setup(monkeypatch, hung=1, found=2, error="hangup of x failed")
+        create_user("owner1", role="owner")
+        _login(client, "owner1")
+        r = self._dc(client)
+        assert r.status_code == 502 and r.get_json()["hung_up"] == 1
+        assert app._sip_kick_remaining("N8GMZ") > 0
+
+    def test_listing_failure_keeps_the_hold(self, client, create_user, monkeypatch, _no_kicks):
+        self._setup(monkeypatch, hung=0, found=0, error="could not list channels")
+        create_user("owner1", role="owner")
+        _login(client, "owner1")
+        assert self._dc(client).status_code == 502
+        assert app._sip_kick_remaining("N8GMZ") > 0
 
     def test_unprovisioned_callsign_is_still_invalid(self, client, create_user, monkeypatch, _no_kicks):
         calls = self._setup(monkeypatch)

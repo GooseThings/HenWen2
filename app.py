@@ -2668,6 +2668,10 @@ class AMIClient:
         self.secret  = secret
         self.timeout = timeout
         self._sock   = None
+        # Bytes that arrived in the same read as the Login reply but after
+        # it. Always "" for an Events: off connection; an events-on reader
+        # (_sip_keyed_event_loop) must start from these or it loses events.
+        self.login_leftover = ""
 
     # ── low-level I/O ────────────────────────────────────────────────────────
 
@@ -2772,12 +2776,16 @@ class AMIClient:
         resp_raw = self._recv_until("\r\n\r\n", timeout=self.timeout)
         log("DEBUG", f"[AMI] Login raw response: {resp_raw!r}")
 
-        chunks = [c.strip() for c in resp_raw.split("\r\n\r\n") if c.strip()]
+        parts = resp_raw.split("\r\n\r\n")
         login_response = {}
-        for chunk in chunks:
-            pkt = self._parse_packet(chunk)
+        for i, chunk in enumerate(parts[:-1]):    # the last part is unterminated
+            pkt = self._parse_packet(chunk.strip())
             if "Response" in pkt:
                 login_response = pkt
+                # Everything after the reply, complete events and a partial
+                # one alike, belongs to whoever reads this socket next.
+                self.login_leftover = "\r\n\r\n".join(parts[i + 1:])
+                break
 
         log("DEBUG", f"[AMI] Login response parsed: {login_response}")
 
@@ -9238,15 +9246,23 @@ def _disconnect_sip_listener(local_node, callsign):
     if session.get('role', '') not in ('admin', 'superuser', 'owner'):
         return jsonify({"error": "Only an admin or the owner can disconnect a HenWen listener."}), 403
     by = session.get('username', '?')
-    _sip_kick_hold(callsign, by)
-    n = _sip_hangup_endpoint_channels(sip_identity(callsign)['endpoint'])
-    if not n:
+    _sip_kick_hold(callsign, by)    # before the hangup: the redial is 3s away
+    r = _sip_hangup_endpoint_channels_detail(sip_identity(callsign)['endpoint'])
+    if r["found"] == 0 and not r["error"]:
+        # Definitely no call: nothing to hold off.
         with _sip_kicked_lock:
             _sip_kicked.pop(callsign, None)
         log("WARN", f"[SIP] {by} tried to disconnect listener {callsign} from {local_node}: no live call")
         return jsonify({"error": f"No live call found for {callsign}"}), 404
+    if r["error"]:
+        # Some or all of it failed. The hold stays: any call that did end
+        # must not be redialed, and a retry of the X will re-arm it anyway.
+        log("WARN", f"[SIP] Disconnect of listener {callsign} by {by} incomplete "
+                    f"({r['hung']}/{r['found']} hung up): {r['error']}")
+        return jsonify({"error": f"Disconnect of {callsign} incomplete: {r['error']}",
+                        "hung_up": r["hung"], "found": r["found"]}), 502
     log("INFO", f"[SIP] Listener {callsign} disconnected from {local_node} by {by}")
-    return jsonify({"ok": True, "hung_up": n})
+    return jsonify({"ok": True, "hung_up": r["hung"]})
 
 
 @app.route("/api/status/squash-idle", methods=["POST"])
@@ -16328,38 +16344,55 @@ def _sip_reload_asterisk():
     return True, "; ".join(f"{c}: {' '.join(l)[:60] or 'ok'}" for c, l in outs.items())
 
 
-def _sip_hangup_endpoint_channels(endpoint):
-    """Best-effort hangup of every live channel belonging to one PJSIP
-    endpoint (channel names are PJSIP/<endpoint>-<hex>). Rotating or removing
-    a credential and reloading does not end a call that is already up --
-    Asterisk keeps the channel until it hangs up on its own -- so revocation
-    has to do this explicitly or a revoked account keeps listening (and can
-    keep keying) until it chooses to leave. Returns the number hung up; any
-    failure is logged and swallowed, since this runs inside user-management
-    requests that must still succeed when Asterisk is down."""
+def _sip_hangup_endpoint_channels_detail(endpoint):
+    """Hang up every live channel of one PJSIP endpoint (channel names are
+    PJSIP/<endpoint>-<hex>) and say exactly what happened:
+    {"found": n, "hung": n, "error": str|None}. Each channel is tried on its
+    own, so one failure doesn't hide the ones already hung up. Never
+    raises."""
     prefix = f"PJSIP/{endpoint}-"
+    out = {"found": 0, "hung": 0, "error": None}
     try:
         lines = ami_send_command(lambda ami: {'lines': ami.command(
             'core show channels concise', log_level='DEBUG')}).get('lines', [])
-        chans = [c['name'] for c in _parse_concise_channels(lines)
-                 if c['name'].startswith(prefix)]
-        n = 0
-        for ch in chans:
-            def _hangup(ami, ch=ch):
-                ami._send_action({'Action': 'Hangup', 'Channel': ch})
-                raw = ami._recv_until('\r\n\r\n', timeout=ami.timeout)
-                return ami._parse_packet(raw)
-            pkt = ami_send_command(_hangup)
-            if _classify_hangup_reply(pkt) != 'error':
-                n += 1
-            else:
-                log('WARN', f"[SIP] Hangup of {ch} rejected: {pkt.get('Message', pkt)}")
-        if n:
-            log('INFO', f"[SIP] Hung up {n} live channel(s) for endpoint {endpoint}")
-        return n
     except Exception as e:
-        log('WARN', f"[SIP] Could not hang up channels for {endpoint}: {e}")
-        return 0
+        out["error"] = f"could not list channels: {e}"
+        log('WARN', f"[SIP] Could not list channels for {endpoint}: {e}")
+        return out
+    chans = [c['name'] for c in _parse_concise_channels(lines)
+             if c['name'].startswith(prefix)]
+    out["found"] = len(chans)
+    for ch in chans:
+        def _hangup(ami, ch=ch):
+            ami._send_action({'Action': 'Hangup', 'Channel': ch})
+            raw = ami._recv_until('\r\n\r\n', timeout=ami.timeout)
+            return ami._parse_packet(raw)
+        try:
+            pkt = ami_send_command(_hangup)
+        except Exception as e:
+            out["error"] = f"hangup of {ch} failed: {e}"
+            log('WARN', f"[SIP] Hangup of {ch} failed: {e}")
+            continue
+        if _classify_hangup_reply(pkt) != 'error':
+            out["hung"] += 1
+        else:
+            out["error"] = f"hangup of {ch} rejected: {pkt.get('Message', pkt)}"
+            log('WARN', f"[SIP] Hangup of {ch} rejected: {pkt.get('Message', pkt)}")
+    if out["hung"]:
+        log('INFO', f"[SIP] Hung up {out['hung']} live channel(s) for endpoint {endpoint}")
+    return out
+
+
+def _sip_hangup_endpoint_channels(endpoint):
+    """Best-effort hangup of every live channel belonging to one PJSIP
+    endpoint. Rotating or removing a credential and reloading does not end a
+    call that is already up -- Asterisk keeps the channel until it hangs up
+    on its own -- so revocation has to do this explicitly or a revoked
+    account keeps listening (and can keep keying) until it chooses to leave.
+    Returns the number hung up; failures are logged, never raised, since
+    this runs inside user-management requests that must still succeed when
+    Asterisk is down."""
+    return _sip_hangup_endpoint_channels_detail(endpoint)["hung"]
 
 
 def sip_provision_accounts(reason="", force_reload=False, db=None):
@@ -16696,7 +16729,14 @@ def _sip_keyed_event_loop(stop=None):
             else:
                 log("INFO", "[SIP-KEY] Listening for session DTMF")
             delay, down_since = SIP_KEYED_RETRY_SEC, None
-            sock, buf, last_rx, pinged = ami._sock, "", time.time(), False
+            sock, last_rx, pinged = ami._sock, time.time(), False
+            # Events can arrive in the same read as the Login reply (a *99
+            # pressed during a reconnect); connect() hands them over.
+            packets, buf = _ami_split_packets(ami.login_leftover)
+            for pkt in packets:
+                t = _sip_keyed_handle_event(pkt)
+                if t:
+                    _sip_keyed_log(t)
             sock.settimeout(1.0)
             while not (stop and stop.is_set()):
                 try:
