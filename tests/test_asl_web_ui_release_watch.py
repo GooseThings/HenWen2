@@ -10,14 +10,14 @@ import app
 HAVE_DPKG = shutil.which("dpkg") is not None
 
 
-def _stub(monkeypatch, installed, candidate):
+def _stub(monkeypatch, installed, candidate, apt_rc=0):
     real = app._asl_run
 
     def run(cmd, timeout):
         if cmd[:2] == ["apt-cache", "policy"] and cmd[2:] == [app.ASL_WEB_UI_PKG]:
             out = (f"{app.ASL_WEB_UI_PKG}:\n  Installed: {installed or '(none)'}\n"
-                   f"  Candidate: {candidate or '(none)'}\n")
-            return subprocess.CompletedProcess(cmd, 0, out, "")
+                   f"  Candidate: {candidate or '(none)'}\n") if apt_rc == 0 else ""
+            return subprocess.CompletedProcess(cmd, apt_rc, out, "E: boom" if apt_rc else "")
         if cmd[0] == "dpkg":
             return real(cmd, timeout)
         raise AssertionError(cmd)
@@ -39,6 +39,22 @@ class TestVersions:
     def test_newer_installed_needs_review(self, monkeypatch):
         _stub(monkeypatch, "1.0-2.deb13", "1.0-2.deb13")
         assert app._asl_web_ui_versions()["needs_review"] is True
+
+    def test_pinned_older_candidate_names_the_installed_release(self, monkeypatch):
+        """PR #19 review: with a pin the candidate can be older."""
+        _stub(monkeypatch, "1.2-1.deb13", "1.1-1.deb13")
+        assert app._asl_web_ui_versions()["newest"] == "1.2-1.deb13"
+
+    def test_apt_failure_is_an_error_not_a_no(self, monkeypatch):
+        """PR #19 review: a failed apt-cache must not read as nothing new."""
+        _stub(monkeypatch, None, None, apt_rc=100)
+        with pytest.raises(RuntimeError):
+            app._asl_web_ui_versions()
+
+    def test_dpkg_failure_is_an_error(self, monkeypatch):
+        monkeypatch.setattr(app, "_asl_run", lambda cmd, t: subprocess.CompletedProcess(cmd, 2, "", "bad"))
+        with pytest.raises(RuntimeError):
+            app._deb_version_gt("1", "0")
 
     def test_older_or_absent_does_not(self, monkeypatch):
         _stub(monkeypatch, None, "0.9-1.deb13")

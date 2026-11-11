@@ -13424,11 +13424,13 @@ def _asl_collect_update_info():
 
 
 def _deb_version_gt(a, b):
-    """dpkg's own ordering (epochs, ~, -revisions); False if dpkg can't say."""
-    try:
-        return _asl_run(["dpkg", "--compare-versions", a, "gt", b], 10).returncode == 0
-    except Exception:
-        return False
+    """dpkg's own ordering (epochs, ~, -revisions). Raises if dpkg can't
+    compare them: `--compare-versions` exits 0 (true) or 1 (false), and
+    anything else -- or a timeout -- is a failure, not an answer."""
+    r = _asl_run(["dpkg", "--compare-versions", a, "gt", b], 10)
+    if r.returncode not in (0, 1):
+        raise RuntimeError(f"dpkg --compare-versions failed: {(r.stderr or '').strip()[-200:]}")
+    return r.returncode == 0
 
 
 def _asl_web_ui_versions():
@@ -13436,15 +13438,23 @@ def _asl_web_ui_versions():
     the package lists apt already has. needs_review is True when either the
     installed or the offered version is newer than the one the overlap map
     in docs/ASL-WEB-UI-PLAN.md was written against."""
-    policy = parse_apt_policy(_asl_run(["apt-cache", "policy", ASL_WEB_UI_PKG], 20).stdout)
-    installed, candidate = policy.get(ASL_WEB_UI_PKG, (None, None))
-    newer = [v for v in (installed, candidate)
+    r = _asl_run(["apt-cache", "policy", ASL_WEB_UI_PKG], 20)
+    if r.returncode != 0:
+        # Raised so _asl_check_for_updates() records it as an error rather
+        # than reporting "nothing to review".
+        raise RuntimeError(f"apt-cache policy failed: {(r.stderr or '').strip()[-200:]}")
+    installed, candidate = parse_apt_policy(r.stdout).get(ASL_WEB_UI_PKG, (None, None))
+    newer = [v for v in dict.fromkeys((installed, candidate))
              if v and v != ASL_WEB_UI_REVIEWED_VERSION
              and _deb_version_gt(v, ASL_WEB_UI_REVIEWED_VERSION)]
+    newest = None
+    for v in newer:
+        # An apt pin can make the candidate older than what's installed.
+        if newest is None or _deb_version_gt(v, newest):
+            newest = v
     return {"installed": installed, "candidate": candidate,
             "reviewed": ASL_WEB_UI_REVIEWED_VERSION, "needs_review": bool(newer),
-            # apt's candidate is never older than what's installed.
-            "newest": (candidate if candidate in newer else installed) if newer else None}
+            "newest": newest}
 
 
 def _asl_load_state():

@@ -7511,6 +7511,9 @@ function aslRenderStatus(d) {
       + (w.newest === w.installed ? 'installed' : 'available')
       + '. HenWen\'s map of what it overlaps was written against ' + esc(w.reviewed || '')
       + '; re-check <span class="mono">docs/ASL-WEB-UI-PLAN.md</span> against the new release.';
+  } else if (rev && w.error) {
+    rev.style.display = '';
+    rev.textContent = 'Could not check for a newer ASL Web UI release: ' + w.error;
   } else if (rev) {
     rev.style.display = 'none';
   }
