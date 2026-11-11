@@ -42,9 +42,10 @@ run [HenWen 1.x](https://github.com/GooseThings/HenWen#install).
 ## Status and roadmap
 
 Phases 0-3 are done: per-user SIP accounts, one call for Listen and
-push-to-talk, and listeners shown by callsign. Next is keyed state for
-listeners, then recording and the stream relay on the new audio path. See the
-wiki's [Status](https://github.com/GooseThings/HenWen2/wiki/Status) page.
+push-to-talk, and listeners shown by callsign with a keyed light. Next is
+telling listeners apart from nodes by their live call, then recording and the
+stream relay on the new audio path. See the wiki's
+[Status](https://github.com/GooseThings/HenWen2/wiki/Status) page.
 
 ## Support and contributing
 
