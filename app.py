@@ -140,6 +140,11 @@ HOST            = os.environ.get("HOST",             "0.0.0.0")
 DB_PATH         = os.environ.get("DB_PATH",          "/etc/asterisk/henwen.db")
 AMI_HOST        = os.environ.get("AMI_HOST",         "127.0.0.1")
 AMI_PORT        = int(os.environ.get("AMI_PORT",     5038))
+# HenWen's own manager.conf user, created by ami-setup.sh. Not [admin]: the
+# ASL Web UI's Asterisk > Settings > AMI Secret rewrites exactly [admin] and
+# updates only Allmon3, which would lock HenWen out (docs/ASL-WEB-UI-PLAN.md,
+# hazard 1).
+AMI_DEDICATED_USER = "henwen"
 SERVICE_NAME    = os.environ.get("SERVICE_NAME",     "HenWen")
 # Subdirectory name under Asterisk's sounds dir — single source of truth,
 # used both for SOUNDS_DIR's default and for the "henwen/<slug>" prefix
@@ -2536,6 +2541,47 @@ def api_session():
 # ---------------------------------------------------------------------------
 # AMI credential resolution
 # ---------------------------------------------------------------------------
+def _manager_conf_user(raw: str, name: str):
+    """The secret of manager.conf user [name] (case-insensitive), or None if
+    the stanza is missing, has no secret, or is disabled."""
+    section, secret, enabled = None, None, True
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(";"):
+            continue
+        hdr = re.match(r'^\[([^\]]+)\]', line)
+        if hdr:
+            if section is not None:
+                break
+            if hdr.group(1).strip().lower() == name.lower():
+                section = name
+            continue
+        if section is None or "=" not in line:
+            continue
+        kv = line.split(";", 1)[0]
+        key, val = kv.split("=", 1)[0].strip().lower(), kv.split("=", 1)[1].strip()
+        if key == "secret":
+            secret = val
+        elif key == "enabled":
+            enabled = val.lower() not in ("no", "false", "0")
+    return secret if (secret and enabled) else None
+
+
+def ami_shared_user_warning(user):
+    """A warning when HenWen logs into AMI as the shared [admin] user, else
+    None. The ASL Web UI's AMI Secret page and Allmon3 both own [admin]."""
+    if (user or "").strip().lower() != "admin":
+        return None
+    return ("HenWen logs into AMI as the shared 'admin' user. The ASL Web UI's "
+            "Asterisk > Settings > AMI Secret changes that user's secret and "
+            "only updates Allmon3, which would disconnect HenWen. Run "
+            "ami-setup.sh to give HenWen its own '" + AMI_DEDICATED_USER +
+            "' AMI user.")
+
+
+_ami_shared_user_warned = False
+
+
 def parse_manager_conf():
     """
     Return dict: {user, secret, host, port}.
@@ -2592,7 +2638,14 @@ def parse_manager_conf():
         result["port"] = int(m.group(1))
         log("INFO", f"[AMI-CREDS] AMI port from manager.conf: {result['port']}")
 
-    # Walk stanzas — take the FIRST non-[general] stanza that has a secret
+    # HenWen's own user wins when it exists; it's the one ami-setup.sh writes.
+    dedicated = _manager_conf_user(raw, AMI_DEDICATED_USER)
+    if dedicated:
+        log("INFO", f"[AMI-CREDS] Using manager.conf user: '{AMI_DEDICATED_USER}'")
+        result["user"], result["secret"] = AMI_DEDICATED_USER, dedicated
+        return result
+
+    # Otherwise take the FIRST non-[general] stanza that has a secret
     # and is not explicitly disabled. Do NOT require a write= line.
     current_header  = None
     current_secret  = None
@@ -3096,6 +3149,11 @@ def _ami_ensure_connected() -> AMIClient:
     creds = parse_manager_conf()
     if not creds.get("user") or not creds.get("secret"):
         raise Exception("AMI credentials not configured")
+    global _ami_shared_user_warned
+    warning = ami_shared_user_warning(creds["user"])
+    if warning and not _ami_shared_user_warned:
+        _ami_shared_user_warned = True
+        log("WARN", f"[AMI-CREDS] {warning}")
     client = AMIClient(creds["host"], creds["port"], creds["user"], creds["secret"])
     try:
         client.connect()
@@ -14360,6 +14418,7 @@ def api_ami_test():
         "creds_found": bool(creds.get("user") and creds.get("secret")),
         "connected":   False,
         "error":       None,
+        "warning":     ami_shared_user_warning(creds.get("user")),
     }
     if not result["creds_found"]:
         result["error"] = (

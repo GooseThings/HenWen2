@@ -6,9 +6,14 @@
 # This script:
 #   1. Shows the current manager.conf
 #   2. Tests the AMI connection directly using Python (no app needed)
-#   3. Optionally creates/updates the AMI user entry
+#   3. Creates HenWen's own AMI user, [henwen], if it is missing
 #   4. Updates the HenWen service file to match
 #   5. Reloads Asterisk manager module
+#
+# HenWen used to take the first user in manager.conf, which on ASL3 is
+# [admin]. The ASL Web UI's Asterisk > Settings > AMI Secret rewrites exactly
+# [admin] and updates only Allmon3, so HenWen now has a user of its own and
+# never touches [admin] (docs/ASL-WEB-UI-PLAN.md, hazard 1).
 
 set -e
 
@@ -17,7 +22,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/apache-common.sh"
 
 MANAGER_CONF="/etc/asterisk/manager.conf"
-SERVICE_FILE="/etc/systemd/system/HenWen.service"
+HENWEN_AMI_USER="henwen"
+# HenWen 2.0 installs as HenWen2; 1.x as HenWen. HENWEN_SERVICE overrides.
+if [ -n "${HENWEN_SERVICE:-}" ]; then
+    SERVICE_NAME="$HENWEN_SERVICE"
+elif [ -f /etc/systemd/system/HenWen2.service ]; then
+    SERVICE_NAME="HenWen2"
+else
+    SERVICE_NAME="HenWen"
+fi
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 AMI_PORT=5038
 AMI_HOST="127.0.0.1"
 
@@ -62,8 +76,9 @@ echo ""
 echo -e "${CYAN}[3/5] Parsing AMI credentials from manager.conf...${NC}"
 
 # Use Python to parse it reliably
-AMI_INFO=$(python3 - <<'PYEOF'
+AMI_INFO=$(python3 - "$HENWEN_AMI_USER" <<'PYEOF'
 import re, sys
+want = sys.argv[1].lower()
 
 conf = open('/etc/asterisk/manager.conf').read()
 
@@ -79,32 +94,27 @@ print("ENABLED=yes")
 m = re.search(r'^\s*port\s*=\s*(\d+)', conf, re.MULTILINE)
 print("PORT=" + (m.group(1) if m else "5038"))
 
-# Find first non-general user with a secret
+# HenWen's own user only. The secret is eval'd and sed'd into the unit
+# file, so only a conservative character set is accepted; anything else is
+# reported as unusable rather than guessed at.
 current_header = None
-current_secret = None
-
+secret = None
 for line in conf.splitlines():
     line = line.strip()
     if not line or line.startswith(';'):
         continue
     hdr = re.match(r'^\[([^\]]+)\]', line)
     if hdr:
-        if current_header and current_header.lower() != 'general' and current_secret:
-            print("USER=" + current_header)
-            print("SECRET=" + current_secret)
-            import sys; sys.exit(0)
-        current_header = hdr.group(1).strip()
-        current_secret = None
+        current_header = hdr.group(1).strip().lower()
         continue
-    if '=' in line and not line.startswith(';'):
-        k = line.split('=',1)[0].strip().split(';')[0].strip().lower()
+    if current_header == want and '=' in line:
+        k = line.split('=',1)[0].strip().lower()
         v = line.split('=',1)[1].split(';')[0].strip()
-        if k == 'secret':
-            current_secret = v
-
-if current_header and current_header.lower() != 'general' and current_secret:
-    print("USER=" + current_header)
-    print("SECRET=" + current_secret)
+        if k == 'secret' and re.fullmatch(r'[A-Za-z0-9_.@+-]+', v):
+            secret = v
+print("HAVE_STANZA=" + ("yes" if re.search(r'^\s*\[' + re.escape(want) + r'\]', conf, re.MULTILINE | re.IGNORECASE) else "no"))
+if secret:
+    print("SECRET='" + secret + "'")
 PYEOF
 )
 
@@ -116,39 +126,41 @@ if [ "${ENABLED:-yes}" = "no" ]; then
     exit 1
 fi
 
+USER="$HENWEN_AMI_USER"
 echo "  AMI port:  ${PORT:-5038}"
-echo "  AMI user:  ${USER:-(none found)}"
-echo "  AMI secret: ${SECRET:+(set)}"
+echo "  AMI user:  $USER"
+if [ -n "$SECRET" ]; then echo "  AMI secret: (set)"; else echo "  AMI secret: (none yet)"; fi
 
-if [ -z "$USER" ] || [ -z "$SECRET" ]; then
-    echo ""
-    echo -e "  ${YELLOW}No valid AMI user found in manager.conf.${NC}"
-    echo "  A user stanza with 'secret = ...' is required."
-    echo ""
-    read -p "  Create an AMI user now? [Y/n]: " CREATE_USER
-    CREATE_USER="${CREATE_USER:-Y}"
-    if [[ "$CREATE_USER" =~ ^[Yy] ]]; then
-        read -p "  AMI username [admin]: " NEW_USER
-        NEW_USER="${NEW_USER:-admin}"
-        # Generate a random secret
-        NEW_SECRET=$(python3 -c "import secrets,string; print(''.join(secrets.choices(string.ascii_letters+string.digits,k=16)))")
-        echo ""
-        echo "  Adding [$NEW_USER] with secret=$NEW_SECRET to manager.conf..."
-        cat >> "$MANAGER_CONF" << AMIEOF
+if [ "${HAVE_STANZA:-no}" = "yes" ] && [ -z "$SECRET" ]; then
+    echo -e "  ${RED}[$USER] exists in manager.conf but has no usable secret.${NC}"
+    echo "  Give it a secret of letters, digits and _.@+- only, or delete the"
+    echo "  stanza,"
+    echo "  and re-run this script."
+    exit 1
+fi
 
-[$NEW_USER]
-secret = $NEW_SECRET
+if [ -z "$SECRET" ]; then
+    # No prompt: install.sh runs this unattended, and the name is fixed.
+    SECRET=$(python3 -c "import secrets,string; print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(32)))")
+    BACKUP="${MANAGER_CONF}.henwen-$(date +%Y%m%d-%H%M%S)"
+    cp -p "$MANAGER_CONF" "$BACKUP"
+    echo ""
+    echo "  Adding HenWen's own AMI user [$USER] to manager.conf"
+    echo "  (backup: $BACKUP). [admin] and any other user are left alone."
+    cat >> "$MANAGER_CONF" << AMIEOF
+
+; HenWen's own AMI user, added by HenWen's ami-setup.sh. Kept separate from
+; [admin], whose secret the ASL Web UI and Allmon3 manage.
+[$USER]
+secret = $SECRET
 read = system,call,log,verbose,command,agent,user,config,dtmf,reporting,cdr,dialplan
 write = system,call,log,verbose,command,agent,user,config,dtmf,reporting,cdr,dialplan
-permit = 127.0.0.1/255.255.255.0
+deny = 0.0.0.0/0.0.0.0
+permit = 127.0.0.1/255.255.255.255
 AMIEOF
-        USER="$NEW_USER"
-        SECRET="$NEW_SECRET"
-        echo -e "  ${GREEN}Added AMI user '$USER' to manager.conf.${NC}"
-    else
-        echo "  Aborting. Add a user manually and re-run."
-        exit 1
-    fi
+    echo -e "  ${GREEN}Added AMI user '$USER'.${NC}"
+    asterisk -rx "module reload manager" >/dev/null 2>&1 || true
+    sleep 1
 fi
 
 # ── Test AMI connection directly ──────────────────────────────────────────────
@@ -285,7 +297,7 @@ esac
 
 # ── Update service file ───────────────────────────────────────────────────────
 echo ""
-echo -e "${CYAN}[5/5] Updating HenWen service file...${NC}"
+echo -e "${CYAN}[5/5] Updating the $SERVICE_NAME service file...${NC}"
 
 if [ ! -f "$SERVICE_FILE" ]; then
     echo "  Service file not found at $SERVICE_FILE"
@@ -305,16 +317,16 @@ else
 
     systemctl daemon-reload
 
-    if systemctl is-active --quiet HenWen 2>/dev/null; then
-        systemctl restart HenWen
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        systemctl restart "$SERVICE_NAME"
         sleep 1
-        if systemctl is-active --quiet HenWen; then
-            echo -e "  ${GREEN}HenWen service updated and restarted successfully.${NC}"
+        if systemctl is-active --quiet "$SERVICE_NAME"; then
+            echo -e "  ${GREEN}$SERVICE_NAME service updated and restarted successfully.${NC}"
         else
-            echo -e "  ${YELLOW}Service restart may have failed. Check: journalctl -u HenWen -n 20${NC}"
+            echo -e "  ${YELLOW}Service restart may have failed. Check: journalctl -u $SERVICE_NAME -n 20${NC}"
         fi
     else
-        echo "  HenWen service not currently running. Start with: sudo systemctl start HenWen"
+        echo "  $SERVICE_NAME service not currently running. Start with: sudo systemctl start $SERVICE_NAME"
     fi
 fi
 

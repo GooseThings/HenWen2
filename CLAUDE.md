@@ -119,7 +119,7 @@ The update bar's "Launch Updater" button (`/api/update/launch`, superuser only) 
 
 ### AMI connection
 
-`AMIClient` (class in app.py ~line 915) is a raw TCP socket client to Asterisk Manager Interface on port 5038. It is a persistent connection managed by `_poll_loop`. Routes read from the AMI cache (`get_cached_status()`) rather than issuing live AMI commands — this makes most status reads sub-millisecond. Commands that must be sent live (connect/disconnect, restart, etc.) use `ami_send_command()`.
+`AMIClient` (class in app.py ~line 915) is a raw TCP socket client to Asterisk Manager Interface on port 5038. It is a persistent connection managed by `_poll_loop`. It logs in as HenWen's own `[henwen]` manager.conf user (`AMI_DEDICATED_USER`, created by `ami-setup.sh`; `parse_manager_conf()` prefers it over the first stanza), never `[admin]`: the ASL Web UI's AMI Secret page rewrites exactly `[admin]` and updates only Allmon3. A box still on `admin` gets a one-time WARN and a warning on Manager > AMI Diagnostics (`ami_shared_user_warning()`). Routes read from the AMI cache (`get_cached_status()`) rather than issuing live AMI commands — this makes most status reads sub-millisecond. Commands that must be sent live (connect/disconnect, restart, etc.) use `ami_send_command()`.
 
 ### Smart Connector
 

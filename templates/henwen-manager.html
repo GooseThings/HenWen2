@@ -6039,7 +6039,8 @@ async function testAMI() {
   if (r.ok && r.data.connected) {
     el.innerHTML = '<div class="alert alert-success">AMI connected as <strong>'
       + esc(r.data.ami_user) + '</strong> at ' + esc(r.data.ami_host || '')
-      + (r.data.asterisk_info ? '<br>' + esc(r.data.asterisk_info) : '') + '</div>';
+      + (r.data.asterisk_info ? '<br>' + esc(r.data.asterisk_info) : '') + '</div>'
+      + (r.data.warning ? '<div class="alert alert-warn">' + esc(r.data.warning) + '</div>' : '');
     log('AMI test PASSED.', 'OK');
   } else {
     var err = r.data.error || 'Unknown error';
