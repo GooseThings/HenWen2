@@ -39,10 +39,17 @@ run [HenWen 1.x](https://github.com/GooseThings/HenWen#install).
 - [`docs/HENWEN2-PLAYBOOK.md`](docs/HENWEN2-PLAYBOOK.md) — plan, phase status, decisions
 - [HenWen 1.x wiki](https://github.com/GooseThings/HenWen/wiki) — everything shared with 1.x (install, features, troubleshooting)
 
-## Contributing
+## Status and roadmap
 
-Issues and pull requests welcome: [issues](https://github.com/GooseThings/HenWen2/issues).
-See [CHANGELOG.md](CHANGELOG.md).
+Phases 0-3 are done: per-user SIP accounts, one call for Listen and
+push-to-talk, and listeners shown by callsign. Next is keyed state for
+listeners, then recording and the stream relay on the new audio path. See the
+wiki's [Status](https://github.com/GooseThings/HenWen2/wiki/Status) page.
+
+## Support and contributing
+
+Questions and bug reports go to [issues](https://github.com/GooseThings/HenWen2/issues);
+pull requests are welcome. Maintained by N8GMZ. See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
