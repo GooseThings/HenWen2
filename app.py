@@ -20460,8 +20460,13 @@ def _node_drift_provision_sip(reason):
     global _node_drift_sip_error
     prov = sip_provision_accounts(reason, force_reload=True)
     ok = bool(prov.get("ok")) and (bool(prov.get("reloaded")) or not prov.get("included"))
-    _node_drift_sip_error = None if ok else (prov.get("error") or prov.get("detail")
-                                             or "SIP reload failed")
+    if not ok:
+        # The detail can carry exception text; it goes to the journal, and
+        # the client gets a fixed message (CodeQL py/stack-trace-exposure).
+        log("WARN", f"[NODE-DRIFT] SIP re-provisioning after a re-point did not finish: "
+                    f"{prov.get('error') or prov.get('detail')}")
+    _node_drift_sip_error = None if ok else (
+        "Asterisk did not reload the per-user SIP files; see the HenWen journal for why")
     return {"node": prov.get("node"), "ok": ok, "reloaded": bool(prov.get("reloaded")),
             "error": _node_drift_sip_error}
 

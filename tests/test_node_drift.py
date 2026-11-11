@@ -187,8 +187,10 @@ def test_sip_reload_failure_is_kept_and_retryable(admin, monkeypatch):
     monkeypatch.setattr(app, "sip_provision_accounts", lambda reason, force_reload=False: results.pop(0))
     monkeypatch.setattr(app, "_node_drift_sip_error", None)
     r = client.post("/api/node-drift/repoint", json={"from": "643930", "to": "643931"}).get_json()
-    assert r["sip"] == {"node": "643931", "ok": False, "reloaded": False, "error": "AMI down"}
-    assert client.get("/api/node-drift").get_json()["sip_reload_error"] == "AMI down"
+    assert r["sip"]["ok"] is False and r["sip"]["node"] == "643931"
+    # Fixed text, never the underlying error (CodeQL py/stack-trace-exposure).
+    assert "AMI down" not in r["sip"]["error"] and "journal" in r["sip"]["error"]
+    assert client.get("/api/node-drift").get_json()["sip_reload_error"] == r["sip"]["error"]
     retry = client.post("/api/node-drift/sip-reload").get_json()
     assert retry["ok"] is True
     assert client.get("/api/node-drift").get_json()["sip_reload_error"] is None
