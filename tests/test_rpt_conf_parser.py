@@ -162,88 +162,8 @@ class TestUpdateSettingInContent:
         assert app._parse_kv_lines(stanzas["b"]["lines"])["foo"]["value"] == "1"
 
 
-class TestFindKeyTypos:
-    def test_flags_totimer_as_likely_totime(self):
-        """issue #117: 'totimer = 300000' (an extra trailing 'r') is not a
-        real app_rpt directive, so Asterisk silently ignores it -- the node
-        keeps whatever totime it inherits/defaults to, with no indication
-        anywhere that the override the owner thinks is active isn't."""
-        settings = app.parse_stanza_settings(
-            "[628280](node-main)\ntotimer = 300000\n", "628280")
-        warnings = app.find_key_typos(settings)
-        assert warnings == [{"key": "totimer", "value": "300000", "likely": "totime"}]
-
-    def test_recognized_key_is_not_flagged(self):
-        settings = app.parse_stanza_settings("[x]\ntotime = 180000\n", "x")
-        assert app.find_key_typos(settings) == []
-
-    def test_commented_unknown_key_is_not_flagged(self):
-        # A disabled/commented line has no effect on Asterisk either way,
-        # so there's nothing here to silently be going wrong.
-        settings = app.parse_stanza_settings("[x]\n;totimer = 300000\n", "x")
-        assert app.find_key_typos(settings) == []
-
-    def test_unrelated_unknown_key_is_not_flagged(self):
-        # SETTINGS_SCHEMA isn't an exhaustive list of every valid app_rpt
-        # directive, so a key that isn't a close match to anything known
-        # must not be flagged as a typo.
-        settings = app.parse_stanza_settings("[x]\nsome_custom_directive = 1\n", "x")
-        assert app.find_key_typos(settings) == []
 
 
-class TestValidateSetting:
-    def test_unknown_key_always_passes(self):
-        assert app.validate_setting("some_totally_unknown_key", "anything") is None
-
-    def test_enum_rejects_out_of_range(self):
-        assert app.validate_setting("duplex", "9") is not None
-        assert app.validate_setting("duplex", "2") is None
-
-    def test_boolean_accepts_documented_values(self):
-        for v in ["0", "1", "yes", "no", "true", "FALSE", "on", "Off"]:
-            assert app.validate_setting("linktolink", v) is None
-        assert app.validate_setting("linktolink", "maybe") is not None
-
-    def test_number_enforces_min_and_max(self):
-        assert app.validate_setting("idtime", "-1") is not None
-        assert app.validate_setting("idtime", "3000000") is not None
-        assert app.validate_setting("idtime", "300") is None
-
-    def test_number_rejects_non_numeric(self):
-        assert app.validate_setting("idtime", "abc") is not None
-
-    def test_nonempty_type_rejects_blank(self):
-        assert app.validate_setting("rxchannel", "") is not None
-
-    def test_blank_ok_for_freeform_and_enum_and_number(self):
-        assert app.validate_setting("callerid", "") is None
-        assert app.validate_setting("duplex", "") is None
-        assert app.validate_setting("idtime", "") is None
-
-    def test_id_sound_accepts_cw_format(self):
-        assert app.validate_setting("idrecording", "|iN8GMZ") is None
-        assert app.validate_setting("idrecording", "|i") is not None
-        assert app.validate_setting("idrecording", "|iBAD$CALL") is not None
-
-    def test_id_sound_accepts_plain_filename(self):
-        assert app.validate_setting("idrecording", "henwen/my-id") is None
-        assert app.validate_setting("idrecording", "bad name with spaces") is not None
-
-    def test_dtmf_char_must_be_single_character(self):
-        assert app.validate_setting("funcchar", "*") is None
-        assert app.validate_setting("funcchar", "**") is not None
-
-    def test_identifier_rejects_spaces(self):
-        assert app.validate_setting("context", "radio-context") is None
-        assert app.validate_setting("context", "bad context") is not None
-
-    def test_notch_requires_freq_bandwidth_pairs(self):
-        assert app.validate_setting("rxnotch", "1065,40") is None
-        assert app.validate_setting("rxnotch", "1065") is not None
-
-    def test_url_requires_scheme(self):
-        assert app.validate_setting("statpost_url", "https://example.com/post") is None
-        assert app.validate_setting("statpost_url", "ftp://example.com") is not None
 
 
 class TestValidateMacroAndSchedule:

@@ -612,20 +612,7 @@ input:checked + .slider::before  { transform: translateX(16px); background: var(
 #update-bar.show { display: flex; }
 #asl-web-ui-scope-bar:empty { display: none; }
 .asl-overlap { margin: 4px 0 14px; }
-/* W2 handover: the editors stay visible for reference but can't be changed
-   (_aslMakeReadOnly disables the controls; this only dims them). */
-.asl-readonly .val-input, .asl-readonly .switch { opacity: 0.55; }
-.asl-readonly [onclick^="backupRestore"],
-#page-raw-editor.asl-readonly .btn-success { display: none; }
 
-.asl-log { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; font-family: var(--mono); font-size: 0.8rem; line-height: 1.45; height: 380px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
-.asl-log div { padding: 0 2px; }
-.asl-log .asl-l-warn  { color: var(--warn);   background: rgba(210,153,34,0.08); }
-.asl-log .asl-l-error { color: var(--danger); background: rgba(248,81,73,0.09); font-weight: 600; }
-.asl-log .asl-l-ok    { color: var(--green);  font-weight: 600; }
-.asl-log.asl-only-issues .asl-l-info { display: none; }
-.asl-mon { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 4px 0 14px; align-items: center; }
-.asl-mon span.k { color: var(--text2); font-size: 0.78rem; margin-right: 5px; }
 .nav-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); margin-left: 6px; vertical-align: middle; }
 pre.codeblock { background: var(--bg3); padding: 12px; border-radius: 4px; font-size: 0.84rem; overflow-x: auto; font-family: var(--mono); white-space: pre; margin-bottom: 12px; }
 
@@ -706,19 +693,7 @@ pre.codeblock { background: var(--bg3); padding: 12px; border-radius: 4px; font-
     <button class="nav-item" onclick="showPage('ami-diag')">AMI Diagnostics</button>
     <button class="nav-item" onclick="showPage('tx-diag')">TX Diagnostics</button>
     <button class="nav-item" onclick="showPage('rx-diag')">RX Diagnostics</button>
-    <button class="nav-item" id="nav-ast-console" onclick="showPage('ast-console')">Asterisk Console</button>
     <button class="nav-item" id="nav-stress-test" onclick="showPage('stress-test')">Stress Test</button>
-
-    <div class="nav-section">rpt.conf Editor</div>
-    <button class="nav-item" onclick="showPage('general')">General Settings</button>
-    {% for node in nodes %}
-    <button class="nav-item" onclick="showPage('node-{{ node }}')">Node {{ node }}</button>
-    {% endfor %}
-    {% for tmpl in templates %}
-    <button class="nav-item" onclick="showPage('template-{{ tmpl }}')">{{ 'Global Settings' if tmpl == 'node-main' else tmpl }}</button>
-    {% endfor %}
-    <button class="nav-item" id="nav-raw-editor" onclick="showPage('raw-editor')">Raw Editor</button>
-    <button class="nav-item" onclick="showPage('backups')">Backups</button>
 
     {% if macros or schedules %}
     <div class="nav-section">Macros &amp; Scheduling</div>
@@ -1009,40 +984,6 @@ pre.codeblock { background: var(--bg3); padding: 12px; border-radius: 4px; font-
     </div>
   </section>
 
-  <!-- General Settings -->
-  <section class="page" id="page-general">
-    <div class="page-title">General Settings</div>
-    <div class="page-sub">Edit the <span class="mono">[general]</span> stanza of rpt.conf.
-      <button class="help-icon" onclick="showToggleHelp()" title="What does the switch next to each setting do?">?</button>
-    </div>
-    <div id="general-content"><div class="muted">Loading...</div></div>
-  </section>
-
-  <!-- Per-node pages -->
-  {% for node in nodes %}
-  <section class="page" id="page-node-{{ node }}">
-    <div class="page-title">Node {{ node }}</div>
-    <div class="page-sub">Settings for stanza <span class="mono">[{{ node }}]</span>
-      <button class="help-icon" onclick="showToggleHelp()" title="What does the switch next to each setting do?">?</button>
-    </div>
-    <div id="node-content-{{ node }}"><div class="muted">Loading...</div></div>
-  </section>
-  {% endfor %}
-
-  <!-- Global template pages -->
-  {% for tmpl in templates %}
-  <section class="page" id="page-template-{{ tmpl }}">
-    <div class="page-title">{{ 'Global Settings' if tmpl == 'node-main' else 'Global: ' ~ tmpl }}</div>
-    <div class="page-sub">
-      Editing stanza <span class="mono">[{{ tmpl }}](!)</span> &mdash; changes here apply to
-      every node using this template.
-      <button class="help-icon" onclick="showToggleHelp()" title="What does the switch next to each setting do?">?</button>
-    </div>
-    <div class="alert alert-warn" id="template-used-by-{{ tmpl }}" style="margin-bottom:16px">Loading...</div>
-    <div id="template-content-{{ tmpl }}"><div class="muted">Loading...</div></div>
-  </section>
-  {% endfor %}
-
   <!-- Macro pages -->
   {% for m in macros %}
   <section class="page" id="page-macro-{{ m }}">
@@ -1133,46 +1074,7 @@ pre.codeblock { background: var(--bg3); padding: 12px; border-radius: 4px; font-
   </section>
   {% endfor %}
 
-  <!-- Raw Editor -->
-  <section class="page" id="page-raw-editor">
-    <div class="page-title">Raw Editor</div>
-    <div class="page-sub">Edit rpt.conf as plain text. A backup is created on every save.</div>
-    <div class="card">
-      <div class="card-header">
-        <h2>{{ conf_path }}</h2>
-        <div class="btn-row">
-          <button class="btn btn-success" onclick="rawSave()">Save</button>
-          <button class="btn" onclick="rawLoad()">Reload from Disk</button>
-        </div>
-      </div>
-      <div class="card-body">
-        <div id="raw-alert"></div>
-        <textarea id="raw-ta" spellcheck="false" rows="32" style="width:100%;font-family:var(--mono);font-size:0.88rem"></textarea>
-      </div>
-    </div>
-  </section>
 
-  <!-- Backups -->
-  <section class="page" id="page-backups">
-    <div class="page-title">Backups</div>
-    <div class="page-sub">Automatic timestamped backups of rpt.conf, created on every save.</div>
-    <div class="card">
-      <div class="card-header">
-        <h2>Available Backups</h2>
-        <button class="btn btn-sm" onclick="loadBackups()">Refresh</button>
-      </div>
-      <div class="card-body" id="backup-list"><span class="muted">Loading…</span></div>
-    </div>
-    <div class="card" id="backup-diff-card" style="display:none">
-      <div class="card-header">
-        <h2 id="backup-diff-title">Diff</h2>
-        <button class="btn btn-sm" onclick="document.getElementById('backup-diff-card').style.display='none'">Close</button>
-      </div>
-      <div class="card-body">
-        <pre id="backup-diff-pre" style="font-size:0.8rem;overflow-x:auto;margin:0;white-space:pre-wrap;word-break:break-all"></pre>
-      </div>
-    </div>
-  </section>
 
   <!-- Connection History -->
   <section class="page" id="page-conn-history">
@@ -2342,162 +2244,6 @@ sudo bash /opt/HenWen/tx-spike/setup-https.sh --http-only              # frontin
     </div>
   </section>
 
-  <!-- Asterisk Console -->
-  <section class="page" id="page-ast-console">
-    <div class="page-title">Asterisk Console</div>
-    <div class="page-sub">View the Asterisk log and control verbosity — equivalent to <span class="mono">asterisk -rvvv</span>.</div>
-
-    <div class="card">
-      <div class="card-header"><h2>CLI</h2></div>
-      <div class="card-body">
-        <p style="margin-bottom:10px;color:var(--text2);font-size:0.9rem">Run any Asterisk CLI command via AMI. Output appears below. Use ↑ / ↓ to navigate history.</p>
-        <div style="display:flex;gap:8px;margin-bottom:10px">
-          <input type="text" id="ast-cmd-input" placeholder="e.g. rpt show nodes" style="flex:1;font-family:var(--mono)"
-            onkeydown="astCmdKey(event)">
-          <button class="btn btn-primary" onclick="astRunCmd()">Run</button>
-          <button class="btn btn-sm" onclick="document.getElementById('ast-cmd-out').innerHTML='';document.getElementById('ast-cmd-input').value=''">Clear</button>
-        </div>
-        <div id="ast-cmd-out" class="log-panel" style="min-height:80px;max-height:320px;overflow-y:auto"></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header"><h2>Command Reference</h2></div>
-      <div class="card-body" style="padding-top:8px">
-
-        <details style="margin-bottom:6px">
-          <summary style="cursor:pointer;font-weight:600;padding:6px 0">Core</summary>
-          <table class="tbl" style="margin-top:6px">
-            <thead><tr><th>Command</th><th>Description</th></tr></thead>
-            <tbody>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">core show version</span></td><td>Asterisk build and version string</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">core show uptime</span></td><td>How long Asterisk has been running</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">core show channels</span></td><td>Active channels and their states</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">core show calls</span></td><td>Current call count and processed totals</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">core show settings</span></td><td>Global Asterisk configuration settings</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">core set verbose 3</span></td><td>Set console verbosity (0–9; 3 = <code>-vvv</code>)</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">core set debug 0</span></td><td>Set debug level (0 = off)</td></tr>
-            </tbody>
-          </table>
-        </details>
-
-        <details style="margin-bottom:6px">
-          <summary style="cursor:pointer;font-weight:600;padding:6px 0">RPT / ASL3</summary>
-          <table class="tbl" style="margin-top:6px">
-            <thead><tr><th>Command</th><th>Description</th></tr></thead>
-            <tbody>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">rpt show nodes</span></td><td>All configured RPT nodes and their current state</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">rpt show variables &lt;node&gt;</span></td><td>Node variables: keyed state, DTMF, link flags</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">rpt lstats &lt;node&gt;</span></td><td>Linked nodes and connection stats for a node</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">rpt stats &lt;node&gt;</span></td><td>Full RPT statistics for a node</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">rpt restart</span></td><td>Reload rpt.conf without restarting Asterisk</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">rpt cmd &lt;node&gt; ilink 3 &lt;remote&gt;</span></td><td>Connect remote node (transceive)</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">rpt cmd &lt;node&gt; ilink 1 &lt;remote&gt;</span></td><td>Disconnect a specific remote node</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">rpt cmd &lt;node&gt; ilink 6</span></td><td>Disconnect all linked nodes</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">rpt cmd &lt;node&gt; status 1</span></td><td>Force station ID (this is "status", not "cop")</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">rpt cmd &lt;node&gt; cop 13</span></td><td>Query system state (harmless status report)</td></tr>
-              <tr><td class="muted">rpt cmd &lt;node&gt; cop 1</td><td class="muted">Do not use — this is <code>killall -9 asterisk</code> in app_rpt, not a status command. It hard-kills the whole process.</td></tr>
-            </tbody>
-          </table>
-        </details>
-
-        <details style="margin-bottom:6px">
-          <summary style="cursor:pointer;font-weight:600;padding:6px 0">Logger</summary>
-          <table class="tbl" style="margin-top:6px">
-            <thead><tr><th>Command</th><th>Description</th></tr></thead>
-            <tbody>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">logger show channels</span></td><td>Active log channels and their levels</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">logger rotate</span></td><td>Rotate log files now</td></tr>
-            </tbody>
-          </table>
-        </details>
-
-        <details style="margin-bottom:6px">
-          <summary style="cursor:pointer;font-weight:600;padding:6px 0">Modules</summary>
-          <table class="tbl" style="margin-top:6px">
-            <thead><tr><th>Command</th><th>Description</th></tr></thead>
-            <tbody>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">module show</span></td><td>All loaded modules</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">module show like rpt</span></td><td>Modules matching "rpt"</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">module show like manager</span></td><td>AMI manager module info</td></tr>
-            </tbody>
-          </table>
-        </details>
-
-        <details style="margin-bottom:6px">
-          <summary style="cursor:pointer;font-weight:600;padding:6px 0">Manager / AMI</summary>
-          <table class="tbl" style="margin-top:6px">
-            <thead><tr><th>Command</th><th>Description</th></tr></thead>
-            <tbody>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">manager show connected</span></td><td>Currently connected AMI sessions</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">manager show users</span></td><td>Configured AMI users and their permissions</td></tr>
-            </tbody>
-          </table>
-        </details>
-
-        <details>
-          <summary style="cursor:pointer;font-weight:600;padding:6px 0">SIP / PJSIP</summary>
-          <table class="tbl" style="margin-top:6px">
-            <thead><tr><th>Command</th><th>Description</th></tr></thead>
-            <tbody>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">pjsip show endpoints</span></td><td>Configured PJSIP endpoints</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">pjsip show registrations</span></td><td>Active PJSIP registrations</td></tr>
-              <tr><td><span class="mono ast-cmd-ref" onclick="astUseCmd(this)">pjsip show contacts</span></td><td>Registered PJSIP contacts</td></tr>
-            </tbody>
-          </table>
-        </details>
-
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <h2>Verbosity Level</h2>
-      </div>
-      <div class="card-body">
-        <p style="margin-bottom:12px;color:var(--text2);font-size:0.9rem">
-          Sets how much detail Asterisk writes to its log file. Level 0 = silent, 3 = normal verbose
-          (<span class="mono">-vvv</span>), 5 = very detailed. Changes take effect immediately without a restart.
-        </p>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <label class="form-label" style="margin:0">Verbose level:</label>
-          <select id="ast-verbose-level" style="width:auto">
-            <option value="0">0 — silent</option>
-            <option value="1">1 — minimal</option>
-            <option value="2">2 — normal</option>
-            <option value="3" selected>3 — verbose (-vvv)</option>
-            <option value="4">4 — more verbose (-vvvv)</option>
-            <option value="5">5 — very verbose (-vvvvv)</option>
-          </select>
-          <button class="btn btn-primary" onclick="astSetVerbose()">Set Verbosity</button>
-          <span id="ast-verbose-result" style="font-size:0.85rem"></span>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header"><h2>Asterisk Log</h2>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <select id="ast-log-lines" style="width:auto">
-            <option value="50">50 lines</option>
-            <option value="100" selected>100 lines</option>
-            <option value="250">250 lines</option>
-            <option value="500">500 lines</option>
-            <option value="1000">1000 lines</option>
-          </select>
-          <input type="text" id="ast-log-filter" placeholder="filter text..." style="width:160px">
-          <button class="btn btn-primary btn-sm" onclick="astFetchLog()">Fetch Log</button>
-          <button class="btn btn-sm" onclick="astClearLog()">Clear</button>
-          <button class="btn btn-sm" id="ast-recall-btn" onclick="astRecallLog()" style="display:none">Recall</button>
-          <label style="display:flex;align-items:center;gap:5px;font-size:0.85rem;cursor:pointer;margin:0">
-            <input type="checkbox" id="ast-auto-refresh" style="width:auto" onchange="astToggleAutoRefresh()">
-            Auto-refresh (5s)
-          </label>
-        </div>
-      </div>
-      <div class="log-panel" id="ast-log" style="height:500px;overflow-y:auto"></div>
-    </div>
-  </section>
 
   <!-- DTMF Control -->
   <section class="page" id="page-dtmf">
@@ -2874,14 +2620,15 @@ sudo bash /opt/HenWen/tx-spike/setup-https.sh --http-only              # frontin
   <!-- Asterisk Updates (owner only) -->
   <section class="page" id="page-asl-update">
     <div class="page-title">Asterisk Updates</div>
-    <div class="page-sub">Checks once a week for newer AllStarLink Asterisk packages and installs them when you say so.</div>
+    <div class="page-sub">Checks once a week for newer AllStarLink Asterisk packages. Install them with
+      Cockpit's <strong>Software Updates</strong> page (port 9090), which the ASL Web UI's Diagnostics page
+      links to, or with <span class="mono">apt</span>.</div>
 
     <div class="card">
       <div class="card-header">
         <h2>Package Status</h2>
         <div class="btn-row">
           <button class="btn btn-sm" id="asl-check-btn" onclick="aslUpdateCheck()">Check Now</button>
-          <button class="btn btn-sm btn-primary" id="asl-install-btn" onclick="aslUpdateInstall()" disabled>Install Update</button>
         </div>
       </div>
       <div class="card-body">
@@ -2893,37 +2640,11 @@ sudo bash /opt/HenWen/tx-spike/setup-https.sh --http-only              # frontin
         </table>
         <p class="muted" style="margin-top:10px">
           Installing restarts Asterisk: every link drops and any transmission in progress ends,
-          usually for under a minute. Your config files are kept as they are, and
-          <code>/etc/asterisk</code> is backed up first. HenWen itself is not restarted.
+          usually for under a minute. HenWen itself is not restarted.
         </p>
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-header">
-        <h2>Live Log</h2>
-        <div class="btn-row">
-          <label class="muted" style="display:flex;align-items:center;gap:6px">
-            <input type="checkbox" id="asl-only-issues" onchange="aslToggleIssuesOnly()"> Warnings &amp; errors only
-          </label>
-        </div>
-      </div>
-      <div class="card-body">
-        <div class="asl-mon" id="asl-mon">
-          <span><span class="k">Run</span><span class="badge badge-unk" id="asl-mon-run">idle</span></span>
-          <span><span class="k">Asterisk</span><span class="badge badge-unk" id="asl-mon-ast">&hellip;</span></span>
-          <span><span class="k">AMI</span><span class="badge badge-unk" id="asl-mon-ami">&hellip;</span></span>
-          <span><span class="k">Links</span><span id="asl-mon-links">&hellip;</span></span>
-          <span><span class="k">Warnings</span><span class="badge badge-unk" id="asl-mon-warns">0</span></span>
-          <span><span class="k">Errors</span><span class="badge badge-unk" id="asl-mon-errs">0</span></span>
-        </div>
-        <div class="asl-log" id="asl-log"><div class="muted">No update has been run yet.</div></div>
-        <p class="muted" style="margin-top:8px">
-          The log follows the installer while it runs, including apt's own output. It is kept in
-          <code>/var/log/henwen-asl-update.log</code> (the previous run as <code>.1</code>).
-        </p>
-      </div>
-    </div>
   </section>
 
   <!-- Settings -->
@@ -3880,7 +3601,6 @@ function showPage(id) {
   // Stop live polling whenever we leave node-control, ast-console, or dashboard
   stopNcPolling();
   stopFavStatusPolling();
-  astStopAutoRefresh();
   stopDiagPolling();
   stopRelayStatusPolling();
   stopIrcRelayStatusPolling();
@@ -3898,14 +3618,11 @@ function showPage(id) {
 
   if      (id === 'dashboard')    { refreshDashboard(); startDiagPolling(); }
   else if (id === 'node-control') { loadFavorites(); startNcPolling(); startFavStatusPolling(); renderNodeLockoutCard(); renderKioskBannerCard(); }
-  else if (id === 'raw-editor')   rawLoad();
-  else if (id === 'backups')        loadBackups();
   else if (id === 'conn-history')   chLoad(0);
   else if (id === 'alerts')           alLoad();
   else if (id === 'nws-alerts')       nwsLoad();
   else if (id === 'kiosk-settings')   ksLoad();
   else if (id === 'ami-diag')         loadSysInfo();
-  else if (id === 'ast-console')  astFetchLog();
   else if (id === 'settings')       { loadSecretKeyStatus(); loadPortsStatus(); syncThemePicker(); mfaLoadStatus(); }
   else if (id === 'tx-diag')         { if (window._henwenRole === 'owner') { loadTxApplyStatus(); loadSipUsersStatus(); } }
   else if (id === 'rx-diag')         { if (window._henwenRole === 'owner') { loadAudioSocketTapStatus(); loadRxAudioPathStatus(); } }
@@ -3925,15 +3642,10 @@ function showPage(id) {
   else if (id === 'node-access')      { loadNodeAccess(); }
   else if (id === 'announcements')    { loadAnnouncements(); populateAnnNodeSelect(); loadTtsVoices(); }
   else if (id === 'smart-connector') { loadConnectors(); populateConnNodeSelects(); }
-  else if (id === 'general')        loadGeneralEditor();
   else {
-    var m  = id.match(/^node-(\d+)$/);
-    var t  = id.match(/^template-(.+)$/);
     var mc = id.match(/^macro-(.+)$/);
     var sc = id.match(/^schedule-(.+)$/);
-    if (m) loadNodeEditor(m[1]);
-    else if (t) loadTemplateEditor(t[1]);
-    else if (mc) loadMacroEditor(mc[1]);
+    if (mc) loadMacroEditor(mc[1]);
     else if (sc) loadScheduleEditor(sc[1]);
   }
 }
@@ -4116,15 +3828,6 @@ async function doReload() {
 }
 
 /* ── conf helpers ───────────────────────────────────────────────────────── */
-async function fetchConf() {
-  var r = await api('/api/conf');
-  if (!r.ok) {
-    log('Cannot load rpt.conf: ' + (r.data.error || r.status), 'ERROR');
-    if (r.data.hint) log(r.data.hint, 'WARN');
-    return null;
-  }
-  return r.data;
-}
 
 // Builds the value input for a setting row. meta.type selects the widget:
 //   'enum'   -> <select> restricted to meta.options (limits input to valid values)
@@ -4168,23 +3871,13 @@ function buildValueInput(key, value, meta) {
   return '<input type="text" value="' + esc(value) + '" ' + common + phAttr + '>';
 }
 
-// `source` is "own" (set directly on this stanza), a template name (this
-// stanza only has the setting because it inherits from that template), or
-// undefined (no inheritance info available, e.g. the [general] stanza).
-// Anything other than "own" gets a clickable "global: <template>" badge so
-// the user can see this value is shared, and jump straight to the template
-// page where editing it actually affects every node that uses it.
-function makeToggleRow(key, value, commented, desc, meta, source) {
+// One macro/schedule entry: its value plus an enable switch (off = written
+// as a ;comment).
+function makeToggleRow(key, value, commented, desc, meta) {
   var checked = commented ? '' : 'checked';
-  var globalBadge = (source && source !== 'own')
-    ? ' <span class="badge badge-unk" style="cursor:pointer" '
-      + 'onclick="showPage(\'template-' + esc(source) + '\')" '
-      + 'title="Inherited from the [' + esc(source) + '] template. Click to edit it globally — '
-      + 'changes there apply to every node using this template.">global: ' + esc(source) + '</span>'
-    : '';
   return '<div class="toggle-row">'
     + '<div class="toggle-info">'
-    + '<div class="toggle-key">' + esc(key) + globalBadge + '</div>'
+    + '<div class="toggle-key">' + esc(key) + '</div>'
     + (desc ? '<div class="toggle-desc">' + esc(desc) + '</div>' : '')
     + '</div>'
     + '<div style="display:flex;align-items:center;gap:12px;flex-shrink:0">'
@@ -4210,7 +3903,6 @@ function _applyFieldError(inputEl, err) {
 }
 
 function markChange(key, inputEl) {
-  if (_aslActivePageReadOnly()) return;   // W2 handover; the server refuses it too
   var val     = inputEl.value;
   var row     = inputEl.closest('.toggle-row');
   var cb      = row ? row.querySelector('input[type=checkbox]') : null;
@@ -4225,7 +3917,6 @@ function markChange(key, inputEl) {
 }
 
 function markToggle(key, cb) {
-  if (_aslActivePageReadOnly()) return;   // W2 handover; the server refuses it too
   var row     = cb.closest('.toggle-row');
   var input   = row ? row.querySelector('input[type=text], input[type=number], select') : null;
   var enabled = cb.checked;
@@ -4267,24 +3958,6 @@ function closeHelpModal() {
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') closeHelpModal();
 });
-
-function showToggleHelp() {
-  showHelpModal('Enable / Disable Switch', ''
-    + '<p>Each setting has two independent controls: the field holds <strong>what value</strong> '
-    + 'would apply, and the switch on the right decides <strong>whether that value is actually in effect</strong>.</p>'
-    + '<p><strong>Switch ON</strong> &mdash; the setting is written as a live line in rpt.conf '
-    + '(<span class="mono">key = value</span>) and Asterisk applies it.</p>'
-    + '<p><strong>Switch OFF</strong> &mdash; the setting is written as a comment '
-    + '(<span class="mono">;key = value</span>). Asterisk ignores it, so the node falls back to its '
-    + 'default or to whatever a template stanza provides &mdash; but your value stays saved in the '
-    + 'file, disabled, ready to switch back on later.</p>'
-    + '<p>This lets you try a value without committing to it, or temporarily disable a setting '
-    + 'without losing the value you had configured.</p>'
-    + '<p>A setting tagged <span class="badge badge-unk">global: node-main</span> isn\'t set on '
-    + 'this node directly &mdash; it\'s inherited from a shared template. Editing it on a node\'s '
-    + 'own page only creates an override for that one node. Click the badge to edit the template '
-    + 'itself instead, which changes the value for every node that uses it.</p>');
-}
 
 async function saveChanges() {
   var section = currentSection;
@@ -4332,392 +4005,15 @@ async function saveChanges() {
 function discardChanges() {
   pendingChanges = {};
   hideUnsaved();
-  if (currentPage === 'general') { loadGeneralEditor(); return; }
-  var m  = currentPage.match(/^node-(\d+)$/);
-  var t  = currentPage.match(/^template-(.+)$/);
   var mc = currentPage.match(/^macro-(.+)$/);
   var sc = currentPage.match(/^schedule-(.+)$/);
-  if (m) loadNodeEditor(m[1]);
-  else if (t) loadTemplateEditor(t[1]);
-  else if (mc) loadMacroEditor(mc[1]);
+  if (mc) loadMacroEditor(mc[1]);
   else if (sc) loadScheduleEditor(sc[1]);
 }
 
-/* ── General editor ─────────────────────────────────────────────────────── */
-// Settings from the [general] stanza — verified against
-// https://allstarlink.github.io/config/rpt_conf/
-var GENERAL_META = [
-  {key:'node_lookup_method', desc:'How this node looks up another node\'s connection info (IP address, etc.) when someone links to it. "Both" checks the internet first and falls back to a local file — the safest choice for most setups.',
-   type:'enum', options:[
-     {value:'both', label:'Try DNS, then local file (default)'},
-     {value:'dns',  label:'DNS only'},
-     {value:'file', label:'Local file only'},
-   ]},
-  {key:'dns_node_domain',    desc:'The internet domain name queried for node lookups (default: nodes.allstarlink.org). Only change this if you run your own private node-lookup service instead of AllStarLink\'s.'},
-  {key:'max_dns_node_length',desc:'Node numbers longer than this many digits skip the internet lookup and go straight to the local file (default 6). AllStarLink node numbers are normally 4-6 digits, so this rarely needs changing.',
-   type:'number', min:1},
-];
-
-async function loadGeneralEditor() {
-  currentSection = 'general';
-  var el   = document.getElementById('general-content');
-  el.innerHTML = '<div class="muted">Loading...</div>';
-  var conf = await fetchConf();
-  if (!conf) {
-    el.innerHTML = '<div class="alert alert-danger">Failed to load rpt.conf. Check permissions.</div>';
-    return;
-  }
-  // /api/conf now returns general_settings parsed from the [general] stanza only
-  var s    = conf.general_settings || {};
-  var html = '<div class="card"><div class="card-body">';
-  GENERAL_META.forEach(function(m) {
-    var st = s[m.key] || {};
-    html += makeToggleRow(m.key, st.value || '', st.commented !== false, m.desc, m, st.source);
-  });
-  // Show any other keys present in [general] not in our known list
-  var knownGen = {node_lookup_method:1, dns_node_domain:1, max_dns_node_length:1};
-  Object.keys(s).forEach(function(k) {
-    if (!knownGen[k]) {
-      html += makeToggleRow(k, s[k].value || '', s[k].commented !== false, 'Custom [general] setting', null, s[k].source);
-    }
-  });
-  html += '</div></div>';
-  el.innerHTML = html;
-  log('General editor loaded (' + Object.keys(s).length + ' settings).', 'DEBUG');
-}
-
-/* ── Node editor ────────────────────────────────────────────────────────── */
-// Settings sourced directly from https://allstarlink.github.io/config/rpt_conf/
-// Organised to match the official documentation sections.
-// Telemetry-mode settings (telemdefault, echolinkdefault, guilinkdefault,
-// phonelinkdefault, tlbdefault) all share the same 0-3 meaning per the docs:
-// 0=off, 1=on, 2=timed (on during/after a command, then off), 3=follow local
-// telemetry mode. telemdefault itself only goes 0-2 (no "follow local" — it
-// IS local). Built as a function so each picker still gets its own default.
-function telemModeOptions(extra3) {
-  var opts = [
-    {value:'0', label:'Off'},
-    {value:'1', label:'On'},
-    {value:'2', label:'Timed (on during/after a command, then off)'},
-  ];
-  if (extra3) opts.push({value:'3', label:'Follow local telemetry mode'});
-  return opts;
-}
-var YES_NO_OPTS = [{value:'yes', label:'Yes'}, {value:'no', label:'No'}];
-var ZERO_ONE_OPTS = [{value:'0', label:'0 — disabled (default)'}, {value:'1', label:'1 — enabled'}];
-
-var NODE_SECS = [
-  {title:'Basic / Required', keys:[
-    {key:'rxchannel',      desc:'Which hardware (or software) connects this node to a radio. Common values: dahdi/pseudo for a hub node with no radio attached, SimpleUSB/0 or Radio/0 for a USB radio interface, Voter/0 for a voting-receiver setup, or USRP/ip:rxport:txport for a network radio such as an SDR.',
-     required:true, placeholder:'dahdi/pseudo'},
-    {key:'duplex',         desc:'Controls how the repeater listens and talks back, and whether it plays confirmation tones and a hang time. "Full duplex, with telemetry tones and hang time" (2) is the normal choice for most repeaters.',
-     type:'enum', options:[
-       {value:'0', label:'Half duplex, no telemetry tones or hang time'},
-       {value:'1', label:'Half duplex, with telemetry tones and hang time'},
-       {value:'2', label:'Full duplex, with telemetry tones and hang time (default)'},
-       {value:'3', label:'Full duplex, telemetry/hang time, but audio is not repeated'},
-       {value:'4', label:'Full duplex, telemetry/hang time, repeats audio only when autopatch is down'},
-     ]},
-    {key:'context',        desc:'Which section of extensions.conf (Asterisk\'s dialplan) handles this node\'s autopatch/phone-patch calls (default: radio). Leave as the default unless you\'ve customized your dialplan.',
-     type:'identifier', required:true, placeholder:'radio'},
-    {key:'callerid',       desc:'The name and number shown on outbound autopatch (phone-patch) calls, e.g. "Repeater" <0000000000>. Leave blank if this node doesn\'t make phone calls.', placeholder:'"Repeater" <0000000000>'},
-    {key:'accountcode',    desc:'An optional label attached to this node\'s call records so you can filter or report on them later. Most nodes leave this blank.'},
-    {key:'linktolink',     desc:'Only matters when duplex above is set to 0 or 1 (half duplex). When on, the radio hardware itself still runs in full duplex even though the repeater behaves as half duplex.',
-     type:'boolean'},
-  ]},
-  {title:'Station Identification', keys:[
-    {key:'idrecording',    desc:'How this node identifies itself over the air, as your license requires. Either the name of a recorded voice announcement (no file extension), or |i followed by your callsign to have it spelled out in Morse code, e.g. |iN8GMZ.',
-     type:'id_sound', required:true, placeholder:'|iN8GMZ'},
-    {key:'idtalkover',     desc:'A shorter ID that can play on top of an active transmission instead of waiting for silence. Same format as idrecording above — filename or |iCALLSIGN for Morse.',
-     type:'id_sound', required:true, placeholder:'|iN8GMZ'},
-    {key:'idtime',         desc:'How often, in milliseconds, the node automatically announces its ID (default 300000 = every 5 minutes). Setting this to 0 disables timed IDs — not recommended if your license requires them.',
-     type:'number', min:0, max:2400000},
-    {key:'politeid',       desc:'How many milliseconds before the ID timer runs out the node will wait for a quiet gap to slip the ID in, rather than talking over an active user (default 30000 = 30 seconds).',
-     type:'number', min:0},
-    {key:'beaconing',      desc:'When on, the ID plays at every idtime interval no matter what, even if nobody has used the repeater. Some licenses require this — check your local regulations.',
-     type:'boolean'},
-  ]},
-  {title:'Timers', keys:[
-    {key:'hangtime',       desc:'How long, in milliseconds, the repeater keeps transmitting after the last user unkeys — the "squelch tail" (default 5000 = 5 seconds).', type:'number', min:0},
-    {key:'althangtime',    desc:'A second hang-time value (see hangtime above) that operators can switch to on the fly with a control-operator command, without editing this file.', type:'number', min:0},
-    {key:'totime',         desc:'The transmit timeout timer: if someone keys up continuously for this many milliseconds, the repeater stops transmitting to protect against a stuck or runaway transmitter (default 180000 = 3 minutes, max 9999999).', type:'number', min:0, max:9999999},
-    {key:'time_out_reset_unkey_interval', desc:'How briefly the receiver must go quiet (unkey) to reset the transmit-timeout timer above before it expires. 0, the default, disables this early reset (max 3000 ms).', type:'number', min:0, max:3000},
-    {key:'time_out_reset_kerchunk_interval', desc:'A "kerchunk" is a quick key-up with no talking. If someone kerchunks for at least this many milliseconds, it resets the transmit-timeout timer above (default 250 ms).', type:'number', min:0},
-    {key:'sleeptime',      desc:'How many seconds of silence on the receiver before the node goes into low-power sleep mode (only applies if your hardware supports sleep mode).', type:'number', min:0},
-  ]},
-  {title:'Telemetry', keys:[
-    {key:'telemdefault',   desc:'Whether the confirmation beeps/tones that announce commands, connections, and status ("telemetry") play by default (default: on).', type:'enum', options: telemModeOptions(false)},
-    {key:'telemdynamic',   desc:'Lets an operator turn the telemetry tones above on or off temporarily using a control-operator DTMF command, instead of it being locked to whatever telemdefault says. 1/yes = allowed (default), 0/no = locked.',
-     type:'boolean'},
-    {key:'holdofftelem',   desc:'When on, telemetry tones/announcements wait until a local or linked user finishes transmitting instead of playing immediately (default 0 = off — play right away). Accepts 0/1/yes/no.',
-     type:'boolean'},
-    {key:'telemduckdb',    desc:'How much quieter, in decibels, telemetry tones get mixed under an active voice transmission, e.g. -15.', type:'number'},
-    {key:'telemnomdb',     desc:'Fine-tunes the overall volume of telemetry tones relative to normal repeater audio, in decibels (positive = louder, negative = quieter).', type:'number'},
-    {key:'unlinkedct',     desc:'Which courtesy tone (the short beep played after someone unkeys) is used when no other nodes are currently connected, e.g. ct2. Must match a tone name defined in the [telemetry] stanza.'},
-    {key:'remotect',       desc:'Which courtesy tone plays when a remote base radio is connected to this node, e.g. ct3.'},
-    {key:'linkunkeyct',    desc:'Which courtesy tone plays when a connected (linked) node unkeys, e.g. ct8.'},
-    {key:'nounkeyct',      desc:'Turns off all courtesy tones and the pause/hang-time delay that normally follows someone unkeying. Accepts yes/no/0/1.',
-     type:'boolean'},
-    {key:'nolocallinkct',  desc:'When on, plays the "nobody connected" tone (unlinkedct) instead of the normal linked courtesy tone if the only other nodes connected are on this same server. Accepts 0/1/yes/no.',
-     type:'boolean'},
-  ]},
-  {title:'DTMF & Functions', keys:[
-    {key:'funcchar',       desc:'The touch-tone (DTMF) key that starts a command, like dialing *73 to disconnect a link (default *). Must be exactly one character and different from endchar.',
-     type:'dtmf_char', required:true, placeholder:'*'},
-    {key:'endchar',        desc:'The touch-tone (DTMF) key that ends a command sequence (default #). Must be different from funcchar.',
-     type:'dtmf_char', required:true, placeholder:'#'},
-    {key:'functions',      desc:'Name of the section (stanza) listing which DTMF commands users transmitting from a local radio are allowed to run (default: functions).',
-     type:'identifier', required:true, placeholder:'functions'},
-    {key:'link_functions', desc:'Name of the section listing which DTMF commands users connecting in from another linked node are allowed to run (default: functions).',
-     type:'identifier', required:true, placeholder:'functions'},
-    {key:'phone_functions',desc:'Name of the section listing which DTMF commands autopatch/phone callers are allowed to run (default: functions).',
-     type:'identifier', required:true, placeholder:'functions'},
-    {key:'dtmfkey',        desc:'When on, users must enter a valid access code before the node will key up for them at all — for private or access-controlled nodes (default 0 = normal access, no code needed). Requires the dtmfkeys section below.',
-     type:'boolean'},
-    {key:'dtmfkeys',       desc:'Name of the section listing valid access codes, required when dtmfkey above is turned on.',
-     type:'identifier', required:true, placeholder:'dtmfkeys'},
-    {key:'propagate_dtmf', desc:'When on, tones detected from a non-touch-tone signaling source get re-created and passed through as normal DTMF, but only for tones that weren\'t already recognized as a command (default: off). Accepts yes/no/0/1.',
-     type:'boolean'},
-  ]},
-  {title:'Node Connections', keys:[
-    {key:'extnodefile',    desc:'Path to the file listing other AllStarLink nodes and how to reach them (default /var/lib/asterisk/rpt_extnodes). Multiple file paths can be comma-separated.'},
-    {key:'nodes',          desc:'Name of the section listing which other nodes this node connects to and how (default: nodes).',
-     type:'identifier', required:true, placeholder:'nodes'},
-    {key:'nodenames',      desc:'Folder of custom recorded audio that announces node names (instead of just numbers) when nodes connect (default rpt/nodenames in the Asterisk sounds tree).'},
-    {key:'startup_macro',  desc:'A string of DTMF commands the node runs automatically once when Asterisk starts, e.g. to auto-connect to a favorite node (e.g. *31000*31001). No trailing # needed.'},
-    {key:'connpgm',        desc:'An optional script that runs automatically every time another node connects to this one. Asterisk passes it the local and remote node numbers, so you can log connections, send notifications, etc. Must be executable.',
-     required:true, placeholder:'/etc/asterisk/custom/conlog.sh'},
-    {key:'discpgm',        desc:'Same idea as connpgm above, but runs when a node disconnects instead of connecting.',
-     required:true, placeholder:'/etc/asterisk/custom/disclog.sh'},
-    {key:'lnkactenable',   desc:'Turns on a timer that watches for inactivity across all linked connections (default 0 = disabled). Accepts 0/1/yes/no.',
-     type:'boolean'},
-    {key:'lnkacttime',     desc:'How many seconds of no activity on any linked connection before lnkactmacro below runs automatically (e.g. to disconnect idle links).', type:'number', min:0, max:90000},
-    {key:'lnkactmacro',    desc:'The DTMF command sequence to run automatically when the link-inactivity timer (lnkacttime) expires, e.g. *52.'},
-    {key:'lnkacttimerwarn',desc:'A sound file that plays 30 seconds before the link-inactivity timer above is about to expire, giving everyone a heads-up.'},
-  ]},
-  {title:'Audio', keys:[
-    {key:'linkmongain',    desc:'Volume adjustment, in decibels, applied when you\'re listening in on another linked node\'s audio (default 0 = no change).', type:'number'},
-    {key:'erxgain',        desc:'Volume adjustment, in decibels, for audio received from EchoLink (positive = louder, negative = quieter).', type:'number'},
-    {key:'etxgain',        desc:'Volume adjustment, in decibels, for audio sent out to EchoLink (positive = louder, negative = quieter).', type:'number'},
-    {key:'rxnotch',        desc:'Filters out a specific interfering tone from the received audio. Format is frequency,bandwidth in Hz (e.g. 1065,40). Uses extra CPU, so only enable it if you actually have an interference problem. Multiple pairs are supported.',
-     type:'notch', placeholder:'1065,40'},
-    {key:'outstreamcmd',   desc:'An external command this node\'s live audio is piped into — typically used to broadcast the repeater\'s audio to a streaming service such as Broadcastify.'},
-  ]},
-  {title:'Tail & Scheduler', keys:[
-    {key:'tailmessagelist',desc:'Comma-separated list of sound files (announcements, weather, club news, etc.) that play on rotation after the repeater has been quiet for a while.'},
-    {key:'tailmessagetime',desc:'How often, in milliseconds, the tail messages above play during quiet periods (max 200000000).', type:'number', min:0, max:200000000},
-    {key:'tailsquashedtime',desc:'If a tail message gets interrupted by someone keying up, how long (in milliseconds) the node waits before trying to play it again.', type:'number', min:0},
-    {key:'scheduler',      desc:'Name of the section defining any scheduled/timed automatic actions for this node, such as a nightly courtesy-tone change (default: schedule).'},
-  ]},
-  {title:'Parrot / Echo', keys:[
-    {key:'parrot',         desc:'Parrot mode plays back everything the node hears, like a recording/echo test. 0/no = off, but still switchable on temporarily with a control-operator command; 1/yes = always on (only use this for a dedicated test node).',
-     type:'boolean'},
-    {key:'parrottime',     desc:'How long, in milliseconds, the node waits after you unkey before it plays back what it just heard in parrot mode (default 1000).', type:'number', min:0},
-  ]},
-  {title:'EchoLink', keys:[
-    {key:'eannmode',       desc:'What the node announces out loud when someone connects to it via EchoLink (default 1 = node number only).',
-     type:'enum', options:[
-       {value:'0', label:'Do not announce'},
-       {value:'1', label:'Say node number only (default)'},
-       {value:'2', label:'Say phonetic call sign only'},
-       {value:'3', label:'Say phonetic call sign and node number'},
-     ]},
-    {key:'echolinkdefault',desc:'Whether the confirmation tones/announcements play by default for connections coming in over EchoLink (default 3 = follow whatever the local telemetry setting is).', type:'enum', options: telemModeOptions(true)},
-    {key:'echolinkdynamic',desc:'Lets an operator change the EchoLink telemetry setting above on the fly with a control-operator command. Accepts 0/1/yes/no.',
-     type:'boolean'},
-    {key:'elke',           desc:'Used only for a specialized "Elke Link" repeater network — sets its inactivity sleep timer. Leave this blank unless you specifically know you\'re running an Elke-style link.'},
-  ]},
-  {title:'Archiving & Stats', keys:[
-    {key:'archivedir',     desc:'Folder where an activity log (and optionally audio recordings) of everything that happens on this node gets saved, e.g. /var/spool/asterisk/monitor. The folder must already exist and be writable by Asterisk.',
-     required:true, placeholder:'/var/spool/asterisk/monitor'},
-    {key:'archiveformat',  desc:'The audio file format used for saved recordings in archivedir above (default wav49 = compressed GSM audio in a .wav container).',
-     type:'enum', options:[
-       {value:'wav49', label:'wav49 — GSM in a .wav container (default)'},
-       {value:'wav',   label:'wav — uncompressed SLIN .wav'},
-       {value:'gsm',   label:'gsm — raw GSM format'},
-     ]},
-    {key:'archivedatefmt', desc:'How the date/time appears in each archived recording\'s filename, using standard date-format codes (default %Y%m%d%H%M%S produces something like 20260704153000).',
-     required:true, placeholder:'%Y%m%d%H%M%S'},
-    {key:'archiveaudio',   desc:'Whether actual audio recordings are saved along with the text activity log (default yes). Set to no to log activity only and save disk space.',
-     type:'boolean'},
-    {key:'statpost_url',   desc:'The web address this node reports its status to, so it shows up on a stats dashboard (e.g. http://stats.allstarlink.org/uhandler). Leave blank to turn off status reporting.',
-     type:'url', placeholder:'http://stats.allstarlink.org/uhandler'},
-    {key:'statpost_program',desc:'Advanced: an alternate program used to send the status reports above instead of the built-in one. Almost never needs to change.'},
-  ]},
-  {title:'Voting', keys:[
-    {key:'votermode',      desc:'Turns on "Simple Voter" mode, which lets several receivers cover one area and automatically uses whichever one hears a given transmission best (default 0 = no voting).',
-     type:'enum', options:[
-       {value:'0', label:'0 — no voting (default)'},
-       {value:'1', label:'1 — voter one-shot'},
-       {value:'2', label:'2 — voter continuous'},
-     ]},
-    {key:'votertype',      desc:'This node\'s role in a Simple Voter setup (default 0 = no voting).',
-     type:'enum', options:[
-       {value:'0', label:'0 — no voting (default)'},
-       {value:'1', label:'1 — voter repeater'},
-       {value:'2', label:'2 — voter receiver'},
-     ]},
-    {key:'votermargin',    desc:'How much stronger (in dB signal strength) another receiver\'s copy of a transmission must be before the voter switches to it (default 10).', type:'number'},
-  ]},
-  {title:'Stanza Name Overrides', keys:[
-    {key:'controlstates',  desc:'Name of the section listing control-operator states — things like "repeater disabled" or "CW ID only" that an operator can switch between (default: controlstates).',
-     type:'identifier', required:true, placeholder:'controlstates'},
-    {key:'macro',          desc:'Name of the section listing DTMF macros — saved shortcuts that run a longer sequence of commands from a short code (default: macro).',
-     type:'identifier', required:true, placeholder:'macro'},
-    {key:'telemetry',      desc:'Name of the section that defines this node\'s courtesy tones and other telemetry audio cues (default: telemetry).',
-     type:'identifier', required:true, placeholder:'telemetry'},
-    {key:'morse',          desc:'Name of the section defining Morse code timing/speed settings used for CW IDs (default: morse).',
-     type:'identifier', required:true, placeholder:'morse'},
-    {key:'tonemacro',      desc:'Name of the section listing macros that run automatically when a specific CTCSS (sub-audible) tone is detected on the receiver.',
-     type:'identifier', required:true, placeholder:'tonemacro'},
-    {key:'events',         desc:'Name of the section defining custom event handling for this node (default: events).',
-     type:'identifier', required:true, placeholder:'events'},
-    {key:'wait-times',     desc:'Name of the section defining pause/wait timing used between certain automatic actions (default: wait-times).',
-     type:'identifier', required:true, placeholder:'wait-times'},
-    {key:'guilinkdefault', desc:'Whether telemetry tones play by default for people connecting through software clients (IAXRpt, SIP/VoIP apps) rather than over the air (default 1 = on).', type:'enum', options: telemModeOptions(true)},
-    {key:'guilinkdynamic', desc:'Lets an operator change the software-client telemetry setting above on the fly with a control-operator command. Accepts 0/1/yes/no.',
-     type:'boolean'},
-    {key:'phonelinkdefault',desc:'Whether telemetry tones play by default for autopatch/phone-portal callers (default 1 = on).', type:'enum', options: telemModeOptions(true)},
-    {key:'phonelinkdynamic',desc:'Lets an operator change the phone-caller telemetry setting above on the fly with a control-operator command. Accepts 0/1/yes/no.',
-     type:'boolean'},
-    {key:'tlbdefault',     desc:'Whether telemetry tones play by default for connections coming in through TheLinkBox network (default 3 = follow whatever the local telemetry setting is).', type:'enum', options: telemModeOptions(true)},
-    {key:'tlbdynamic',     desc:'Lets an operator change the TheLinkBox telemetry setting above on the fly with a control-operator command. Accepts 0/1/yes/no.',
-     type:'boolean'},
-  ]},
-];
-
-// Flat key→meta lookup built from all section arrays.
-var META_BY_KEY = {};
-(GENERAL_META || []).forEach(function(m) { META_BY_KEY[m.key] = m; });
-(NODE_SECS || []).forEach(function(sec) {
-  sec.keys.forEach(function(m) { META_BY_KEY[m.key] = m; });
-});
-
-// Returns null if the value is acceptable, or an error string.
-function validateField(key, val, meta) {
-  meta = meta || META_BY_KEY[key] || {};
-  var t = meta.type || 'freeform';
-  if (val === '' || val === null || val === undefined) {
-    if (meta.required) return key + ': a value is required when this setting is enabled — disable the toggle instead of leaving it blank';
-    return null;
-  }
-  if (t === 'dtmf_char') {
-    if (val.length !== 1) return key + ': must be exactly one character (got ' + val.length + ')';
-  } else if (t === 'id_sound') {
-    if (val.charAt(0) === '|' && val.charAt(1) === 'i') {
-      var cw = val.slice(2);
-      if (!cw) return key + ': CW format |i<callsign> requires a callsign after |i (e.g. |iN8GMZ)';
-      if (!/^[A-Za-z0-9 /.\-!?,_]+$/.test(cw)) return key + ': CW callsign contains invalid characters (allowed: A-Z 0-9 space / . - ! ? , _)';
-    } else if (!/^[A-Za-z0-9_/.\-]+$/.test(val)) {
-      return key + ': sound file name contains invalid characters (letters, digits, / . - _ only — no spaces)';
-    }
-  } else if (t === 'notch') {
-    if (!/^\d+(?:\.\d+)?(?:,\d+(?:\.\d+)?)+$/.test(val)) return key + ': must be one or more freq,bandwidth pairs (e.g. 1065,40)';
-  } else if (t === 'url') {
-    if (!/^https?:\/\//.test(val)) return key + ': must start with http:// or https://';
-  } else if (t === 'identifier') {
-    if (!/^[A-Za-z0-9_\-]+$/.test(val)) return key + ': must use only letters, digits, hyphens, and underscores (no spaces)';
-  } else if (t === 'boolean') {
-    if (!/^(0|1|yes|no|true|false|on|off)$/i.test(val)) return key + ': must be one of: 0 1 yes no true false on off';
-  }
-  return null;
-}
-
-// Shared renderer for both per-node pages and global template pages — both
-// show the same NODE_SECS-driven editor over a stanza's effective settings.
-// Returns the raw API response data so callers can use extra fields
-// (e.g. the template endpoint's "used_by" list).
-async function loadStanzaEditor(sectionName, elId, apiUrl, loadingLabel, fallbackToGeneral) {
-  currentSection = sectionName;
-  var el = document.getElementById(elId);
-  if (!el) return null;
-  el.innerHTML = '<div class="muted">Loading settings for ' + esc(loadingLabel) + '...</div>';
-
-  var r = await api(apiUrl);
-  if (!r.ok) {
-    if (fallbackToGeneral) {
-      log('Per-node API failed, falling back to full conf parse', 'WARN');
-      r = await api('/api/conf');
-      if (r.ok) r.data.settings = r.data.general_settings || {};
-    }
-    if (!r.ok) {
-      el.innerHTML = '<div class="alert alert-danger">' + esc(r.data.error || 'Failed to load rpt.conf.') + '</div>';
-      return null;
-    }
-  }
-
-  var s    = r.data.settings || {};
-  var html = '';
-
-  // Active keys that don't match any known rpt.conf directive but closely
-  // resemble one (e.g. 'totimer' instead of 'totime', issue #117) — these
-  // are silently ignored by Asterisk, so a value here that looks like it's
-  // controlling a setting actually isn't doing anything at all.
-  var typoWarnings = r.data.key_typo_warnings || [];
-  if (typoWarnings.length) {
-    html += '<div class="alert alert-warn" style="margin-bottom:12px">'
-          + typoWarnings.map(function(w) {
-              return '&#9888; <code>' + esc(w.key) + ' = ' + esc(w.value) + '</code> is not a recognized '
-                   + 'rpt.conf setting &mdash; Asterisk ignores it entirely. Did you mean '
-                   + '<code>' + esc(w.likely) + '</code>?';
-            }).join('<br>')
-          + '</div>';
-  }
-
-  NODE_SECS.forEach(function(sec, i) {
-    var open = i === 0 ? ' open' : '';
-    html += '<div class="card" style="margin-bottom:12px">'
-          + '<div class="sec-toggle' + open + '" onclick="toggleSec(this)">'
-          + '<h3>' + esc(sec.title) + '</h3><span class="arr">&#9658;</span></div>'
-          + '<div class="sec-body' + open + '">';
-    sec.keys.forEach(function(m) {
-      var st = s[m.key] || {};
-      html += makeToggleRow(m.key, st.value || '', st.commented !== false, m.desc, m, st.source);
-    });
-    html += '</div></div>';
-  });
-
-  // Show any keys in the config that aren't in our known list
-  var knownKeys = {};
-  NODE_SECS.forEach(function(sec) {
-    sec.keys.forEach(function(m) { knownKeys[m.key] = true; });
-  });
-  var extraKeys = Object.keys(s).filter(function(k) { return !knownKeys[k]; });
-  if (extraKeys.length) {
-    html += '<div class="card" style="margin-bottom:12px">'
-          + '<div class="sec-toggle" onclick="toggleSec(this)">'
-          + '<h3>Other Settings (' + extraKeys.length + ')</h3><span class="arr">&#9658;</span></div>'
-          + '<div class="sec-body">';
-    extraKeys.forEach(function(k) {
-      var st = s[k];
-      html += makeToggleRow(k, st.value || '', st.commented !== false, 'Custom / advanced setting', null, st.source);
-    });
-    html += '</div></div>';
-  }
-
-  el.innerHTML = html;
-  log(loadingLabel + ' editor loaded (' + Object.keys(s).length + ' effective settings).', 'DEBUG');
-  return r.data;
-}
-
-async function loadNodeEditor(node) {
-  // Uses the per-node endpoint, which correctly resolves Asterisk template
-  // inheritance (e.g. [64393](node-main) inheriting from [node-main](!)).
-  await loadStanzaEditor(node, 'node-content-' + node,
-    '/api/conf/node/' + encodeURIComponent(node), 'node ' + node, true);
-}
-
-async function loadTemplateEditor(name) {
-  var usedByEl = document.getElementById('template-used-by-' + name);
-  var data = await loadStanzaEditor(name, 'template-content-' + name,
-    '/api/conf/template/' + encodeURIComponent(name), 'template ' + name, false);
-  if (!usedByEl) return;
-  var usedBy = (data && data.used_by) || [];
-  usedByEl.textContent = usedBy.length
-    ? 'Used by node' + (usedBy.length > 1 ? 's' : '') + ': ' + usedBy.join(', ')
-      + '. Saving a change here affects all of them.'
-    : 'No nodes currently reference this template.';
-}
+// Macro and schedule entries are free-form here; the server checks them
+// (validate_macro_entry / validate_schedule_entry) and reports any error.
+function validateField(key, val) { return null; }
 
 // Macro/schedule entries are arbitrary-length numbered lists (slot number
 // -> DTMF command, or slot number -> cron schedule), unlike the fixed
@@ -4836,120 +4132,8 @@ function toggleSec(el) {
 }
 
 /* ── Raw editor ─────────────────────────────────────────────────────────── */
-async function rawLoad() {
-  log('Loading raw rpt.conf...', 'DEBUG');
-  var r = await api('/api/conf');
-  if (!r.ok) {
-    document.getElementById('raw-alert').innerHTML =
-      '<div class="alert alert-danger">' + esc(r.data.error || 'Load failed') + '</div>';
-    return;
-  }
-  document.getElementById('raw-ta').value = r.data.content;
-  document.getElementById('raw-alert').innerHTML =
-    '<div class="alert alert-info">Loaded ' + r.data.content.length + ' bytes from {{ conf_path }}</div>';
-  log('Raw editor: ' + r.data.content.length + ' bytes.', 'OK');
-}
-
-async function rawSave() {
-  var content = document.getElementById('raw-ta').value;
-  log('Saving raw (' + content.length + ' bytes)...', 'INFO');
-  var r = await api('/api/save', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({raw_content: content})
-  });
-  var alertEl = document.getElementById('raw-alert');
-  if (r.ok) {
-    alertEl.innerHTML = '<div class="alert alert-success">Saved. Backup: ' + esc(r.data.backup || '') + '</div>';
-    log('Saved. Backup: ' + (r.data.backup || ''), 'OK');
-  } else {
-    alertEl.innerHTML = '<div class="alert alert-danger">' + esc(r.data.error || 'Save failed') + '</div>';
-    log('Save failed: ' + (r.data.error || r.status), 'ERROR');
-    if (r.data.hint) log(r.data.hint, 'WARN');
-  }
-}
 
 /* ── Backups ─────────────────────────────────────────────────────────────── */
-function _fmtSize(b) {
-  if (b < 1024) return b + ' B';
-  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
-  return (b/1048576).toFixed(1) + ' MB';
-}
-
-async function loadBackups() {
-  var el = document.getElementById('backup-list');
-  var r  = await api('/api/backups');
-  if (!r.ok || !r.data.backups || !r.data.backups.length) {
-    el.innerHTML = '<span class="muted">No backups found in ' + esc(r.data && r.data.backup_dir || '') + '.</span>';
-    return;
-  }
-  var html = '<table class="tbl"><thead><tr><th>Filename</th><th>Size</th><th>Actions</th></tr></thead><tbody>';
-  r.data.backups.forEach(function(b) {
-    var n = esc(b.name);
-    html += '<tr>'
-      + '<td class="mono" style="font-size:0.82rem">' + n + '</td>'
-      + '<td style="color:var(--text2);font-size:0.82rem">' + _fmtSize(b.size) + '</td>'
-      + '<td><div class="btn-row">'
-      + '<button class="btn btn-sm" onclick="backupDiff(\'' + n + '\')">Diff</button>'
-      + '<button class="btn btn-sm" onclick="backupDownload(\'' + n + '\')">Download</button>'
-      + '<button class="btn btn-primary btn-sm" onclick="backupRestore(\'' + n + '\')">Restore</button>'
-      + (window._henwenRole === 'superuser' || window._henwenRole === 'owner'
-          ? '<button class="btn btn-warn btn-sm" onclick="backupDelete(\'' + n + '\')">Delete</button>'
-          : '')
-      + '</div></td>'
-      + '</tr>';
-  });
-  html += '</tbody></table>';
-  el.innerHTML = html;
-}
-
-async function backupDiff(name) {
-  var card  = document.getElementById('backup-diff-card');
-  var pre   = document.getElementById('backup-diff-pre');
-  var title = document.getElementById('backup-diff-title');
-  pre.textContent = 'Loading diff…';
-  card.style.display = 'block';
-  card.scrollIntoView({behavior: 'smooth'});
-  var r = await api('/api/backups/' + encodeURIComponent(name) + '/diff');
-  if (!r.ok) { pre.textContent = 'Error: ' + (r.data && r.data.error || r.status); return; }
-  title.textContent = 'Diff: ' + name + ' → current';
-  if (!r.data.diff) {
-    pre.textContent = '(No differences — files are identical)';
-    return;
-  }
-  // Colorize unified diff lines
-  var colored = r.data.diff.split('\n').map(function(l) {
-    if (l.startsWith('---') || l.startsWith('+++')) return '<span style="color:var(--text2)">' + esc(l) + '</span>';
-    if (l.startsWith('@@'))  return '<span style="color:var(--accent)">' + esc(l) + '</span>';
-    if (l.startsWith('-'))   return '<span style="color:var(--red)">'    + esc(l) + '</span>';
-    if (l.startsWith('+'))   return '<span style="color:var(--green)">'  + esc(l) + '</span>';
-    return esc(l);
-  }).join('\n');
-  pre.innerHTML = colored;
-}
-
-function backupDownload(name) {
-  window.location.href = henwenUrl('/api/backups/') + encodeURIComponent(name) + '/download';
-}
-
-async function backupRestore(name) {
-  if (!confirm('Restore ' + name + '?\nThe current rpt.conf will be backed up first.')) return;
-  log('Restoring backup: ' + name, 'WARN');
-  var r = await api('/api/backups/' + encodeURIComponent(name) + '/restore', {method: 'POST'});
-  if (r.ok) {
-    log('Restored. New backup: ' + (r.data.backup || ''), 'OK');
-    loadBackups();
-  } else {
-    log('Restore failed: ' + (r.data.error || r.status), 'ERROR');
-  }
-}
-
-async function backupDelete(name) {
-  if (!confirm('Delete backup ' + name + '? This cannot be undone.')) return;
-  var r = await api('/api/backups/' + encodeURIComponent(name), {method: 'DELETE'});
-  if (r.ok) { log('Deleted: ' + name, 'OK'); loadBackups(); }
-  else log('Delete failed: ' + (r.data && r.data.error || r.status), 'ERROR');
-}
 
 /* ── Connection History ───────────────────────────────────────────────────── */
 var _chOffset = 0, _chLimit = 50, _chTotal = 0;
@@ -6205,174 +5389,6 @@ async function loadSysInfo() {
     + '</table>';
 }
 
-/* ── Asterisk Console ───────────────────────────────────────────────────── */
-var _astAutoRefreshTimer = null;
-var _astClearTime        = null;   // set by astClearLog(); filters out older lines
-var _astCmdHistory       = [];     // command history for ↑/↓ navigation
-var _astCmdHistoryIdx    = -1;
-
-async function astRunCmd() {
-  var input  = document.getElementById('ast-cmd-input');
-  var out    = document.getElementById('ast-cmd-out');
-  var cmd    = input.value.trim();
-  if (!cmd) return;
-
-  // Prepend to history (skip duplicate of last entry)
-  if (_astCmdHistory[0] !== cmd) _astCmdHistory.unshift(cmd);
-  if (_astCmdHistory.length > 50) _astCmdHistory.pop();
-  _astCmdHistoryIdx = -1;
-
-  // Show the command being run
-  out.innerHTML = '<div class="lAMI">&gt; ' + esc(cmd) + '</div>'
-                + '<div class="muted" style="font-size:0.85rem"><span class="spinner"></span> running...</div>'
-                + out.innerHTML;
-
-  var r = await api('/api/asterisk/command', {
-    method:  'POST',
-    headers: {'Content-Type': 'application/json'},
-    body:    JSON.stringify({command: cmd})
-  });
-
-  // Remove the "running..." placeholder
-  var placeholder = out.querySelector('.muted');
-  if (placeholder) placeholder.remove();
-
-  if (!r.ok) {
-    out.innerHTML = '<div class="lERR">' + esc(r.data.error || ('HTTP ' + r.status)) + '</div>'
-                  + out.innerHTML;
-    return;
-  }
-
-  var lines = r.data.output || [];
-  if (!lines.length) lines = ['(no output)'];
-  var html = lines.map(function(l) {
-    return '<div style="font-size:0.85rem;font-family:var(--mono)">' + esc(l) + '</div>';
-  }).join('');
-  // Insert output right after the command line
-  var cmdLine = out.firstChild;
-  if (cmdLine) {
-    cmdLine.insertAdjacentHTML('afterend', html);
-  } else {
-    out.innerHTML = html;
-  }
-  input.value = '';
-}
-
-function astCmdKey(e) {
-  if (e.key === 'Enter') { astRunCmd(); return; }
-  var input = document.getElementById('ast-cmd-input');
-  if (e.key === 'ArrowUp') {
-    e.preventDefault();
-    if (_astCmdHistoryIdx < _astCmdHistory.length - 1) {
-      _astCmdHistoryIdx++;
-      input.value = _astCmdHistory[_astCmdHistoryIdx];
-    }
-  } else if (e.key === 'ArrowDown') {
-    e.preventDefault();
-    if (_astCmdHistoryIdx > 0) {
-      _astCmdHistoryIdx--;
-      input.value = _astCmdHistory[_astCmdHistoryIdx];
-    } else {
-      _astCmdHistoryIdx = -1;
-      input.value = '';
-    }
-  }
-}
-
-function astUseCmd(el) {
-  var cmd = el.textContent;
-  document.getElementById('ast-cmd-input').value = cmd;
-  document.getElementById('ast-cmd-input').focus();
-}
-
-function astClearLog() {
-  _astClearTime = new Date();
-  document.getElementById('ast-log').innerHTML = '';
-  document.getElementById('ast-recall-btn').style.display = '';
-}
-
-function astRecallLog() {
-  _astClearTime = null;
-  document.getElementById('ast-recall-btn').style.display = 'none';
-  astFetchLog();
-}
-
-async function astFetchLog() {
-  var panel  = document.getElementById('ast-log');
-  var lines  = document.getElementById('ast-log-lines').value;
-  var filter = document.getElementById('ast-log-filter').value.trim();
-  var url    = '/api/asterisk/log?lines=' + encodeURIComponent(lines);
-  if (filter) url += '&filter=' + encodeURIComponent(filter);
-
-  var r = await api(url);
-  if (!r.ok) {
-    panel.innerHTML = '<div style="color:var(--danger);padding:8px">'
-      + esc(r.data.error || ('HTTP ' + r.status)) + '</div>';
-    return;
-  }
-  var data     = r.data;
-  var logLines = (data.lines || []).slice().reverse();
-
-  // Drop lines logged before the last Clear
-  if (_astClearTime) {
-    logLines = logLines.filter(function(line) {
-      var m = line.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
-      if (!m) return true;
-      return new Date(m[1]) >= _astClearTime;
-    });
-  }
-
-  // Color-code by Asterisk log level keyword
-  panel.innerHTML = logLines.map(function(line) {
-    var cls = '';
-    var l   = line.toLowerCase();
-    if      (l.includes('[error]') || l.includes('error['))     cls = 'lERR';
-    else if (l.includes('[warning]') || l.includes('warning[')) cls = 'lWARN';
-    else if (l.includes('[notice]') || l.includes('notice['))   cls = 'lOK';
-    else if (l.includes('[debug]') || l.includes('debug['))     cls = 'lDBG';
-    else if (l.includes('[verbose]') || l.includes('verbose[')) cls = 'lAMI';
-    return '<div class="' + cls + '">' + esc(line) + '</div>';
-  }).join('');
-}
-
-async function astSetVerbose() {
-  var level  = parseInt(document.getElementById('ast-verbose-level').value, 10);
-  var result = document.getElementById('ast-verbose-result');
-  result.textContent = 'Setting...';
-  var r = await api('/api/asterisk/verbose', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({level: level})
-  });
-  if (r.ok) {
-    result.style.color = 'var(--green)';
-    result.textContent = 'Verbosity set to ' + level
-      + (level === 3 ? ' (-vvv)' : level === 5 ? ' (-vvvvv)' : '');
-  } else {
-    result.style.color = 'var(--danger)';
-    result.textContent = r.data.error || 'Failed';
-  }
-}
-
-function astToggleAutoRefresh() {
-  var cb = document.getElementById('ast-auto-refresh');
-  if (cb.checked) {
-    astFetchLog();
-    _astAutoRefreshTimer = setInterval(astFetchLog, 5000);
-  } else {
-    astStopAutoRefresh();
-  }
-}
-
-function astStopAutoRefresh() {
-  if (_astAutoRefreshTimer) {
-    clearInterval(_astAutoRefreshTimer);
-    _astAutoRefreshTimer = null;
-  }
-  var cb = document.getElementById('ast-auto-refresh');
-  if (cb) cb.checked = false;
-}
-
 /* ── Settings ───────────────────────────────────────────────────────────── */
 async function changePassword() {
   var cur  = document.getElementById('cur-pw').value;
@@ -7463,7 +6479,7 @@ async function stressTestLoadStatus() {
 }
 
 /* ── Asterisk Updates ────────────────────────────────────────────────────── */
-var _aslTimer = null, _aslOffset = 0, _aslFastUntil = 0, _aslWarns = 0, _aslErrs = 0;
+var _aslTimer = null, _aslFastUntil = 0;
 var _aslWasBusy = false;
 
 function stopAslUpdatePolling() {
@@ -7480,13 +6496,6 @@ async function aslUpdateBadge() {
 
 function aslFmtTime(epoch) {
   return epoch ? new Date(epoch * 1000).toLocaleString() : 'never';
-}
-
-function aslSetBadge(id, text, cls) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  el.textContent = text;
-  el.className = 'badge ' + cls;
 }
 
 function aslRenderStatus(d) {
@@ -7531,63 +6540,17 @@ function aslRenderStatus(d) {
     body.appendChild(tr);
   }
   document.getElementById('asl-check-btn').disabled = busy;
-  document.getElementById('asl-install-btn').disabled = busy || !st.available || !d.script_installed;
   document.getElementById('asl-check-btn').textContent = d.checking ? 'Checking\u2026' : 'Check Now';
 
   var dot = document.getElementById('asl-update-dot');
   if (dot) dot.style.display = st.available ? '' : 'none';
 
-  /* monitor strip */
-  if (d.running) aslSetBadge('asl-mon-run', 'running', 'badge-warn');
-  else if (d.checking) aslSetBadge('asl-mon-run', 'checking', 'badge-warn');
-  else if (d.last_result === 'SUCCESS') aslSetBadge('asl-mon-run', 'last run: success', 'badge-ok');
-  else if (d.last_result === 'FAILED') aslSetBadge('asl-mon-run', 'last run: FAILED', 'badge-err');
-  else aslSetBadge('asl-mon-run', 'idle', 'badge-unk');
-  aslSetBadge('asl-mon-ast', d.asterisk_active ? 'active' : 'DOWN', d.asterisk_active ? 'badge-ok' : 'badge-err');
-  aslSetBadge('asl-mon-ami', d.ami_connected ? 'connected' : 'disconnected', d.ami_connected ? 'badge-ok' : 'badge-err');
-  var act = d.activity || {};
-  document.getElementById('asl-mon-links').textContent = (act.links || 0) + (act.keyed ? ' (keyed now)' : '');
   _aslWasBusy = !!busy;
-}
-
-function aslUpdateCounters() {
-  aslSetBadge('asl-mon-warns', String(_aslWarns), _aslWarns ? 'badge-warn' : 'badge-unk');
-  aslSetBadge('asl-mon-errs', String(_aslErrs), _aslErrs ? 'badge-err' : 'badge-unk');
-}
-
-function aslAppendLog(lines, reset) {
-  var box = document.getElementById('asl-log');
-  if (reset) { box.innerHTML = ''; _aslWarns = 0; _aslErrs = 0; }
-  if (!lines.length) return;
-  var atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-  var first = box.firstElementChild;
-  if (first && first.classList.contains('muted')) box.innerHTML = '';
-  lines.forEach(function(l) {
-    var div = document.createElement('div');
-    div.className = 'asl-l-' + l.level;
-    div.textContent = l.text;
-    box.appendChild(div);
-    if (l.level === 'warn') _aslWarns++;
-    if (l.level === 'error') _aslErrs++;
-  });
-  aslUpdateCounters();
-  if (atBottom) box.scrollTop = box.scrollHeight;
-}
-
-function aslToggleIssuesOnly() {
-  document.getElementById('asl-log').classList.toggle('asl-only-issues', document.getElementById('asl-only-issues').checked);
 }
 
 async function aslUpdateTick() {
   _aslTimer = null;
   if (currentPage !== 'asl-update') return;
-  var lr = await api('/api/asl-update/log?offset=' + _aslOffset);
-  if (lr.ok && lr.data.exists) {
-    aslAppendLog(lr.data.lines, lr.data.reset);
-    _aslOffset = lr.data.offset;
-  } else if (lr.ok && !lr.data.exists && _aslOffset) {
-    _aslOffset = 0;
-  }
   var sr = await api('/api/asl-update/status');
   if (sr.ok) aslRenderStatus(sr.data);
   if (currentPage !== 'asl-update') return;
@@ -7597,9 +6560,6 @@ async function aslUpdateTick() {
 
 async function aslUpdateLoad() {
   stopAslUpdatePolling();
-  _aslOffset = 0;
-  document.getElementById('asl-log').innerHTML = '<div class="muted">No update has been run yet.</div>';
-  _aslWarns = 0; _aslErrs = 0; aslUpdateCounters();
   aslUpdateTick();
 }
 
@@ -7607,27 +6567,6 @@ async function aslUpdateCheck() {
   var r = await api('/api/asl-update/check', {method: 'POST'});
   if (!r.ok) { alert(r.data.error || 'Could not start the check.'); return; }
   _aslFastUntil = Date.now() + 5000;
-  stopAslUpdatePolling();
-  aslUpdateTick();
-}
-
-async function aslUpdateInstall() {
-  var sr = await api('/api/asl-update/status');
-  var act = (sr.ok && sr.data.activity) || {};
-  var msg = 'Install the Asterisk update now?\n\nAsterisk will restart: all links drop and any transmission ends.';
-  if (act.keyed) msg += '\n\nA node is KEYED right now.';
-  if (act.links) msg += '\n\n' + act.links + ' link(s) are currently connected.';
-  msg += '\n\nA live log will follow the install on this page.';
-  if (!confirm(msg)) return;
-  var r = await api('/api/asl-update/install', {method: 'POST',
-    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({confirm: true})});
-  if (!r.ok) {
-    alert((r.data.error || 'Could not start the update.') + (r.data.hint ? '\n\n' + r.data.hint : ''));
-    return;
-  }
-  _aslOffset = 0;
-  _aslFastUntil = Date.now() + 20000;
-  document.getElementById('asl-log').innerHTML = '<div class="muted">Starting\u2026</div>';
   stopAslUpdatePolling();
   aslUpdateTick();
 }
@@ -7846,11 +6785,6 @@ async function applyRoleNav() {
   /* Owner has every Superuser privilege plus exclusive node-lockout control,
      so everywhere below that's gated to 'superuser' also admits 'owner'. */
   var isSuper = (role === 'superuser' || role === 'owner');
-  /* Only superuser/owner sees Raw Editor and Asterisk Console */
-  var rawBtn = document.getElementById('nav-raw-editor');
-  if (rawBtn) rawBtn.style.display = isSuper ? '' : 'none';
-  var consoleBtn = document.getElementById('nav-ast-console');
-  if (consoleBtn) consoleBtn.style.display = isSuper ? '' : 'none';
   /* Only superuser/owner can use Node ID (FCC station ID playback) — misconfiguring
      or disabling it is a compliance concern, not just an operational one. */
   var nodeIdBtn = document.getElementById('nav-node-id');
@@ -7965,38 +6899,6 @@ window.addEventListener('DOMContentLoaded', async function() {
    says where the same job lives there, owner/superuser get a nav link, and
    a box where its Apache conf still serves it on every site is told how to
    fix that. Runs after applyRoleNav(), which sets window._henwenRole. */
-function _aslPageKey(pageId) {
-  // 'page-node-643930' -> 'node' (but not page-node-id / page-node-control).
-  var m = pageId.match(/^page-(node)-(\d+)$/);
-  if (m) return {key: 'node', node: m[2]};
-  if (/^page-template-/.test(pageId)) return {key: 'template', node: null};
-  return {key: pageId.replace(/^page-/, ''), node: null};
-}
-
-// Pages HenWen stops writing once the UI is reachable (W2); the server
-// refuses the same writes (asl_web_ui_handover_gate). Macro and schedule
-// pages stay editable.
-var ASL_HANDOVER_PAGES = ['general', 'node', 'template', 'raw-editor', 'backups'];
-function _aslActivePageReadOnly() {
-  return !!document.querySelector('section.page.active.asl-readonly');
-}
-function _aslDisableControls(sec) {
-  sec.querySelectorAll('input, select, textarea').forEach(function(el) {
-    if (el.tagName === 'TEXTAREA') el.readOnly = true;   // still scrollable/copyable
-    else el.disabled = true;
-  });
-}
-function _aslMakeReadOnly(sec) {
-  sec.classList.add('asl-readonly');
-  _aslDisableControls(sec);
-  // The editors re-render whenever the page is opened or reloaded, so keep
-  // disabling whatever they draw, not just what exists right now.
-  if (window.MutationObserver && !sec._aslObserver) {
-    sec._aslObserver = new MutationObserver(function() { _aslDisableControls(sec); });
-    sec._aslObserver.observe(sec, {childList: true, subtree: true});
-  }
-}
-
 async function aslWebUiDecorate() {
   var r = await api('/api/asl-web-ui/status');
   if (!r.ok || !r.data || !r.data.installed) return;
@@ -8004,32 +6906,21 @@ async function aslWebUiDecorate() {
   var isSuper = (window._henwenRole === 'superuser' || window._henwenRole === 'owner');
   var nav = document.getElementById('nav-asl-web-ui');
   if (nav && d.url && isSuper) { nav.href = d.url; nav.style.display = ''; }
-  // The first real node page; page-node-control and page-node-id share the
-  // prefix, so match the id shape rather than the first prefix hit.
-  var firstNode = null;
-  document.querySelectorAll('section[id^="page-node-"]').forEach(function(sec) {
-    if (!firstNode) firstNode = _aslPageKey(sec.id).node;
-  });
 
-  document.querySelectorAll('section.page').forEach(function(sec) {
-    var k = _aslPageKey(sec.id);
-    var o = (d.overlap || {})[k.key];
-    if (!o || sec.querySelector('.asl-overlap')) return;
-    var route = o.route.replace('{node}', k.node || firstNode || '');
-    var readOnly = d.handover && ASL_HANDOVER_PAGES.indexOf(k.key) >= 0;
+  // The pages left that overlap the UI by design (node settings, the raw
+  // editor, backups and the console were removed in W3).
+  Object.keys(d.overlap || {}).forEach(function(page) {
+    var sec = document.getElementById('page-' + page);
+    var o = d.overlap[page];
+    if (!sec || sec.querySelector('.asl-overlap')) return;
     var div = document.createElement('div');
-    div.className = 'alert ' + (readOnly ? 'alert-warn' : 'alert-info') + ' asl-overlap';
-    div.innerHTML = (readOnly
-        ? '<strong>Read-only here.</strong> On this node these settings are managed in AllStarLink\'s ASL Web UI: '
-        : 'AllStarLink\'s ASL Web UI also does this: ')
-      + '<strong>' + esc(o.what) + '</strong>. '
+    div.className = 'alert alert-info asl-overlap';
+    div.innerHTML = 'AllStarLink\'s ASL Web UI also does this: <strong>' + esc(o.what) + '</strong>. '
       + (d.url
-        ? '<a href="' + esc(d.url + route) + '" target="_blank" rel="noopener">Open it there &#8599;</a>'
+        ? '<a href="' + esc(d.url + o.route) + '" target="_blank" rel="noopener">Open it there &#8599;</a>'
         : (d.direct_visit
           ? 'Open it through this node\'s web address (not HenWen\'s own port) at <span class="mono">/asl-web-ui/</span>.'
-          : 'It isn\'t reachable from this address yet.'))
-      + (readOnly ? '' : ' HenWen is handing these pages over to it.');
-    if (readOnly) _aslMakeReadOnly(sec);
+          : 'It isn\'t reachable from this address yet.'));
     var title = sec.querySelector('.page-sub') || sec.querySelector('.page-title');
     if (title && title.nextSibling) sec.insertBefore(div, title.nextSibling);
     else sec.insertBefore(div, sec.firstChild);

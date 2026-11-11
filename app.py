@@ -57,7 +57,6 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_file, Response, stream_with_context
 from flask.sessions import SecureCookieSessionInterface
-import difflib
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 from flask_limiter import Limiter
@@ -370,11 +369,6 @@ if not os.path.exists(SYSTEMD_RUN_PATH):
     SYSTEMD_RUN_PATH = "/bin/systemd-run"
 UPDATE_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "update.sh")
 ASL_UPDATE_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "asl-asterisk-update.sh")
-# Where asl-asterisk-update.sh writes its run log. The script (run as root,
-# through sudo) reads the same variable name, but a sudoers-launched run never
-# inherits this service's environment, so in production both sides just use
-# the default; the override exists for tests and hand-run dev setups.
-ASL_UPDATE_LOG_PATH = os.environ.get("HENWEN_ASL_UPDATE_LOG", "/var/log/henwen-asl-update.log")
 ROTATE_SECRET_KEY_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rotate_secret_key.sh")
 UPDATE_SERVICE_PORTS_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "update_service_ports.sh")
 AUDIOSOCKET_TAP_APPLY_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audiosocket-tap", "apply.sh")
@@ -5948,242 +5942,6 @@ def append_node_stanza(content, node_number, settings, template=None):
     return content + "\n" + block
 
 
-# ---------------------------------------------------------------------------
-# rpt.conf setting validation
-#
-# Mirrors the GENERAL_META / NODE_SECS metadata in templates/henwen-manager.html
-# (sourced from https://allstarlink.github.io/config/rpt_conf/). The web UI
-# already restricts these fields to dropdowns/number inputs, but a request
-# can bypass the UI entirely, so the same constraints are enforced here
-# before anything is written to rpt.conf. Keys not listed are free-form
-# (paths, stanza names, etc.) and are not validated.
-# ---------------------------------------------------------------------------
-SETTINGS_SCHEMA = {
-    # [general] stanza
-    "node_lookup_method": {"type": "enum",   "options": ["both", "dns", "file"]},
-    "max_dns_node_length":{"type": "number", "min": 1, "max": 10},
-    "dns_node_domain":    {"type": "nonempty"},
-
-    # Basic / Required
-    "rxchannel":   {"type": "nonempty"},          # driver/channel — can't be blank when live
-    "duplex":      {"type": "enum",   "options": ["0", "1", "2", "3", "4"]},
-    "context":     {"type": "identifier"},        # Asterisk dialplan context name
-    "callerid":    {},                            # "Name" <number> — flexible, blank OK
-    "accountcode": {},                            # CDR code — blank OK
-    "linktolink":  {"type": "boolean"},
-
-    # Station Identification
-    "idrecording": {"type": "id_sound"},          # |iCALLSIGN or sound filename
-    "idtalkover":  {"type": "id_sound"},          # same; must have a value when enabled
-    "idtime":      {"type": "number", "min": 0, "max": 2400000},
-    "politeid":    {"type": "number", "min": 0},
-    "beaconing":   {"type": "boolean"},
-
-    # Timers
-    "hangtime":    {"type": "number", "min": 0},
-    "althangtime": {"type": "number", "min": 0},
-    "totime":      {"type": "number", "min": 0, "max": 9999999},
-    "time_out_reset_unkey_interval":    {"type": "number", "min": 0, "max": 3000},
-    "time_out_reset_kerchunk_interval": {"type": "number", "min": 0},
-    "sleeptime":   {"type": "number", "min": 0},
-
-    # Telemetry
-    "telemdefault":  {"type": "enum",    "options": ["0", "1", "2"]},
-    "telemdynamic":  {"type": "boolean"},
-    "holdofftelem":  {"type": "boolean"},
-    "telemduckdb":   {"type": "number"},
-    "telemnomdb":    {"type": "number"},
-    "unlinkedct":    {},                          # courtesy tone name — blank OK (no tone)
-    "remotect":      {},
-    "linkunkeyct":   {},
-    "nounkeyct":     {"type": "boolean"},
-    "nolocallinkct": {"type": "boolean"},
-
-    # DTMF & Functions
-    "funcchar":       {"type": "dtmf_char"},      # exactly one character; ≠ endchar
-    "endchar":        {"type": "dtmf_char"},      # exactly one character; ≠ funcchar
-    "functions":      {"type": "identifier"},
-    "link_functions": {"type": "identifier"},
-    "phone_functions":{"type": "identifier"},
-    "dtmfkey":        {"type": "boolean"},
-    "dtmfkeys":       {"type": "identifier"},
-    "propagate_dtmf": {"type": "boolean"},
-    "startup_macro":  {},                         # DTMF command string — blank = no-op
-
-    # Node Connections
-    "extnodefile":    {},                         # file path(s) — blank OK
-    "nodes":          {"type": "identifier"},
-    "nodenames":      {},                         # directory path — blank uses default
-    "connpgm":        {"type": "nonempty"},       # script path — must exist when enabled
-    "discpgm":        {"type": "nonempty"},
-    "lnkactenable":   {"type": "boolean"},
-    "lnkacttime":     {"type": "number", "min": 0, "max": 90000},
-    "lnkactmacro":    {},                         # DTMF macro — blank OK
-    "lnkacttimerwarn":{},                         # sound filename — blank = no warning
-
-    # Audio
-    "linkmongain":    {"type": "number"},
-    "erxgain":        {"type": "number"},
-    "etxgain":        {"type": "number"},
-    "rxnotch":        {"type": "notch"},          # freq,bandwidth — blank OK, format required if set
-    "outstreamcmd":   {},                         # command string — blank OK
-
-    # Tail & Scheduler
-    "tailmessagelist":  {},                       # comma-sep sound files — blank OK
-    "tailmessagetime":  {"type": "number", "min": 0, "max": 200000000},
-    "tailsquashedtime": {"type": "number", "min": 0},
-    "scheduler":        {"type": "identifier"},
-
-    # Parrot / Echo
-    "parrot":     {"type": "boolean"},
-    "parrottime": {"type": "number", "min": 0},
-
-    # EchoLink
-    "eannmode":        {"type": "enum",    "options": ["0", "1", "2", "3"]},
-    "echolinkdefault": {"type": "enum",    "options": ["0", "1", "2", "3"]},
-    "echolinkdynamic": {"type": "boolean"},
-    "elke":            {},                        # FFF timer units — blank = not an Elke node
-
-    # Archiving & Stats
-    "archivedir":      {"type": "nonempty"},      # directory path — must exist when enabled
-    "archiveformat":   {"type": "enum",    "options": ["wav49", "wav", "gsm"]},
-    "archivedatefmt":  {"type": "nonempty"},      # strftime format — can't be blank
-    "archiveaudio":    {"type": "boolean"},
-    "statpost_url":    {"type": "url"},           # http(s) URL — blank OK, format required if set
-    "statpost_program":{},                        # external program path — blank uses default
-
-    # Link Telemetry
-    "guilinkdefault":  {"type": "enum",    "options": ["0", "1", "2", "3"]},
-    "guilinkdynamic":  {"type": "boolean"},
-    "phonelinkdefault":{"type": "enum",    "options": ["0", "1", "2", "3"]},
-    "phonelinkdynamic":{"type": "boolean"},
-    "tlbdefault":      {"type": "enum",    "options": ["0", "1", "2", "3"]},
-    "tlbdynamic":      {"type": "boolean"},
-
-    # Voting
-    "votermode":   {"type": "enum",   "options": ["0", "1", "2"]},
-    "votertype":   {"type": "enum",   "options": ["0", "1", "2"]},
-    "votermargin": {"type": "number"},
-
-    # Stanza Name Overrides
-    "controlstates": {"type": "identifier"},
-    "macro":         {"type": "identifier"},
-    "telemetry":     {"type": "identifier"},
-    "morse":         {"type": "identifier"},
-    "tonemacro":     {"type": "identifier"},
-    "events":        {"type": "identifier"},
-    "wait-times":    {"type": "identifier"},
-}
-
-
-# Compiled regexes for validate_setting
-_RE_IDENTIFIER = re.compile(r'^[A-Za-z0-9_\-]+$')
-_RE_NOTCH      = re.compile(r'^\d+(?:\.\d+)?(?:,\d+(?:\.\d+)?)+$')   # one or more freq,bw pairs
-_RE_URL        = re.compile(r'^https?://')
-_RE_CW_CHARS   = re.compile(r'^[A-Za-z0-9 /.\-!?,_]+$')
-_RE_SOUNDFILE  = re.compile(r'^[A-Za-z0-9_/.\-]+$')
-_BOOL_VALUES   = frozenset(["0", "1", "yes", "no", "true", "false", "on", "off"])
-
-# Types that cannot be empty when the setting is active (toggle ON)
-_NONEMPTY_TYPES = frozenset(["nonempty", "id_sound", "dtmf_char", "identifier"])
-
-
-def find_key_typos(settings):
-    """
-    Flag active (uncommented) keys in a stanza's effective settings that
-    aren't recognized by SETTINGS_SCHEMA but closely resemble one that is —
-    e.g. 'totimer' typed instead of 'totime' (issue #117: a live
-    'totimer = 300000' line that Asterisk's config parser silently ignores,
-    since app_rpt never looks up an unrecognized directive name — there's no
-    "unknown key" warning surfaced anywhere. The node's real totime stayed
-    at its inherited/default value the whole time, and the owner had no way
-    to see why toggling the Manager UI's totime field appeared to do
-    nothing: they were never looking at the setting actually in effect).
-    Cutoff 0.82 is deliberately strict — SETTINGS_SCHEMA doesn't claim to be
-    an exhaustive list of every valid app_rpt directive, so this is a soft
-    "did you mean" nudge, not a validation error, and never blocks a save.
-    """
-    warnings = []
-    for key, info in settings.items():
-        if key in SETTINGS_SCHEMA or info.get("commented"):
-            continue
-        match = difflib.get_close_matches(key, SETTINGS_SCHEMA.keys(), n=1, cutoff=0.82)
-        if match:
-            warnings.append({"key": key, "value": info.get("value", ""), "likely": match[0]})
-    return warnings
-
-
-def validate_setting(key, value):
-    """Return None if value is acceptable for key, otherwise an error string."""
-    schema = SETTINGS_SCHEMA.get(key)
-    if schema is None:
-        return None   # unknown key: free-form, always passes
-
-    t = schema.get("type", "freeform")
-
-    if value == "":
-        if t in _NONEMPTY_TYPES:
-            label = {
-                "nonempty":   "a value",
-                "id_sound":   "a sound file name or |iCALLSIGN CW value",
-                "dtmf_char":  "a single character",
-                "identifier": "a stanza or context name",
-            }.get(t, "a value")
-            return f"{key}: requires {label} when enabled — disable the toggle instead of leaving it blank"
-        return None   # blank is fine for freeform/number/enum/boolean/notch/url
-
-    # Non-empty value validation
-    if t == "enum":
-        opts = schema.get("options", [])
-        if value not in opts:
-            return f"{key}: {value!r} is not valid — must be one of: {', '.join(opts)}"
-
-    elif t == "boolean":
-        if value.lower() not in _BOOL_VALUES:
-            return (f"{key}: {value!r} is not valid — must be one of: "
-                    "0, 1, yes, no, true, false, on, off")
-
-    elif t == "number":
-        try:
-            num = float(value)
-        except ValueError:
-            return f"{key}: {value!r} is not a number"
-        if "min" in schema and num < schema["min"]:
-            return f"{key}: {value!r} is below the minimum of {schema['min']}"
-        if "max" in schema and num > schema["max"]:
-            return f"{key}: {value!r} exceeds the maximum of {schema['max']}"
-
-    elif t == "id_sound":
-        if value.startswith("|i"):
-            cw = value[2:]
-            if not cw:
-                return f"{key}: CW format |i<callsign> requires a callsign after |i (e.g. |iN8GMZ)"
-            if not _RE_CW_CHARS.match(cw):
-                return (f"{key}: CW callsign {cw!r} contains invalid characters "
-                        "(allowed: A-Z 0-9 space / . - ! ? , _)")
-        elif not _RE_SOUNDFILE.match(value):
-            return (f"{key}: sound file name {value!r} contains invalid characters "
-                    "(letters, digits, / . - _ only — no spaces or special chars)")
-
-    elif t == "dtmf_char":
-        if len(value) != 1:
-            return f"{key}: must be exactly one character, got {len(value)} character(s)"
-
-    elif t == "identifier":
-        if not _RE_IDENTIFIER.match(value):
-            return (f"{key}: {value!r} must use only letters, digits, "
-                    "hyphens, and underscores (no spaces)")
-
-    elif t == "notch":
-        if not _RE_NOTCH.match(value):
-            return (f"{key}: {value!r} must be one or more freq,bandwidth pairs "
-                    "separated by commas (e.g. 1065,40)")
-
-    elif t == "url":
-        if not _RE_URL.match(value):
-            return f"{key}: {value!r} must start with http:// or https://"
-
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -6851,67 +6609,6 @@ def api_get_conf():
         "general_settings": parse_stanza_settings(content, "general"),
     })
 
-
-@app.route("/api/conf/node/<node>")
-def api_get_node_conf(node):
-    """
-    Return the effective settings for a specific node stanza, correctly
-    resolving Asterisk template inheritance (e.g. [64393](node-main) inherits
-    from [node-main](!)).  This fixes the bug where the flat parser returned
-    the wrong value when the same key appeared in multiple stanzas.
-    """
-    content = read_conf_file(RPT_CONF_PATH)
-    if content is None:
-        return jsonify({"error": "Cannot read rpt.conf"}), 404
-    settings = parse_stanza_settings(content, node)
-    if not settings:
-        # Try common template names as fallback
-        for tmpl in ["node-main", "node-template", node]:
-            s = parse_stanza_settings(content, tmpl)
-            if s:
-                settings = s
-                log("INFO", f"[API] /api/conf/node/{node}: using template [{tmpl}] as fallback")
-                break
-    usage     = get_node_template_usage(content)
-    templates = [t for t, nodes in usage.items() if node in nodes]
-    return jsonify({"node": node, "settings": settings, "templates": templates,
-                    "key_typo_warnings": find_key_typos(settings)})
-
-
-@app.route("/api/conf/templates")
-def api_get_templates():
-    """
-    List node-level templates (e.g. [node-main](!)) and which node numbers
-    use each one. A "node-level" template is one actually referenced by a
-    node-number stanza — this excludes functions/telemetry/morse/etc.
-    templates, which use the same (!) syntax but aren't node settings.
-    """
-    content = read_conf_file(RPT_CONF_PATH)
-    if content is None:
-        return jsonify({"error": "Cannot read rpt.conf"}), 404
-    usage = get_node_template_usage(content)
-    return jsonify({"templates": usage})
-
-
-@app.route("/api/conf/template/<name>")
-def api_get_template_conf(name):
-    """
-    Return the effective settings of a template stanza itself, e.g.
-    [node-main](!). Editing these settings here changes them for every
-    node that inherits from this template — unlike /api/conf/node/<node>,
-    where edits only ever create a node-specific override.
-    """
-    content = read_conf_file(RPT_CONF_PATH)
-    if content is None:
-        return jsonify({"error": "Cannot read rpt.conf"}), 404
-    if name not in get_template_names(content):
-        return jsonify({"error": f"Template [{name}] not found in rpt.conf"}), 404
-    settings = parse_stanza_settings(content, name)
-    usage    = get_node_template_usage(content)
-    return jsonify({"template": name, "settings": settings, "used_by": usage.get(name, []),
-                    "key_typo_warnings": find_key_typos(settings)})
-
-
 @app.route("/api/conf/macros")
 def api_get_macros():
     """List DTMF macro stanzas actually referenced by a node, and which nodes use each."""
@@ -6962,24 +6659,11 @@ def api_get_schedule_conf(name):
 
 @app.route("/api/save", methods=["POST"])
 def api_save():
+    """Save macro and schedule stanza entries. Everything else in rpt.conf --
+    [general], node stanzas, templates, raw edits -- is the ASL Web UI's job
+    (docs/ASL-WEB-UI-PLAN.md, phase W3), so this refuses it."""
     data    = request.json or {}
     content = read_conf_file(RPT_CONF_PATH) or ""
-    raw     = data.get("raw_content")
-
-    if raw is not None:
-        if session.get('role') not in ('superuser', 'owner'):
-            return jsonify({"error": "Superuser access required for raw editor"}), 403
-        log("INFO", f"[API] /api/save raw content ({len(raw)} bytes)")
-        try:
-            backup = write_conf_file(RPT_CONF_PATH, raw)
-            return jsonify({"success": True, "backup": backup,
-                            "message": f"Saved. Backup: {backup}"})
-        except PermissionError as e:
-            return jsonify({"error": str(e),
-                            "hint": "Ensure rpt.conf and backups are owned by the service user (chown asterisk:asterisk /etc/asterisk/rpt.conf)"}), 403
-        except Exception as e:
-            log("ERROR", f"[API] /api/save error: {e}")
-            return jsonify({"error": str(e)}), 500
 
     section = data.get("section", "")
     changes = data.get("changes", {})
@@ -6987,6 +6671,10 @@ def api_save():
 
     is_macro_stanza    = section in get_macro_stanza_usage(content)
     is_schedule_stanza = section in get_schedule_stanza_usage(content)
+    if data.get("raw_content") is not None or not (is_macro_stanza or is_schedule_stanza):
+        return jsonify({"error": ("HenWen edits only macro and schedule stanzas. Make other "
+                                  "rpt.conf changes in the ASL Web UI."),
+                        "handed_over": True}), 400
 
     errors = []
     for key, info in changes.items():
@@ -6995,24 +6683,10 @@ def api_save():
         value = info.get("value", "")
         if is_macro_stanza:
             err = validate_macro_entry(key, value)
-        elif is_schedule_stanza:
-            err = validate_schedule_entry(key, value)
         else:
-            err = validate_setting(key, value)
+            err = validate_schedule_entry(key, value)
         if err:
             errors.append(err)
-    # Cross-field: funcchar and endchar must differ
-    if not is_macro_stanza and not is_schedule_stanza and not errors:
-        sec_vals = {k: v.get("value", "") for k, v in parse_stanza_settings(content, section).items()}
-        for k, info in changes.items():
-            if info.get("enabled", True):
-                sec_vals[k] = info.get("value", "")
-            else:
-                sec_vals.pop(k, None)
-        fc = sec_vals.get("funcchar", "")
-        ec = sec_vals.get("endchar", "")
-        if fc and ec and fc == ec:
-            errors.append(f"funcchar and endchar must be different characters (both are {fc!r})")
 
     if errors:
         log("WARN", f"[API] /api/save rejected invalid value(s): {errors}")
@@ -7096,133 +6770,6 @@ def api_reload():
     except Exception as e:
         log("ERROR", f"[API] /api/reload exception: {e}")
         return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/backups")
-def api_backups():
-    if not os.path.exists(BACKUP_DIR):
-        return jsonify({"backups": [], "backup_dir": BACKUP_DIR})
-    names = sorted(
-        [f for f in os.listdir(BACKUP_DIR) if f.endswith(".bak")],
-        reverse=True
-    )
-    result = []
-    for name in names:
-        fpath = os.path.join(BACKUP_DIR, name)
-        try:
-            size = os.path.getsize(fpath)
-        except Exception:
-            size = 0
-        result.append({"name": name, "size": size})
-    return jsonify({"backups": result, "backup_dir": BACKUP_DIR})
-
-
-_BACKUP_NAME_RE = re.compile(r'^rpt\.conf\.(\d{8})_(\d{6})\.bak$')
-
-def _canonical_backup_name(raw):
-    """Validate raw against the backup filename shape and rebuild it from
-    the matched digit groups via int() rather than reusing the original
-    string -- an int() round-trip is a real break in the taint chain
-    (a fresh value formatted from a parsed integer, not a continuation of
-    the caller-supplied string), unlike a regex match or basename() call
-    on the original string, neither of which static analysis credits as
-    clearing "derived from user input" here. Returns None if raw doesn't
-    match the expected rpt.conf.YYYYMMDD_HHMMSS.bak shape."""
-    m = _BACKUP_NAME_RE.match(raw)
-    if not m:
-        return None
-    return f"rpt.conf.{int(m.group(1)):08d}_{int(m.group(2)):06d}.bak"
-
-
-@app.route("/api/backup/<filename>")
-def api_get_backup(filename):
-    # Legacy endpoint kept for backward compatibility
-    filename = _canonical_backup_name(filename)
-    if filename is None:
-        return jsonify({"error": "Invalid filename"}), 400
-    path = os.path.join(BACKUP_DIR, filename)
-    if not os.path.exists(path):
-        return jsonify({"error": "Not found"}), 404
-    with open(path) as f:
-        return jsonify({"content": f.read(), "filename": filename})
-
-
-@app.route("/api/backups/<name>/download")
-def api_backup_download(name):
-    name = _canonical_backup_name(name)
-    if name is None:
-        return jsonify({"error": "Invalid filename"}), 400
-    path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(path):
-        return jsonify({"error": "Not found"}), 404
-    return send_file(path, as_attachment=True, download_name=name)
-
-
-@app.route("/api/backups/<name>/diff")
-def api_backup_diff(name):
-    name = _canonical_backup_name(name)
-    if name is None:
-        return jsonify({"error": "Invalid filename"}), 400
-    path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(path):
-        return jsonify({"error": "Not found"}), 404
-    try:
-        with open(path) as f:
-            backup_lines = f.readlines()
-        current = read_conf_file(RPT_CONF_PATH)
-        if current is None:
-            return jsonify({"error": "Cannot read current rpt.conf"}), 500
-        current_lines = current.splitlines(keepends=True)
-        diff = list(difflib.unified_diff(
-            backup_lines, current_lines,
-            fromfile=name, tofile="rpt.conf (current)",
-            lineterm=""
-        ))
-        return jsonify({"diff": "".join(diff), "name": name})
-    except Exception as e:
-        log("ERROR", f"[API] /api/backups/{name}/diff error: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/backups/<name>/restore", methods=["POST"])
-def api_backup_restore(name):
-    name = _canonical_backup_name(name)
-    if name is None:
-        return jsonify({"error": "Invalid filename"}), 400
-    path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(path):
-        return jsonify({"error": "Not found"}), 404
-    try:
-        with open(path) as f:
-            content = f.read()
-        backup = write_conf_file(RPT_CONF_PATH, content)
-        log("INFO", f"[API] Restored backup: {name}")
-        return jsonify({"ok": True, "backup": backup})
-    except PermissionError as e:
-        return jsonify({"error": str(e),
-                        "hint": "Ensure rpt.conf is writable by the service user (chown asterisk:asterisk)"}), 403
-    except Exception as e:
-        log("ERROR", f"[API] /api/backups/{name}/restore error: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/backups/<name>", methods=["DELETE"])
-def api_backup_delete(name):
-    if session.get('role') not in ('superuser', 'owner'):
-        return jsonify({"error": "Superuser access required to delete backups"}), 403
-    name = _canonical_backup_name(name)
-    if name is None:
-        return jsonify({"error": "Invalid filename"}), 400
-    path = os.path.join(BACKUP_DIR, name)
-    if not os.path.exists(path):
-        return jsonify({"error": "Not found"}), 404
-    try:
-        os.unlink(path)
-        log("INFO", f"[API] Deleted backup: {name}")
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 
 # ── Kiosk Settings API ────────────────────────────────────────────────────────
 
@@ -13005,50 +12552,6 @@ def status_board_accessible():
 
 # ── Asterisk console log viewer ───────────────────────────────────────────────
 
-@app.route("/api/asterisk/log")
-def api_asterisk_log():
-    """
-    Return the last N lines from the Asterisk log file.
-    Query params:
-      lines  (int, default 100, max 2000)
-      filter (str, optional) — case-insensitive substring filter
-    """
-    if session.get('role') not in ('superuser', 'owner'):
-        return jsonify({"error": "Superuser access required"}), 403
-    try:
-        n = min(int(request.args.get("lines", 100)), 2000)
-    except (ValueError, TypeError):
-        n = 100
-    filt = request.args.get("filter", "").lower().strip()
-
-    if not os.path.exists(ASTERISK_LOG_PATH):
-        return jsonify({"lines": [], "path": ASTERISK_LOG_PATH,
-                        "error": f"Log file not found: {ASTERISK_LOG_PATH}"}), 404
-
-    try:
-        with open(ASTERISK_LOG_PATH, "rb") as f:
-            # Efficient tail: seek near the end, read, decode
-            f.seek(0, 2)
-            size = f.tell()
-            # Read up to 512 KB from the end — enough for thousands of lines
-            read_size = min(size, 512 * 1024)
-            f.seek(size - read_size)
-            raw = f.read(read_size).decode("utf-8", errors="replace")
-
-        all_lines = raw.splitlines()
-        if filt:
-            all_lines = [l for l in all_lines if filt in l.lower()]
-        result = all_lines[-n:]
-        log("DEBUG", f"[API] /api/asterisk/log: returning {len(result)} lines (filter={filt!r})")
-        return jsonify({"lines": result, "path": ASTERISK_LOG_PATH, "total_returned": len(result)})
-    except PermissionError:
-        return jsonify({"lines": [], "path": ASTERISK_LOG_PATH,
-                        "error": f"Permission denied reading {ASTERISK_LOG_PATH}"}), 403
-    except Exception as e:
-        log("ERROR", f"[API] /api/asterisk/log error: {e}")
-        return jsonify({"lines": [], "path": ASTERISK_LOG_PATH, "error": str(e)}), 500
-
-
 # Asterisk messages.log line prefix, e.g. "[2026-07-01 23:01:49] VERBOSE[123] ..."
 _AST_LOG_LINE_RE = re.compile(r'^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:\.\d+)?\]\s+([A-Z]+)')
 # Map Asterisk log levels onto the small set the Diagnostics panel colours.
@@ -13145,74 +12648,6 @@ def api_diagnostics():
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
-
-@app.route("/api/asterisk/verbose", methods=["POST"])
-def api_asterisk_verbose():
-    """
-    Set Asterisk console verbosity via AMI.
-    Body: {"level": N}  where N is 0–9.
-    Equivalent to running 'asterisk -rvvv' (level=3) from the command line.
-    """
-    if session.get('role') not in ('superuser', 'owner'):
-        return jsonify({"error": "Superuser access required"}), 403
-    data = request.get_json(force=True)
-    try:
-        level = int(data.get("level", 3))
-        if not 0 <= level <= 9:
-            return jsonify({"error": "level must be 0–9"}), 400
-    except (ValueError, TypeError):
-        return jsonify({"error": "level must be an integer 0–9"}), 400
-
-    def _set_verbose(ami):
-        lines = ami.command(f"core set verbose {level}")
-        return {"ok": True, "level": level, "output": lines}
-
-    try:
-        result = ami_send_command(_set_verbose)
-        log("INFO", f"[API] Asterisk verbosity set to {level}")
-        return jsonify(result)
-    except Exception as e:
-        log("ERROR", f"[API] /api/asterisk/verbose error: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/asterisk/command", methods=["POST"])
-def api_asterisk_command():
-    """
-    Run an arbitrary Asterisk CLI command via AMI and return its output.
-    A small blocklist prevents commands that could stop or restart Asterisk
-    from the CLI page (dedicated buttons exist for restart/reload).
-    """
-    if session.get('role') not in ('superuser', 'owner'):
-        return jsonify({"error": "Superuser access required"}), 403
-    data = request.get_json(force=True)
-    cmd  = str(data.get("command", "")).strip()
-
-    if not cmd:
-        return jsonify({"error": "command is required"}), 400
-    if len(cmd) > 512:
-        return jsonify({"error": "command too long (max 512 chars)"}), 400
-
-    # Block commands that would stop/restart Asterisk from this endpoint —
-    # those operations have their own dedicated buttons and confirmation flow.
-    _BLOCKED = ("core stop", "core shutdown", "core restart now",
-                "core restart gracefully", "core restart when convenient")
-    if any(cmd.lower().startswith(b) for b in _BLOCKED):
-        return jsonify({"error": f"Use the Restart/Reload button on the Dashboard for that operation."}), 403
-
-    def _run(ami):
-        lines = ami.command(cmd)
-        return {"ok": True, "command": cmd, "output": lines}
-
-    try:
-        result = ami_send_command(_run)
-        log("INFO", f"[API] CLI command: {cmd!r} -> {len(result['output'])} lines")
-        return jsonify(result)
-    except Exception as e:
-        log("ERROR", f"[API] /api/asterisk/command error: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
 # ── Update check ──────────────────────────────────────────────────────────
 
 @app.route("/api/update-check")
@@ -13287,24 +12722,18 @@ def api_update_launch():
 # ── Asterisk package updates (Owner only) ──────────────────────────────────
 #
 # A weekly background check for newer asl3-asterisk* packages in the apt repo
-# AllStarLink already configured on this box, plus a Manager page that lets the
-# Owner install them and watch the run live. The privileged half is
-# asl-asterisk-update.sh, reached through two narrowly-scoped NOPASSWD sudoers
-# rules (provision-sudoers.sh): `check` (apt-get update) and `install`, which is
-# launched via systemd-run as its own transient unit so it keeps logging while
-# Asterisk restarts underneath it. Everything unprivileged here reads apt's own
-# state (apt-cache policy / apt-get -s), which needs no root.
-#
-# Installing restarts Asterisk, which drops every link and ends any
-# transmission, so it only ever happens on an explicit click -- the weekly
-# poller just records what's available.
+# AllStarLink already configured on this box. It only reports: installing is
+# done with Cockpit's Software Updates (linked from the ASL Web UI) or apt,
+# since HenWen handed that over (docs/ASL-WEB-UI-PLAN.md, decision 2). The
+# privileged half is asl-asterisk-update.sh `check` (apt-get update), reached
+# through one narrowly-scoped NOPASSWD sudoers rule (provision-sudoers.sh).
+# Everything else reads apt's own state (apt-cache policy / apt-get -s),
+# which needs no root.
 
 ASL_UPDATE_POLL_INTERVAL  = 7 * 86400.0   # one successful check a week
 ASL_UPDATE_RETRY_INTERVAL = 6 * 3600.0    # after a failed apt-get update
 ASL_UPDATE_STATE_KEY      = "asl_update_state"
-ASL_UPDATE_UNIT           = "henwen-asl-upgrade"
 ASL_UPDATE_PKG_GLOB       = "asl3-asterisk*"
-ASL_UPDATE_LOG_CHUNK      = 65536
 
 _asl_check_lock = threading.Lock()   # held for the whole of a check
 _asl_checking   = False              # True while one is in flight (for the UI)
@@ -13335,43 +12764,6 @@ def parse_apt_simulation(text):
         m = re.match(r"Inst (\S+)(?: \[([^\]]+)\])? \((\S+)", line)
         if m:
             out.append({"name": m.group(1), "old": m.group(2) or "", "new": m.group(3)})
-    return out
-
-
-_ASL_LOG_PREFIX_RE = re.compile(r"^\[\d\d:\d\d:\d\d\] \[(INFO|WARN|ERROR)\]")
-_ASL_LOG_ERROR_RE = re.compile(
-    r"^E: |^dpkg: error|error processing|\bfailed\b|segmentation fault|traceback|"
-    r"unmet dependencies|could not get lock|broken packages", re.I)
-_ASL_LOG_WARN_RE = re.compile(
-    r"^W: |^dpkg: warning|\bwarning\b|\.dpkg-(dist|new|old|bak)\b|"
-    r"keeping old config file|configuration file .* (kept|modified)|obsolete", re.I)
-
-
-def classify_asl_update_lines(raw_lines):
-    """[(level, text)] where level is info|warn|error|ok. The script's own
-    lines carry an explicit [LEVEL]; apt/dpkg's pass-through output is
-    matched by pattern, and the indented continuation lines the script prints
-    under a WARN/ERROR line inherit that line's level."""
-    out, prev = [], "info"
-    for text in raw_lines:
-        text = text.rstrip("\r")
-        m = _ASL_LOG_PREFIX_RE.match(text)
-        if text.startswith("=== RESULT: SUCCESS"):
-            level = "ok"
-        elif text.startswith("=== RESULT:"):
-            level = "error"
-        elif m:
-            level = {"INFO": "info", "WARN": "warn", "ERROR": "error"}[m.group(1)]
-        elif text.startswith("        ") and prev in ("warn", "error"):
-            level = prev
-        elif _ASL_LOG_ERROR_RE.search(text):
-            level = "error"
-        elif _ASL_LOG_WARN_RE.search(text):
-            level = "warn"
-        else:
-            level = "info"
-        prev = level
-        out.append((level, text))
     return out
 
 
@@ -13493,40 +12885,6 @@ def start_asl_update_poller():
     t.start()
     log("INFO", "[ASL-UPDATE] Weekly Asterisk package check thread launched")
 
-
-def _asl_upgrade_running():
-    try:
-        r = subprocess.run([SYSTEMCTL_PATH, "is-active", ASL_UPDATE_UNIT],
-                           capture_output=True, text=True, timeout=5)
-        return r.stdout.strip() in ("active", "activating", "deactivating")
-    except Exception:
-        return False
-
-
-def _asl_node_activity():
-    """Link/keyed picture from the AMI cache, so the Owner sees what an
-    Asterisk restart is about to interrupt."""
-    links, keyed = 0, False
-    for st in list(_ami_cache.values()):
-        links += len(st.get("connected") or [])
-        keyed = keyed or bool(st.get("keyed")) or any(
-            l.get("keyed") for l in (st.get("links") or {}).values())
-    return {"links": links, "keyed": keyed}
-
-
-def _asl_last_result():
-    """SUCCESS / FAILED / None from the tail of the last run's log."""
-    try:
-        with open(ASL_UPDATE_LOG_PATH, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            f.seek(max(0, f.tell() - 2048))
-            tail = f.read().decode("utf-8", "replace")
-    except OSError:
-        return None
-    m = re.findall(r"^=== RESULT: (SUCCESS|FAILED) ===", tail, re.M)
-    return m[-1] if m else None
-
-
 @app.route("/api/asl-update/status")
 def api_asl_update_status():
     if session.get('role') != 'owner':
@@ -13535,14 +12893,9 @@ def api_asl_update_status():
     return jsonify({
         "state": state,
         "checking": _asl_checking,
-        "running": _asl_upgrade_running(),
-        "last_result": _asl_last_result(),
         "next_check": (state.get("checked_at") or 0) + ASL_UPDATE_POLL_INTERVAL
                       if state.get("checked_at") else None,
         "script_installed": os.path.exists(ASL_UPDATE_SCRIPT_PATH),
-        "asterisk_active": get_asterisk_status().get("active"),
-        "ami_connected": bool(_ami_connected),
-        "activity": _asl_node_activity(),
     })
 
 
@@ -13554,93 +12907,10 @@ def api_asl_update_check():
         return jsonify({"error": "Owner access required"}), 403
     if _asl_checking:
         return jsonify({"success": True, "message": "A check is already running."}), 202
-    if _asl_upgrade_running():
-        return jsonify({"error": "An update is installing right now."}), 409
     threading.Thread(target=lambda: _asl_check_for_updates(refresh=True),
                      name="asl-update-check", daemon=True).start()
     log("INFO", f"[ASL-UPDATE] Manual check requested by '{session.get('username')}'")
     return jsonify({"success": True}), 202
-
-
-@app.route("/api/asl-update/install", methods=["POST"])
-def api_asl_update_install():
-    """Install the pending asl3-asterisk* upgrade, as its own transient systemd
-    unit (see the section comment). Requires {"confirm": true} in the body:
-    the request restarts Asterisk, so the page must have shown that warning."""
-    if session.get('role') != 'owner':
-        return jsonify({"error": "Owner access required"}), 403
-    if not (request.get_json(silent=True) or {}).get("confirm"):
-        return jsonify({"error": "Confirmation required."}), 400
-    if not os.path.exists(ASL_UPDATE_SCRIPT_PATH):
-        return jsonify({"error": f"Updater script not found: {ASL_UPDATE_SCRIPT_PATH}"}), 404
-    if _asl_upgrade_running():
-        return jsonify({"error": "An update is already running."}), 409
-    if _asl_checking:
-        return jsonify({"error": "A check is still running - try again in a moment."}), 409
-    try:
-        info = _asl_collect_update_info()
-    except Exception as e:
-        log("ERROR", f"[ASL-UPDATE] couldn't read package state: {e}")
-        return jsonify({"error": "Couldn't read package state — check server logs"}), 500
-    if not info["available"]:
-        return jsonify({"error": "Asterisk is already up to date."}), 409
-
-    cmd = [SUDO_PATH, "-n", SYSTEMD_RUN_PATH, f"--unit={ASL_UPDATE_UNIT}", "--collect",
-           ASL_UPDATE_SCRIPT_PATH, "install"]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-    except Exception as e:
-        log("ERROR", f"[ASL-UPDATE] launch exception: {e}")
-        return jsonify({"error": "Couldn't launch the Asterisk update — check server logs"}), 500
-    if r.returncode != 0:
-        stderr = r.stderr.strip()
-        hint = ("Service account lacks sudo rights for the updater - run update.sh "
-                "(Launch Updater) or re-run install.sh to refresh the henwen-systemctl sudoers rule."
-                if "password" in stderr.lower() or "not allowed" in stderr.lower()
-                or "authoriz" in stderr.lower()
-                else f"Check: journalctl -u {ASL_UPDATE_UNIT} -n 50")
-        log("ERROR", f"[ASL-UPDATE] launch failed: {stderr}")
-        return jsonify({"error": stderr or f"systemd-run returned code {r.returncode}",
-                        "hint": hint}), 500
-    names = ", ".join(f"{u['name']} {u['old'] or '-'} -> {u['new']}" for u in info["will_upgrade"])
-    log("INFO", f"[ASL-UPDATE] Install launched by '{session.get('username')}': {names}")
-    return jsonify({"success": True})
-
-
-@app.route("/api/asl-update/log")
-def api_asl_update_log():
-    """Incremental tail of the run log: ?offset=<bytes already received>.
-    Only whole lines are returned until the run finishes, so a line the
-    script is mid-way through writing is never split across two polls. A
-    new run replaces the file, so an offset past the end means "start over"
-    and is flagged as `reset`."""
-    if session.get('role') != 'owner':
-        return jsonify({"error": "Owner access required"}), 403
-    try:
-        offset = max(0, int(request.args.get("offset", 0)))
-    except ValueError:
-        offset = 0
-    running = _asl_upgrade_running()
-    try:
-        size = os.path.getsize(ASL_UPDATE_LOG_PATH)
-    except OSError:
-        return jsonify({"exists": False, "lines": [], "offset": 0, "running": running,
-                        "result": None, "reset": False})
-    reset = offset > size
-    if reset:
-        offset = 0
-    with open(ASL_UPDATE_LOG_PATH, "rb") as f:
-        f.seek(offset)
-        chunk = f.read(ASL_UPDATE_LOG_CHUNK)
-    if not (running is False and offset + len(chunk) >= size):
-        cut = chunk.rfind(b"\n")
-        chunk = chunk[:cut + 1] if cut >= 0 else b""
-    text = chunk.decode("utf-8", "replace")
-    lines = classify_asl_update_lines(text.splitlines())
-    return jsonify({"exists": True, "reset": reset, "offset": offset + len(chunk),
-                    "size": size, "running": running, "result": _asl_last_result(),
-                    "lines": [{"level": lv, "text": tx} for lv, tx in lines]})
-
 
 # ── AudioSocket tap (low-latency Listen audio) ───────────────────────────────
 #
@@ -20341,29 +19611,18 @@ ASL_WEB_UI_VHOST_MARKER = "HenWen: ASL Web UI"
 ASL_WEB_UI_APPLY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                        "asl-web-ui", "apply.sh")
 ASL_WEB_UI_PATH = "/asl-web-ui/"
-# Phase W2: where the UI is reachable, HenWen stops writing the parts of
-# rpt.conf it covers (node stanzas, [general], templates, raw edits, backup
-# restore). Macro and schedule stanzas stay editable (plan decision 4).
-# ASL_WEB_UI_HANDOVER=0 in the unit file turns the handover off.
-ASL_WEB_UI_HANDOVER = os.environ.get("ASL_WEB_UI_HANDOVER", "1").strip().lower() not in ("0", "no", "false", "off")
 
 # Manager page -> where the same job lives in the ASL Web UI. Routes are the
 # UI's own hash routes (read from its 1.0-1 app.js). "{node}" is filled in by
 # the page for per-node pages.
+# Phase W3 removed the pages that only duplicated it (node/general/template
+# settings, raw editor, rpt.conf backups, Asterisk console): HenWen now
+# requires the UI for those (plan decision 3). What's left overlaps by design.
 ASL_WEB_UI_OVERLAP = {
-    "raw-editor":  {"what": "Manual Config Edit", "route": "#/config/rpt.conf"},
-    "backups":     {"what": "Backups, and the change history Manual Config Edit keeps",
-                    "route": "#/backups"},
-    "general":     {"what": "Nodes (call sign, duplex, radio interface)", "route": "#/nodes"},
-    "node":        {"what": "Nodes > General and Radio interface", "route": "#/nodes/{node}"},
-    "template":    {"what": "Nodes (it sets each node's own settings and never edits "
-                            "templates)", "route": "#/nodes"},
-    "ast-console": {"what": "Asterisk > Console, and Diagnostics > Asterisk log",
-                    "route": "#/asterisk"},
     "asl-update":  {"what": "Diagnostics > Software updates (it checks; Cockpit installs)",
                     "route": "#/diagnostics"},
-    "node-access": {"what": "Nodes > Access control (the same AstDB lists)",
-                    "route": "#/nodes/{node}"},
+    "node-access": {"what": "Nodes > (node) > Access control (the same AstDB lists)",
+                    "route": "#/nodes"},
 }
 
 
@@ -20391,8 +19650,6 @@ def asl_web_ui_status():
                          if (installed and (global_on or missing)
                              and os.path.isfile(ASL_WEB_UI_APPLY_SCRIPT)) else None,
         "overlap":       ASL_WEB_UI_OVERLAP if installed else {},
-        # Only while the UI can actually save: its API socket must be up.
-        "handover":      bool(reachable and running and ASL_WEB_UI_HANDOVER),
     }
 
 
@@ -20406,48 +19663,12 @@ def _request_via_apache():
 
 def asl_web_ui_status_for_request():
     """asl_web_ui_status(), adjusted for how this request arrived: on a
-    direct visit the link would 404, so there is no URL and no handover."""
+    direct visit the link would 404, so there is no URL."""
     st = dict(asl_web_ui_status())
     if not _request_via_apache():
         st["url"] = None
-        st["handover"] = False
         st["direct_visit"] = True
     return st
-
-
-def _asl_handover_blocks(endpoint, data, content):
-    """True when this write is one the ASL Web UI now owns: a raw save, a
-    backup restore, or a stanza save to anything but a macro or schedule
-    stanza. Pure, for tests; the caller decides whether handover is on."""
-    if endpoint == "api_backup_restore":
-        return True
-    if endpoint != "api_save":
-        return False
-    data = data or {}
-    if data.get("raw_content") is not None:
-        return True
-    section = data.get("section", "")
-    return not (section in get_macro_stanza_usage(content)
-                or section in get_schedule_stanza_usage(content))
-
-
-@app.before_request
-def asl_web_ui_handover_gate():
-    """Registered after check_auth(), so it only ever sees authorized writes."""
-    if request.method != "POST" or request.endpoint not in ("api_save", "api_backup_restore"):
-        return None
-    status = asl_web_ui_status_for_request()
-    if not status.get("handover"):
-        return None
-    content = read_conf_file(RPT_CONF_PATH) or ""
-    if not _asl_handover_blocks(request.endpoint, request.get_json(silent=True), content):
-        return None
-    return jsonify({
-        "error": ("This part of rpt.conf is managed in the ASL Web UI on this node. "
-                  "Make the change there."),
-        "handed_over": True,
-        "url": status.get("url"),
-    }), 409
 
 
 @app.route("/api/asl-web-ui/status")
