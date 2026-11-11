@@ -183,6 +183,7 @@ class TestListenerDisconnect:
         _login(client, "owner1")
         r = self._dc(client)
         assert r.status_code == 502 and r.get_json()["hung_up"] == 1
+        assert "hangup of x failed" not in r.get_data(as_text=True)   # no internals to the client
         assert app._sip_kick_remaining("N8GMZ") > 0
 
     def test_listing_failure_keeps_the_hold(self, client, create_user, monkeypatch, _no_kicks):

@@ -9259,7 +9259,8 @@ def _disconnect_sip_listener(local_node, callsign):
         # must not be redialed, and a retry of the X will re-arm it anyway.
         log("WARN", f"[SIP] Disconnect of listener {callsign} by {by} incomplete "
                     f"({r['hung']}/{r['found']} hung up): {r['error']}")
-        return jsonify({"error": f"Disconnect of {callsign} incomplete: {r['error']}",
+        # The cause stays in the journal; exception text never goes to the browser.
+        return jsonify({"error": f"Disconnect of {callsign} incomplete; see the HenWen log.",
                         "hung_up": r["hung"], "found": r["found"]}), 502
     log("INFO", f"[SIP] Listener {callsign} disconnected from {local_node} by {by}")
     return jsonify({"ok": True, "hung_up": r["hung"]})
