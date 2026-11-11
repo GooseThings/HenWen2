@@ -41,7 +41,7 @@ def _patch(tmp_path, vhost_text=VHOST, conf_available="/etc/apache2/conf-availab
     marker = re.search(r'^MARKER="([^"]+)"', SRC, re.M).group(1)
     insert = re.search(r'^INSERT_TEXT="(.*?)^"\n', SRC, re.M | re.S).group(0)
     script = (f'. "{COMMON}"\nMARKER="{marker}"\nCONF_AVAILABLE="{conf_available}"\n'
-              f'{insert}henwen_insert_before_proxypass "{vhost}" {PORT} "$MARKER" "$INSERT_TEXT"\n')
+              f'{insert}henwen_insert_before_proxypass_each_block "{vhost}" {PORT} "$MARKER" "$INSERT_TEXT"\n')
     rc = subprocess.run(["bash", "-c", script]).returncode
     return rc, vhost.read_text()
 
@@ -72,6 +72,58 @@ def test_rerun_is_a_no_op(tmp_path):
 def test_vhost_without_catch_all_is_a_failure(tmp_path):
     rc, out = _patch(tmp_path, vhost_text="<VirtualHost *:443>\n</VirtualHost>\n")
     assert rc == 2 and "asl-web-ui" not in out
+
+
+TWO_BLOCKS = VHOST.replace("*:443", "*:80").replace("henwen.example.com", "a.example.com") + VHOST
+
+
+def test_every_henwen_block_in_one_file_is_patched(tmp_path):
+    """PR #14 review: a file-wide marker check patched only the first block."""
+    rc, out = _patch(tmp_path, vhost_text=TWO_BLOCKS)
+    assert rc == 0
+    for block in out.split("</VirtualHost>")[:2]:
+        lines = [l.strip() for l in block.splitlines()]
+        assert lines.index("ProxyPass /asl-web-ui !") < next(
+            i for i, l in enumerate(lines) if l.startswith("ProxyPass        /"))
+    assert out.count("ProxyPass /asl-web-ui !") == 2
+
+
+def test_a_block_added_later_gets_patched_on_rerun(tmp_path):
+    rc, once = _patch(tmp_path)
+    rc2, twice = _patch(tmp_path, vhost_text=once + VHOST.replace("henwen.example.com", "b.example.com"))
+    assert rc2 == 0 and twice.count("ProxyPass /asl-web-ui !") == 2
+
+
+def test_non_henwen_blocks_are_left_alone(tmp_path):
+    other = "<VirtualHost *:443>\n    ServerName other.example.com\n    DocumentRoot /var/www\n</VirtualHost>\n"
+    rc, out = _patch(tmp_path, vhost_text=other + VHOST)
+    assert rc == 0 and out.startswith(other) and out.count("asl-web-ui !") == 1
+
+
+def test_backup_dir_is_unique_per_run():
+    """PR #14 review: two runs in one second must not share a backup dir."""
+    assert 'BACKUP_DIR=$(mktemp -d "/root/henwen-asl-web-ui-backup-${STAMP}-XXXXXX")' in SRC
+
+
+def test_setup_https_lan_rewrite_carries_the_rules(tmp_path):
+    """PR #14 review: setup-https.sh --lan rebuilds the SSL vhost and keeps
+    only the lines its CARRY grep selects."""
+    src = open(os.path.join(ROOT, "tx-spike", "setup-https.sh")).read()
+    pattern = re.search(r"CARRY=\$\(grep -E '([^']+)' \"\$SSL_AVAIL\"", src).group(1)
+    _, patched = _patch(tmp_path)
+    patched = patched.replace("    ProxyPreserveHost On\n",
+                              "    # HenWen low-latency RX audio: x\n    ProxyPass /ws-audio ws://127.0.0.1:8098/ retry=0\n")
+    (tmp_path / "ssl.conf").write_text(patched)
+    carried = subprocess.run(["grep", "-E", pattern, str(tmp_path / "ssl.conf")],
+                             capture_output=True, text=True).stdout.splitlines()
+    stripped = [l.strip() for l in carried]
+    assert "IncludeOptional /etc/apache2/conf-available/asl-web-ui.conf" in stripped
+    assert "ProxyPass /asl-web-ui !" in stripped
+    assert "ProxyPass /ws-audio ws://127.0.0.1:8098/ retry=0" in stripped
+    # Nothing else: not HenWen's own catch-all, which the rewrite emits itself.
+    assert not any(l.startswith("ProxyPass        /") for l in stripped)
+    assert stripped.index("IncludeOptional /etc/apache2/conf-available/asl-web-ui.conf") < \
+        stripped.index("ProxyPass /asl-web-ui !")
 
 
 def test_rollback_reenables_only_what_apply_disabled():

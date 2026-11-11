@@ -7,7 +7,8 @@
 # HenWen's own vhost, HenWen's catch-all "ProxyPass / http://127.0.0.1:<port>/"
 # sends /asl-web-ui/ to Flask instead (docs/ASL-WEB-UI-PLAN.md, hazard 2).
 #
-# This script, for every HenWen vhost apache-common.sh finds:
+# This script, for every HenWen <VirtualHost> block in every vhost file
+# apache-common.sh finds:
 #   - inserts, just before HenWen's catch-all ProxyPass:
 #       IncludeOptional /etc/apache2/conf-available/asl-web-ui.conf
 #       ProxyPass /asl-web-ui !
@@ -33,7 +34,6 @@ CONF_NAME="asl-web-ui"
 CONF_AVAILABLE="${HENWEN_APACHE_CONF_AVAILABLE:-/etc/apache2/conf-available}/${CONF_NAME}.conf"
 CONF_ENABLED="${HENWEN_APACHE_CONF_ENABLED:-/etc/apache2/conf-enabled}/${CONF_NAME}.conf"
 STAMP=$(date +%Y%m%d-%H%M%S)
-BACKUP_DIR="/root/henwen-asl-web-ui-backup-$STAMP"
 
 [ "$(id -u)" = 0 ] || { echo "Run as root (sudo)"; exit 1; }
 
@@ -49,6 +49,9 @@ fi
 echo "== Found ${#APACHE_CONFS[@]} HenWen Apache vhost(s):"
 printf '     %s\n' "${APACHE_CONFS[@]}"
 
+# Unique per run: two runs in the same second must not share a backup dir,
+# or the second would back up the first's already-patched files.
+BACKUP_DIR=$(mktemp -d "/root/henwen-asl-web-ui-backup-${STAMP}-XXXXXX")
 echo "== Backing up to $BACKUP_DIR"
 henwen_backup_vhosts "$BACKUP_DIR" "${APACHE_CONFS[@]}"
 echo "$BACKUP_DIR" > /root/henwen-asl-web-ui-last-backup
@@ -63,7 +66,8 @@ echo "== Vhosts"
 for conf in "${APACHE_CONFS[@]}"; do
   echo "   $conf"
   rc=0
-  henwen_insert_before_proxypass "$conf" "$FLASK_PORT" "$MARKER" "$INSERT_TEXT" || rc=$?
+  # Per <VirtualHost> block: one file can serve HenWen from several blocks.
+  henwen_insert_before_proxypass_each_block "$conf" "$FLASK_PORT" "$MARKER" "$INSERT_TEXT" || rc=$?
   case "$rc" in
     0) echo "      patched" ;;
     1) echo "      already patched, skipping" ;;

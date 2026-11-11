@@ -466,7 +466,9 @@ if [ "$LAN" = "1" ]; then
     if [ -f "$SSL_AVAIL" ]; then
         # Each feature's marker comment line plus its ProxyPass line -- the
         # two things apply.sh / ws-audio/apply.sh grep for to stay idempotent.
-        CARRY=$(grep -E 'HenWen (browser transmitter|low-latency RX audio):|^[[:space:]]*ProxyPass /(asterisk-ws|ws-audio) ' "$SSL_AVAIL" || true)
+        # Also asl-web-ui/apply.sh's include + exclusion: with the package's
+        # global conf disabled, dropping them would send /asl-web-ui/ to Flask.
+        CARRY=$(grep -E 'HenWen (browser transmitter|low-latency RX audio):|HenWen: ASL Web UI|^[[:space:]]*ProxyPass /(asterisk-ws|ws-audio) |^[[:space:]]*IncludeOptional [^[:space:]]*/asl-web-ui\.conf$|^[[:space:]]*ProxyPass /asl-web-ui !$' "$SSL_AVAIL" || true)
     fi
     echo "[LAN] Writing $SSL_AVAIL (port ${HTTPS_PORT})..."
     {
