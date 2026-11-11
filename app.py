@@ -16395,10 +16395,17 @@ def _sip_startup_provision(attempts=12, delay=10, sleep=time.sleep):
     plain retry would see "unchanged" and never reload -- the retry is forced
     instead. Skipped entirely when no account has a SIP identity, so an
     install that never used the feature gets no generated files."""
-    if not _sip_identity_rows():
-        return None
-    force, result = False, None
+    force, result, err = False, None, "AMI never connected"
     for _ in range(attempts):
+        try:
+            if not _sip_identity_rows():
+                return None
+        except Exception as e:
+            # A background thread must log and keep going, not die silently.
+            err = f"could not read accounts: {e}"
+            log("WARN", f"[SIP] Startup provisioning: {err}")
+            sleep(delay)
+            continue
         if not _ami_connected:
             sleep(delay)
             continue
@@ -16409,7 +16416,7 @@ def _sip_startup_provision(attempts=12, delay=10, sleep=time.sleep):
             force = True
         sleep(delay)
     log("WARN", f"[SIP] Startup provisioning did not complete: "
-                f"{(result or {}).get('error') or 'AMI never connected'}")
+                f"{(result or {}).get('error') or err}")
     return result
 
 

@@ -534,3 +534,19 @@ class TestStartupProvision:
 
     def test_no_accounts_means_no_files(self, monkeypatch):
         assert self._run(monkeypatch, [{"ok": True}], rows=()) == []
+
+    def test_a_database_error_is_logged_and_retried(self, monkeypatch):
+        reads, calls, logged = [], [], []
+        def rows(db=None):
+            reads.append(1)
+            if len(reads) == 1:
+                raise RuntimeError("database is locked")
+            return [("N8GMZ", "x" * 30)]
+        monkeypatch.setattr(app, "_sip_identity_rows", rows)
+        monkeypatch.setattr(app, "sip_provision_accounts",
+                            lambda reason="", force_reload=False, db=None: calls.append(1) or {"ok": True})
+        monkeypatch.setattr(app, "_ami_connected", True)
+        monkeypatch.setattr(app, "log", lambda lvl, msg: logged.append((lvl, msg)))
+        app._sip_startup_provision(attempts=4, delay=0, sleep=lambda s: None)
+        assert calls == [1]
+        assert any(l == "WARN" and "database is locked" in m for l, m in logged)
