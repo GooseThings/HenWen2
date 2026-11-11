@@ -3760,6 +3760,23 @@ function resetCustomTheme() {
 
 /* ── State ─────────────────────────────────────────────────────────────── */
 var pendingChanges = {};
+// rpt.conf version each editor loaded, keyed by section ('__raw__' for the
+// raw editor, '__backups__' for restore). Sent back as base_hash so the
+// server refuses a save made against an rpt.conf that changed since -- the
+// ASL Web UI writes it too (docs/ASL-WEB-UI-PLAN.md, hazard 3).
+var _confHash = {};
+function _confHashAdvance(oldHash, newHash) {
+  // A one-stanza save moved the file from oldHash to newHash without
+  // touching any other stanza, so every editor that was current before it
+  // is still current after it. Not for raw saves or restores.
+  if (!newHash) return;
+  Object.keys(_confHash).forEach(function(k) {
+    if (_confHash[k] === oldHash) _confHash[k] = newHash;
+  });
+}
+function _confConflictMsg(r) {
+  return (r.data && r.data.error) || 'rpt.conf changed since this page loaded it. Reload and try again.';
+}
 var currentSection = '';
 var currentPage    = 'dashboard';
 var backupFile     = null;
@@ -4302,12 +4319,16 @@ async function saveChanges() {
   var r = await api('/api/save', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({section: section, changes: changes})
+    body: JSON.stringify({section: section, changes: changes, base_hash: _confHash[section]})
   });
   if (r.ok) {
     log('Saved. ' + (r.data.message || ''), 'OK');
+    _confHashAdvance(_confHash[section], r.data.conf_hash);
     delete pendingChanges[section];
     hideUnsaved();
+  } else if (r.status === 409 && r.data.conflict) {
+    log(_confConflictMsg(r), 'ERROR');
+    showUnsaved('⚠️ Not saved: rpt.conf changed elsewhere. Discard and reload this page.');
   } else {
     log('Save failed: ' + (r.data.error || r.status), 'ERROR');
     (r.data.details || []).forEach(function(d) { log('  ' + d, 'ERROR'); });
@@ -4632,6 +4653,7 @@ async function loadStanzaEditor(sectionName, elId, apiUrl, loadingLabel, fallbac
     }
   }
 
+  _confHash[sectionName] = r.data.conf_hash;
   var s    = r.data.settings || {};
   var html = '';
 
@@ -4727,6 +4749,7 @@ async function loadListEditor(kind, name, contentElId, usedByElId, apiPrefix) {
     if (usedByEl) usedByEl.textContent = '';
     return;
   }
+  _confHash[name] = r.data.conf_hash;
 
   var usedBy = r.data.used_by || [];
   if (usedByEl) {
@@ -4831,6 +4854,7 @@ async function rawLoad() {
     return;
   }
   document.getElementById('raw-ta').value = r.data.content;
+  _confHash.__raw__ = r.data.conf_hash;
   document.getElementById('raw-alert').innerHTML =
     '<div class="alert alert-info">Loaded ' + r.data.content.length + ' bytes from {{ conf_path }}</div>';
   log('Raw editor: ' + r.data.content.length + ' bytes.', 'OK');
@@ -4842,14 +4866,17 @@ async function rawSave() {
   var r = await api('/api/save', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({raw_content: content})
+    body: JSON.stringify({raw_content: content, base_hash: _confHash.__raw__})
   });
   var alertEl = document.getElementById('raw-alert');
   if (r.ok) {
+    // A raw save can change any stanza, so only the raw editor stays current.
+    _confHash.__raw__ = r.data.conf_hash;
     alertEl.innerHTML = '<div class="alert alert-success">Saved. Backup: ' + esc(r.data.backup || '') + '</div>';
     log('Saved. Backup: ' + (r.data.backup || ''), 'OK');
   } else {
-    alertEl.innerHTML = '<div class="alert alert-danger">' + esc(r.data.error || 'Save failed') + '</div>';
+    alertEl.innerHTML = '<div class="alert alert-danger">' + esc(r.data.error || 'Save failed')
+      + (r.data.conflict ? ' <button class="btn btn-sm" onclick="rawLoad()">Reload</button>' : '') + '</div>';
     log('Save failed: ' + (r.data.error || r.status), 'ERROR');
     if (r.data.hint) log(r.data.hint, 'WARN');
   }
@@ -4865,6 +4892,7 @@ function _fmtSize(b) {
 async function loadBackups() {
   var el = document.getElementById('backup-list');
   var r  = await api('/api/backups');
+  if (r.ok) _confHash.__backups__ = r.data.conf_hash;
   if (!r.ok || !r.data.backups || !r.data.backups.length) {
     el.innerHTML = '<span class="muted">No backups found in ' + esc(r.data && r.data.backup_dir || '') + '.</span>';
     return;
@@ -4921,12 +4949,17 @@ function backupDownload(name) {
 async function backupRestore(name) {
   if (!confirm('Restore ' + name + '?\nThe current rpt.conf will be backed up first.')) return;
   log('Restoring backup: ' + name, 'WARN');
-  var r = await api('/api/backups/' + encodeURIComponent(name) + '/restore', {method: 'POST'});
+  var r = await api('/api/backups/' + encodeURIComponent(name) + '/restore', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({base_hash: _confHash.__backups__})
+  });
   if (r.ok) {
     log('Restored. New backup: ' + (r.data.backup || ''), 'OK');
-    loadBackups();
+    loadBackups();   // a restore replaces the whole file; other editors stay stale
   } else {
     log('Restore failed: ' + (r.data.error || r.status), 'ERROR');
+    if (r.data.conflict) loadBackups();
   }
 }
 
