@@ -37,6 +37,7 @@ run [HenWen 1.x](https://github.com/GooseThings/HenWen#install).
 
 - **[HenWen 2.0 wiki](https://github.com/GooseThings/HenWen2/wiki)** — what changed in 2.0, per-user SIP setup, Connected Nodes
 - [`docs/HENWEN2-PLAYBOOK.md`](docs/HENWEN2-PLAYBOOK.md) — plan, phase status, decisions
+- [`docs/ASL-WEB-UI-PLAN.md`](docs/ASL-WEB-UI-PLAN.md) — what HenWen hands over to AllStarLink's new web UI, and what it keeps
 - [HenWen 1.x wiki](https://github.com/GooseThings/HenWen/wiki) — everything shared with 1.x (install, features, troubleshooting)
 
 ## Status and roadmap
