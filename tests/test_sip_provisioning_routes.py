@@ -502,3 +502,35 @@ class TestBoardSessionLabel:
         assert rows["27664"]["session_label"] == ""
         assert rows["27664"]["callsign"] == "W1AW"
         assert "N8GMZ" not in looked_up      # no pointless allmondb miss per refresh
+
+
+class TestStartupProvision:
+    """A renderer change must reach an upgraded install without anyone
+    editing an account (Greptile, PR #8)."""
+
+    def _run(self, monkeypatch, results, ami=True, rows=(("N8GMZ", "x" * 30),)):
+        calls = []
+        def fake(reason="", force_reload=False, db=None):
+            calls.append(force_reload)
+            return results[min(len(calls), len(results)) - 1]
+        monkeypatch.setattr(app, "sip_provision_accounts", fake)
+        monkeypatch.setattr(app, "_sip_identity_rows", lambda db=None: list(rows))
+        monkeypatch.setattr(app, "_ami_connected", ami)
+        app._sip_startup_provision(attempts=4, delay=0, sleep=lambda s: None)
+        return calls
+
+    def test_runs_once_when_it_succeeds(self, monkeypatch):
+        assert self._run(monkeypatch, [{"ok": True}]) == [False]
+
+    def test_a_failed_reload_after_a_write_is_retried_forced(self, monkeypatch):
+        """The files already match on the retry, so an unforced call would
+        see "unchanged" and never reload."""
+        calls = self._run(monkeypatch, [{"ok": False, "dialplan_changed": True, "error": "AMI"},
+                                        {"ok": True}])
+        assert calls == [False, True]
+
+    def test_waits_for_ami(self, monkeypatch):
+        assert self._run(monkeypatch, [{"ok": True}], ami=False) == []
+
+    def test_no_accounts_means_no_files(self, monkeypatch):
+        assert self._run(monkeypatch, [{"ok": True}], rows=()) == []

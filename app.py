@@ -16384,6 +16384,40 @@ def sip_provision_accounts(reason="", force_reload=False, db=None):
             return result
 
 
+def _sip_startup_provision(attempts=12, delay=10, sleep=time.sleep):
+    """Re-render the per-user SIP files once at startup, so a change to the
+    renderers (e.g. the 0<CALLSIGN> -> <CALLSIGN> link rename) reaches an
+    upgraded install without anyone editing an account. Nothing else calls
+    sip_provision_accounts() on startup or from update.sh.
+
+    Waits for AMI, since the reload goes over it. If a write lands but the
+    reload fails, the files on disk now match what HenWen would render, so a
+    plain retry would see "unchanged" and never reload -- the retry is forced
+    instead. Skipped entirely when no account has a SIP identity, so an
+    install that never used the feature gets no generated files."""
+    if not _sip_identity_rows():
+        return None
+    force, result = False, None
+    for _ in range(attempts):
+        if not _ami_connected:
+            sleep(delay)
+            continue
+        result = sip_provision_accounts("startup", force_reload=force)
+        if result.get("ok"):
+            return result
+        if result.get("pjsip_changed") or result.get("dialplan_changed"):
+            force = True
+        sleep(delay)
+    log("WARN", f"[SIP] Startup provisioning did not complete: "
+                f"{(result or {}).get('error') or 'AMI never connected'}")
+    return result
+
+
+def start_sip_startup_provision():
+    threading.Thread(target=_sip_startup_provision, name="sip-startup-provision",
+                     daemon=True).start()
+
+
 def _sip_rotate_secret_for(db, username, reason):
     """Rotate one account's SIP secret (if it has an identity), re-provision
     and end its live calls -- the shared tail of every password-change path.
@@ -20193,6 +20227,7 @@ if not os.environ.get("HENWEN_SKIP_STARTUP"):
     start_dvswitch_caller_poller()
     start_bm_talkgroups_poller()
     start_audio_ws_relay()
+    start_sip_startup_provision()
 
 if __name__ == "__main__":
     log("INFO", "Starting in direct-run mode (not via gunicorn)")

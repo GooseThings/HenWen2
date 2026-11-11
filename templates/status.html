@@ -6095,6 +6095,8 @@ async function sbConnect(localNode, remoteNode, btn, permanent, monitor, skipCon
     (window._lastBoardNodes || []).forEach(function(n) {
       if (String(n.node) !== String(localNode)) return;
       (n.connected || []).forEach(function(c) {
+        /* A HenWen listener (session_label set) is not a bridged node. */
+        if (c.session_label) return;
         if (String(c.node) !== String(remoteNode)) already.push(c.node);
       });
     });
@@ -6754,6 +6756,10 @@ function renderFavorites() {
   var connectedByMeSet = {};
   (window._lastBoardNodes || []).forEach(function(n) {
     (n.connected || []).forEach(function(c) {
+      /* A HenWen listener is a link but not a node connection: it must not
+         trip the user-role one-connection rule (the server's connect gate
+         exempts it too -- _sip_session_link()). */
+      if (c.session_label) return;
       connSet[c.node] = true;
       if (c.connector_managed) connectorManagedSet[c.node] = true;
       if (c.connected_by_me) connectedByMeSet[c.node] = true;
@@ -6843,7 +6849,7 @@ async function favConnect(localNode, remoteNode, btn) {
   if (role !== 'admin' && role !== 'superuser' && role !== 'owner') {
     var connSet = {};
     (window._lastBoardNodes || []).forEach(function(n) {
-      (n.connected || []).forEach(function(c) { connSet[c.node] = true; });
+      (n.connected || []).forEach(function(c) { if (!c.session_label) connSet[c.node] = true; });
     });
     if (Object.keys(connSet).length > 0) {
       sbToast('Disconnect the current node before connecting another', false);
@@ -6859,7 +6865,7 @@ async function favMonitor(localNode, remoteNode, btn) {
   if (role !== 'admin' && role !== 'superuser' && role !== 'owner') {
     var connSet = {};
     (window._lastBoardNodes || []).forEach(function(n) {
-      (n.connected || []).forEach(function(c) { connSet[c.node] = true; });
+      (n.connected || []).forEach(function(c) { if (!c.session_label) connSet[c.node] = true; });
     });
     if (Object.keys(connSet).length > 0) {
       sbToast('Disconnect the current node before connecting another', false);
