@@ -9175,6 +9175,9 @@ def api_status_disconnect():
     if not re.match(r'^\d{4,7}$', local_node):
         return jsonify({"error": "Invalid local_node"}), 400
     if not re.match(r'^\d{4,7}$', remote_node):
+        # Not a node: a HenWen listener's link is named by its callsign.
+        if _CALLSIGN_RE.match(remote_node.upper()) and _sip_session_link(remote_node):
+            return _disconnect_sip_listener(local_node, remote_node.upper())
         return jsonify({"error": "Invalid remote_node"}), 400
     # User/kiosk accounts may not tear down a link that Smart Connector is
     # actively managing on a schedule — only admin/superuser can. Checked
@@ -9224,6 +9227,26 @@ def api_status_disconnect():
     except Exception as e:
         log("ERROR", f"[API] /api/status/disconnect error: {e}")
         return jsonify({"error": "Disconnect failed"}), 500
+
+
+def _disconnect_sip_listener(local_node, callsign):
+    """The board's X on a HenWen listener row: owner/superuser/admin only.
+    A phone-mode link is the listener's own call, so the call is hung up
+    (every PJSIP/henwen-u-<cs>-* channel; the account's context reaches only
+    its own node) rather than ilink 11'd, and the kiosk's automatic
+    reconnect is held off for SIP_KICK_HOLD_SEC (see _sip_kicked)."""
+    if session.get('role', '') not in ('admin', 'superuser', 'owner'):
+        return jsonify({"error": "Only an admin or the owner can disconnect a HenWen listener."}), 403
+    by = session.get('username', '?')
+    _sip_kick_hold(callsign, by)
+    n = _sip_hangup_endpoint_channels(sip_identity(callsign)['endpoint'])
+    if not n:
+        with _sip_kicked_lock:
+            _sip_kicked.pop(callsign, None)
+        log("WARN", f"[SIP] {by} tried to disconnect listener {callsign} from {local_node}: no live call")
+        return jsonify({"error": f"No live call found for {callsign}"}), 404
+    log("INFO", f"[SIP] Listener {callsign} disconnected from {local_node} by {by}")
+    return jsonify({"ok": True, "hung_up": n})
 
 
 @app.route("/api/status/squash-idle", methods=["POST"])
@@ -9417,7 +9440,12 @@ def api_audio_session():
                             (session.get('user_id'),)).fetchone()
     listen_only = bool(session.get('role') == 'user' and urow and urow["listen_only"])
     locked = session.get('role') != 'owner' and is_any_node_locked()
-    if listen_only:
+    kick = _sip_kick_remaining(urow["callsign"] if urow else None)
+    if kick:
+        # An admin just hung this listener up; tell the kiosk to stop rather
+        # than fall back to the 1.x stream or redial.
+        body.update(reason="kicked", kicked=True, retry_after=kick)
+    elif listen_only:
         body["reason"] = "listen_only"
     elif locked:
         body["reason"] = "locked"
@@ -16327,7 +16355,7 @@ def _sip_hangup_endpoint_channels(endpoint):
             else:
                 log('WARN', f"[SIP] Hangup of {ch} rejected: {pkt.get('Message', pkt)}")
         if n:
-            log('INFO', f"[SIP] Hung up {n} live channel(s) for revoked endpoint {endpoint}")
+            log('INFO', f"[SIP] Hung up {n} live channel(s) for endpoint {endpoint}")
         return n
     except Exception as e:
         log('WARN', f"[SIP] Could not hang up channels for {endpoint}: {e}")
@@ -16460,6 +16488,36 @@ SIP_KEYED_IDLE_SEC = 30      # send an AMI Ping after this long with no traffic
 SIP_KEYED_DEAD_SEC = 75      # ...and reconnect if nothing at all arrives by this
 SIP_KEYED_RETRY_SEC = 5      # first retry; doubles per failure...
 SIP_KEYED_RETRY_MAX = 120    # ...up to this
+
+# Admin disconnects of a listener. Hanging up alone does nothing useful: the
+# kiosk retries an unexpectedly ended call after 3s (_sipEnded()), so the
+# listener would be back before the board refreshed. /api/audio/session
+# answers `kicked` for this long instead of a credential, and the kiosk
+# stops. It is a courtesy hold for HenWen's own client, not enforcement --
+# the credential stays valid; revoking it (clear the callsign) is that.
+SIP_KICK_HOLD_SEC = 60
+_sip_kicked_lock = threading.Lock()
+_sip_kicked = {}             # CALLSIGN -> {"until": ts, "by": username}
+
+
+def _sip_kick_hold(callsign, by, now=None):
+    now = time.time() if now is None else now
+    with _sip_kicked_lock:
+        _sip_kicked[str(callsign).upper()] = {"until": now + SIP_KICK_HOLD_SEC, "by": by}
+
+
+def _sip_kick_remaining(callsign, now=None):
+    """Seconds left on an admin disconnect hold for this callsign, else 0."""
+    if not callsign:
+        return 0
+    now = time.time() if now is None else now
+    with _sip_kicked_lock:
+        e = _sip_kicked.get(str(callsign).upper())
+        if e and e["until"] <= now:
+            _sip_kicked.pop(str(callsign).upper(), None)
+            e = None
+    return max(1, int(-(-(e["until"] - now) // 1))) if e else 0   # whole seconds, rounded up
+
 
 _sip_keyed_lock = threading.Lock()
 _sip_keyed = {}              # Uniqueid -> {"callsign","node","channel","digits","keyed","since"}
