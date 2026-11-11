@@ -220,3 +220,25 @@ class TestEventLoop:
         assert "Events: dtmf,call" in seen[0]
         assert keyed_seen.is_set()
         assert seen[-1] is False
+
+
+class TestEventLoopBackoff:
+    def test_down_logs_once_and_backs_off(self, monkeypatch):
+        logs, sleeps, stop = [], [], threading.Event()
+
+        def fail():
+            raise ConnectionRefusedError("refused")
+
+        def fake_sleep(sec):
+            sleeps.append(sec)
+            if len(sleeps) >= 6:
+                stop.set()
+
+        monkeypatch.setattr(henwen_app, "_sip_session_callsigns", lambda: frozenset({"N8GMZ"}))
+        monkeypatch.setattr(henwen_app, "parse_manager_conf", fail)
+        monkeypatch.setattr(henwen_app.time, "sleep", fake_sleep)
+        monkeypatch.setattr(henwen_app, "log", lambda lvl, msg: logs.append((lvl, msg)))
+        henwen_app._sip_keyed_event_loop(stop=stop)
+        assert [l for l in logs if l[0] == "WARN"] == [
+            ("WARN", "[SIP-KEY] Event stream down: refused (retrying quietly)")]
+        assert sleeps[:6] == [5, 10, 20, 40, 80, 120]

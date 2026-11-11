@@ -16458,7 +16458,8 @@ def start_sip_startup_provision():
 _SIP_CHANNEL_RE = re.compile(r'^PJSIP/henwen-u-([a-z0-9]{3,9})-[0-9a-f]+$', re.IGNORECASE)
 SIP_KEYED_IDLE_SEC = 30      # send an AMI Ping after this long with no traffic
 SIP_KEYED_DEAD_SEC = 75      # ...and reconnect if nothing at all arrives by this
-SIP_KEYED_RETRY_SEC = 5
+SIP_KEYED_RETRY_SEC = 5      # first retry; doubles per failure...
+SIP_KEYED_RETRY_MAX = 120    # ...up to this
 
 _sip_keyed_lock = threading.Lock()
 _sip_keyed = {}              # Uniqueid -> {"callsign","node","channel","digits","keyed","since"}
@@ -16609,7 +16610,10 @@ def _ami_split_packets(buf):
 
 def _sip_keyed_event_loop(stop=None):
     """Hold one events-on AMI connection for DTMFEnd/Hangup, forever.
-    `stop` (a threading.Event) exists for tests."""
+    `stop` (a threading.Event) exists for tests. A failure is logged once
+    and its recovery once, with a capped backoff in between, so an Asterisk
+    that is down for a package upgrade doesn't fill the journal."""
+    delay, down_since = SIP_KEYED_RETRY_SEC, None
     while not (stop and stop.is_set()):
         ami = None
         try:
@@ -16629,7 +16633,11 @@ def _sip_keyed_event_loop(stop=None):
             for f in ("Event: DTMFEnd", "Event: Hangup"):
                 ami._send_action({"Action": "Filter", "Operation": "Add", "Filter": f})
             _sip_keyed_reset("event stream restarted")
-            log("INFO", "[SIP-KEY] Listening for session DTMF")
+            if down_since is not None:
+                log("INFO", f"[SIP-KEY] Event stream back after {int(time.time() - down_since)}s")
+            else:
+                log("INFO", "[SIP-KEY] Listening for session DTMF")
+            delay, down_since = SIP_KEYED_RETRY_SEC, None
             sock, buf, last_rx, pinged = ami._sock, "", time.time(), False
             sock.settimeout(1.0)
             while not (stop and stop.is_set()):
@@ -16654,7 +16662,11 @@ def _sip_keyed_event_loop(stop=None):
                     if t:
                         _sip_keyed_log(t)
         except Exception as e:
-            log("WARN", f"[SIP-KEY] Event stream down: {e}")
+            if down_since is None:
+                down_since = time.time()
+                log("WARN", f"[SIP-KEY] Event stream down: {e} (retrying quietly)")
+            else:
+                log("DEBUG", f"[SIP-KEY] Event stream still down: {e}")
         finally:
             if ami is not None:
                 try:
@@ -16664,7 +16676,9 @@ def _sip_keyed_event_loop(stop=None):
             _sip_keyed_reset("event stream down")
         if stop and stop.is_set():
             break
-        time.sleep(SIP_KEYED_RETRY_SEC)
+        time.sleep(delay)
+        if down_since is not None:
+            delay = min(max(delay, 1) * 2, SIP_KEYED_RETRY_MAX)
 
 
 def start_sip_keyed_monitor():
