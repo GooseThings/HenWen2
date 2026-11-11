@@ -20323,6 +20323,77 @@ def api_id_morse():
 
 
 # ---------------------------------------------------------------------------
+# AllStarLink's ASL Web UI (docs/ASL-WEB-UI-PLAN.md, phase W1)
+#
+# Detected from the filesystem only -- no subprocess, no AMI -- so the check
+# is cheap enough to run on every Manager page load. Installed = the
+# package's static files exist; running = its socket-activated API socket
+# exists (systemd removes it on stop); scoped = asl-web-ui/apply.sh has put
+# its include into HenWen's vhost(s); global = the package's own conf still
+# serves /asl-web-ui/ on every virtual host.
+# ---------------------------------------------------------------------------
+
+ASL_WEB_UI_WWW         = os.environ.get("ASL_WEB_UI_WWW", "/usr/share/asl-web-ui/www")
+ASL_WEB_UI_SOCKET      = os.environ.get("ASL_WEB_UI_SOCKET", "/run/asl-web-ui/web.sock")
+ASL_WEB_UI_GLOBAL_CONF = os.environ.get("ASL_WEB_UI_GLOBAL_CONF",
+                                        "/etc/apache2/conf-enabled/asl-web-ui.conf")
+ASL_WEB_UI_VHOST_MARKER = "HenWen: ASL Web UI"
+ASL_WEB_UI_APPLY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "asl-web-ui", "apply.sh")
+ASL_WEB_UI_PATH = "/asl-web-ui/"
+
+# Manager page -> where the same job lives in the ASL Web UI. Routes are the
+# UI's own hash routes (read from its 1.0-1 app.js). "{node}" is filled in by
+# the page for per-node pages.
+ASL_WEB_UI_OVERLAP = {
+    "raw-editor":  {"what": "Manual Config Edit", "route": "#/config/rpt.conf"},
+    "backups":     {"what": "Backups, and the change history Manual Config Edit keeps",
+                    "route": "#/backups"},
+    "general":     {"what": "Nodes (call sign, duplex, radio interface)", "route": "#/nodes"},
+    "node":        {"what": "Nodes > General and Radio interface", "route": "#/nodes/{node}"},
+    "ast-console": {"what": "Asterisk > Console, and Diagnostics > Asterisk log",
+                    "route": "#/asterisk"},
+    "asl-update":  {"what": "Diagnostics > Software updates (it checks; Cockpit installs)",
+                    "route": "#/diagnostics"},
+    "node-access": {"what": "Nodes > Access control (the same AstDB lists)",
+                    "route": "#/nodes/{node}"},
+}
+
+
+@_ttl_cached(30)
+def asl_web_ui_status():
+    installed = os.path.isfile(os.path.join(ASL_WEB_UI_WWW, "index.html"))
+    running   = installed and os.path.exists(ASL_WEB_UI_SOCKET)
+    global_on = os.path.exists(ASL_WEB_UI_GLOBAL_CONF)
+    vhosts, applied, missing = _apache_marker_status(ASL_WEB_UI_VHOST_MARKER)
+    # Reachable at /asl-web-ui/ on the host this Manager is served from:
+    # either the global conf serves it everywhere, or apply.sh included it
+    # in every HenWen vhost.
+    reachable = installed and (global_on or (bool(vhosts) and not missing))
+    return {
+        "installed":     installed,
+        "running":       running,
+        "global_conf":   global_on,
+        "vhosts_scoped": applied,
+        "vhosts_missing": missing,
+        "reachable":     reachable,
+        "url":           ASL_WEB_UI_PATH if reachable else None,
+        # The fix for a global conf or an unpatched vhost, when the script
+        # that applies it is present in this install.
+        "apply_script":  ASL_WEB_UI_APPLY_SCRIPT
+                         if (installed and (global_on or missing)
+                             and os.path.isfile(ASL_WEB_UI_APPLY_SCRIPT)) else None,
+        "overlap":       ASL_WEB_UI_OVERLAP if installed else {},
+    }
+
+
+@app.route("/api/asl-web-ui/status")
+def api_asl_web_ui_status():
+    """Admin+ (default gate): Manager is admin+, and it is the only caller."""
+    return jsonify(asl_web_ui_status())
+
+
+# ---------------------------------------------------------------------------
 # Node access (incoming-connection allowlist / denylist)
 # ---------------------------------------------------------------------------
 # ASL3's stock extensions.conf [radio-secure] context already enforces this,

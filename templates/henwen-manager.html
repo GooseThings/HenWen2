@@ -610,6 +610,8 @@ input:checked + .slider::before  { transform: translateX(16px); background: var(
   font-size: 0.92rem; color: var(--accent, #58a6ff);
 }
 #update-bar.show { display: flex; }
+#asl-web-ui-scope-bar:empty { display: none; }
+.asl-overlap { margin: 4px 0 14px; }
 
 .asl-log { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; font-family: var(--mono); font-size: 0.8rem; line-height: 1.45; height: 380px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
 .asl-log div { padding: 0 2px; }
@@ -690,6 +692,9 @@ pre.codeblock { background: var(--bg3); padding: 12px; border-radius: 4px; font-
     <button class="nav-item active" onclick="showPage('dashboard')">Dashboard</button>
     <button class="nav-item" onclick="showPage('node-control')">Node Control</button>
     <button class="nav-item" onclick="showPage('dtmf')">DTMF Control</button>
+    <a class="nav-item" id="nav-asl-web-ui" href="/asl-web-ui/" target="_blank" rel="noopener"
+       style="display:none;text-decoration:none"
+       title="AllStarLink's own web UI for this node: setup, radio tuning, Asterisk, backups">ASL Web UI &#8599;</a>
 
     <div class="nav-section">Diagnostics</div>
     <button class="nav-item" onclick="showPage('conn-history')">Conn. History</button>
@@ -777,6 +782,8 @@ pre.codeblock { background: var(--bg3); padding: 12px; border-radius: 4px; font-
       <button class="btn btn-sm" onclick="dismissUpdateBar()">Dismiss</button>
     </div>
   </div>
+
+  <div id="asl-web-ui-scope-bar"></div>
 
   <!-- Dashboard -->
   <section class="page active" id="page-dashboard">
@@ -7942,7 +7949,61 @@ window.addEventListener('DOMContentLoaded', async function() {
   checkNodeDB();
   checkForUpdate();
   aslUpdateBadge();
+  aslWebUiDecorate();
 });
+
+/* ── ASL Web UI ─────────────────────────────────────────────────────────────
+   AllStarLink's own web UI covers part of what these pages do
+   (docs/ASL-WEB-UI-PLAN.md). When it is installed, each overlapping page
+   says where the same job lives there, owner/superuser get a nav link, and
+   a box where its Apache conf still serves it on every site is told how to
+   fix that. Runs after applyRoleNav(), which sets window._henwenRole. */
+function _aslPageKey(pageId) {
+  // 'page-node-643930' -> 'node' (but not page-node-id / page-node-control).
+  var m = pageId.match(/^page-(node)-(\d+)$/);
+  if (m) return {key: 'node', node: m[2]};
+  return {key: pageId.replace(/^page-/, ''), node: null};
+}
+
+async function aslWebUiDecorate() {
+  var r = await api('/api/asl-web-ui/status');
+  if (!r.ok || !r.data || !r.data.installed) return;
+  var d = r.data;
+  var isSuper = (window._henwenRole === 'superuser' || window._henwenRole === 'owner');
+  var nav = document.getElementById('nav-asl-web-ui');
+  if (nav && d.url && isSuper) { nav.href = d.url; nav.style.display = ''; }
+  var firstNode = (document.querySelector('section[id^="page-node-"]') || {}).id;
+  firstNode = firstNode ? _aslPageKey(firstNode).node : null;
+
+  document.querySelectorAll('section.page').forEach(function(sec) {
+    var k = _aslPageKey(sec.id);
+    var o = (d.overlap || {})[k.key];
+    if (!o || sec.querySelector('.asl-overlap')) return;
+    var route = o.route.replace('{node}', k.node || firstNode || '');
+    var div = document.createElement('div');
+    div.className = 'alert alert-info asl-overlap';
+    div.innerHTML = 'AllStarLink\'s ASL Web UI also does this: <strong>' + esc(o.what) + '</strong>. '
+      + (d.url
+        ? '<a href="' + esc(d.url + route) + '" target="_blank" rel="noopener">Open it there &#8599;</a>'
+        : 'It isn\'t reachable from this address yet.')
+      + ' HenWen is handing these pages over to it.';
+    var title = sec.querySelector('.page-sub') || sec.querySelector('.page-title');
+    if (title && title.nextSibling) sec.insertBefore(div, title.nextSibling);
+    else sec.insertBefore(div, sec.firstChild);
+  });
+
+  if (isSuper && d.apply_script && (d.global_conf || (d.vhosts_missing || []).length)) {
+    var bar = document.getElementById('asl-web-ui-scope-bar');
+    if (bar) {
+      bar.innerHTML = '<div class="alert alert-warn">'
+        + (d.global_conf
+          ? 'The ASL Web UI is served at <span class="mono">/asl-web-ui/</span> on <strong>every</strong> website on this server.'
+          : 'The ASL Web UI isn\'t reachable on every HenWen site yet.')
+        + ' To serve it on HenWen\'s site(s) only, run <span class="mono">sudo bash '
+        + esc(d.apply_script) + '</span>.</div>';
+    }
+  }
+}
 
 async function checkForUpdate(live) {
   // Only superuser/owner are in a position to act on an update (shell/deploy
