@@ -84,6 +84,16 @@ def _no_live_breach_check(monkeypatch):
     monkeypatch.setattr(henwen_app, "_is_password_breached", lambda password: False)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_session_callsigns():
+    """_sip_session_callsigns() memoizes the provisioned-callsign set for the
+    whole process; without this, one test's accounts would make another
+    test's peer look like a session link."""
+    henwen_app._sip_session_callsigns.cache_clear()
+    yield
+    henwen_app._sip_session_callsigns.cache_clear()
+
+
 @pytest.fixture()
 def client(fresh_db):
     """Flask test client backed by an isolated DB and a clean active-session table."""

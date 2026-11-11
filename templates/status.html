@@ -781,6 +781,10 @@ svg.kiosk-login-icon { display: none; }
 .nr-call { flex: 0 0 auto;
   font-size: 0.95rem; font-weight: 600; color: var(--text); letter-spacing: .03em; text-decoration: none; }
 .nr-call:hover { text-decoration: underline; }
+/* "643930 HenWen User" on a 2.0 session link: may shrink, unlike a callsign. */
+.nr-session { flex: 0 1 auto; min-width: 0; font-weight: 500; color: var(--text2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nr-session:hover { text-decoration: none; }
 .nr-flag { flex: 0 0 auto; margin-left: calc(-10px + 0.3em); /* cancels .nr-line's 10px gap, leaving ~one space */  height: 0.8rem; width: auto; align-self: center; border-radius: 2px; box-shadow: 0 0 0 1px rgba(128,128,128,.35); }
 .nr-loc  { flex: 0 1 auto; min-width: 0; font-size: 0.82rem; color: var(--text2);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -5265,7 +5269,9 @@ async function refreshBoard() {
           '<div class="nr-main">' +
             '<div class="nr-line">' +
               nodeLink(c.node, 'nr-num') +
-              (c.callsign ? callsignLink(c.callsign, 'nr-call') : '<div class="nr-call">—</div>') +
+              (c.callsign ? callsignLink(c.callsign, 'nr-call')
+                : c.session_label ? '<div class="nr-call nr-session">' + esc(c.session_label) + '</div>'
+                : '<div class="nr-call">—</div>') +
               (isDvswitchBridge && c.callsign ? countryFlag(c.country) : '') +
               '<div class="nr-loc">' + esc(c.dmr_talker ? (c.dmr_name || '') : (c.location||c.desc||'')) + '</div>' +
             '</div>' +
@@ -6089,6 +6095,8 @@ async function sbConnect(localNode, remoteNode, btn, permanent, monitor, skipCon
     (window._lastBoardNodes || []).forEach(function(n) {
       if (String(n.node) !== String(localNode)) return;
       (n.connected || []).forEach(function(c) {
+        /* A HenWen listener (session_label set) is not a bridged node. */
+        if (c.session_label) return;
         if (String(c.node) !== String(remoteNode)) already.push(c.node);
       });
     });
@@ -6748,6 +6756,10 @@ function renderFavorites() {
   var connectedByMeSet = {};
   (window._lastBoardNodes || []).forEach(function(n) {
     (n.connected || []).forEach(function(c) {
+      /* A HenWen listener is a link but not a node connection: it must not
+         trip the user-role one-connection rule (the server's connect gate
+         exempts it too -- _sip_session_link()). */
+      if (c.session_label) return;
       connSet[c.node] = true;
       if (c.connector_managed) connectorManagedSet[c.node] = true;
       if (c.connected_by_me) connectedByMeSet[c.node] = true;
@@ -6837,7 +6849,7 @@ async function favConnect(localNode, remoteNode, btn) {
   if (role !== 'admin' && role !== 'superuser' && role !== 'owner') {
     var connSet = {};
     (window._lastBoardNodes || []).forEach(function(n) {
-      (n.connected || []).forEach(function(c) { connSet[c.node] = true; });
+      (n.connected || []).forEach(function(c) { if (!c.session_label) connSet[c.node] = true; });
     });
     if (Object.keys(connSet).length > 0) {
       sbToast('Disconnect the current node before connecting another', false);
@@ -6853,7 +6865,7 @@ async function favMonitor(localNode, remoteNode, btn) {
   if (role !== 'admin' && role !== 'superuser' && role !== 'owner') {
     var connSet = {};
     (window._lastBoardNodes || []).forEach(function(n) {
-      (n.connected || []).forEach(function(c) { connSet[c.node] = true; });
+      (n.connected || []).forEach(function(c) { if (!c.session_label) connSet[c.node] = true; });
     });
     if (Object.keys(connSet).length > 0) {
       sbToast('Disconnect the current node before connecting another', false);
@@ -9088,7 +9100,7 @@ function _doStartListenFallback(audio, node) {
    For an account with its own SIP identity (Manager > Users > Callsign),
    Listen does not fetch a server-encoded stream: it registers to Asterisk
    as that account and places ONE native call into the node's phone portal
-   (Rpt(<node>,P) under the link name 0<CALLSIGN>). That call carries
+   (Rpt(<node>,P) under the link name <CALLSIGN>). That call carries
    both directions -- the node's audio comes down it, PTT is DTMF *99/# up
    it -- so there is no server-side capture, encoder, jitter buffer or
    live-edge controller involved, and no self-echo: the downlink is the
