@@ -6036,18 +6036,21 @@ async function testAMI() {
   el.innerHTML = '<span class="muted"><span class="spinner"></span> Testing...</span>';
   log('Running AMI test...', 'INFO');
   var r = await api('/api/ami/test');
+  // Shown on success and failure alike: a rotated [admin] secret is exactly
+  // the case where the login fails and this is the explanation.
+  var amiWarn = (r.data && r.data.warning)
+    ? '<div class="alert alert-warn">' + esc(r.data.warning) + '</div>' : '';
   if (r.ok && r.data.connected) {
     el.innerHTML = '<div class="alert alert-success">AMI connected as <strong>'
       + esc(r.data.ami_user) + '</strong> at ' + esc(r.data.ami_host || '')
-      + (r.data.asterisk_info ? '<br>' + esc(r.data.asterisk_info) : '') + '</div>'
-      + (r.data.warning ? '<div class="alert alert-warn">' + esc(r.data.warning) + '</div>' : '');
+      + (r.data.asterisk_info ? '<br>' + esc(r.data.asterisk_info) : '') + '</div>' + amiWarn;
     log('AMI test PASSED.', 'OK');
   } else {
     var err = r.data.error || 'Unknown error';
     el.innerHTML = '<div class="alert alert-danger"><strong>AMI test failed</strong><br>'
       + esc(err)
       + (!r.data.creds_found ? '<br>Credentials not set. See Configuration Guide below.' : '')
-      + '</div>';
+      + '</div>' + amiWarn;
     log('AMI test FAILED: ' + err, 'ERROR');
   }
 }

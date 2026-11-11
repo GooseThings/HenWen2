@@ -109,3 +109,9 @@ class TestAmiSetupScript:
         assert "permit = 127.0.0.1/255.255.255.255" in block
         read = re.search(r"^read = (.*)$", block, re.M).group(1).split(",")
         assert "dtmf" in read and "call" in read  # start_sip_keyed_monitor()
+
+    def test_installer_names_its_unit(self):
+        """PR #13 review: with both HenWen and HenWen2 units present,
+        auto-detection would pick HenWen2 while install.sh set up HenWen."""
+        src = open(os.path.join(os.path.dirname(__file__), "..", "install.sh")).read()
+        assert 'HENWEN_SERVICE="$SERVICE_NAME" bash "$INSTALL_DIR/ami-setup.sh"' in src
