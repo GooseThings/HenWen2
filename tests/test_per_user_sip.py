@@ -47,11 +47,11 @@ class TestValidateCallsign:
 
 
 class TestSipIdentity:
-    def test_link_name_is_zero_prefixed(self):
-        """app_rpt announces any link whose name starts with a letter -- 1.x
-        hit exactly that (fixed in v2026.10.28.2), and here it would happen
-        once per listener."""
-        assert app.sip_identity("N8GMZ")["link_name"] == "0N8GMZ"
+    def test_link_name_is_the_bare_callsign(self):
+        """Not '0'-prefixed: app_rpt hides every '0' link from `rpt lstats`,
+        RPT_ALINKS (the keyed flag) and the stats link list. On a normal node
+        with telemdefault=0 a letter-led name is not announced locally."""
+        assert app.sip_identity("N8GMZ")["link_name"] == "N8GMZ"
 
     def test_names_are_derived_consistently(self):
         ident = app.sip_identity("n8gmz")
@@ -114,7 +114,7 @@ class TestRenderUserDialplan:
 
     def test_uses_phone_control_mode_and_the_link_name(self):
         out = app.render_user_dialplan("N8GMZ", 643930)
-        assert "Rpt(643930,P,0N8GMZ)" in out
+        assert "Rpt(643930,P,N8GMZ)" in out
 
     def test_node_must_be_numeric(self):
         for bad in ("643930; System(rm -rf /)", "abc", "", None):
@@ -127,7 +127,7 @@ class TestRenderUserDialplan:
         out = app.render_user_dialplan("n8gmz", "1999")
         for line in out.splitlines():
             assert re.match(r'^(\[[a-z0-9\-]+\]|; .*|exten => \d+,1,Answer\(\)|'
-                            r' same => n,(Rpt\(\d+,P,0[A-Z0-9]+\)|Hangup\(\)))$', line), line
+                            r' same => n,(Rpt\(\d+,P,[A-Z0-9]+\)|Hangup\(\)))$', line), line
 
 
 class TestSchema:
@@ -239,7 +239,7 @@ class TestWriteSipUserFiles:
         res = app.write_sip_user_files([("N8GMZ", SECRET)], "643930")
         assert res == {"pjsip_changed": True, "dialplan_changed": True, "accounts": 1}
         assert "[henwen-u-n8gmz]" in self.pjsip.read_text()
-        assert "Rpt(643930,P,0N8GMZ)" in self.dialplan.read_text()
+        assert "Rpt(643930,P,N8GMZ)" in self.dialplan.read_text()
 
     def test_unchanged_content_is_not_rewritten(self):
         """What lets the caller reload Asterisk only when something really

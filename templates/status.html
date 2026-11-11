@@ -9088,7 +9088,7 @@ function _doStartListenFallback(audio, node) {
    For an account with its own SIP identity (Manager > Users > Callsign),
    Listen does not fetch a server-encoded stream: it registers to Asterisk
    as that account and places ONE native call into the node's phone portal
-   (Rpt(<node>,P) under the link name 0<CALLSIGN>). That call carries
+   (Rpt(<node>,P) under the link name <CALLSIGN>). That call carries
    both directions -- the node's audio comes down it, PTT is DTMF *99/# up
    it -- so there is no server-side capture, encoder, jitter buffer or
    live-edge controller involved, and no self-echo: the downlink is the

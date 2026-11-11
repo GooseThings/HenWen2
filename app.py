@@ -3214,7 +3214,7 @@ def _poll_loop():
                             # DB insert (and its lookup_node, which can hit the
                             # network on a cache miss) deferred past the lock.
                             _conn_opens.append((node_str, peer, directions.get(peer, "")))
-                            # A HenWen audio session (0HenWen-Web, 0<CALLSIGN>)
+                            # A HenWen audio session (0HenWen-Web, <CALLSIGN>)
                             # is a link too: it is recorded in connection
                             # history (who listened is worth knowing) but never
                             # pushed as a "Node Connected" alert -- in 2.0 that
@@ -9073,7 +9073,7 @@ def api_status_connect():
     # Status Board UI disables Connect/Monitor once any node is connected,
     # but that's client-side only, so enforce it here too (a user-role
     # session could otherwise hit this endpoint directly and stack links).
-    # A HenWen audio session (0HenWen-Web, 0<CALLSIGN>) is an app_rpt link
+    # A HenWen audio session (0HenWen-Web, <CALLSIGN>) is an app_rpt link
     # too and shows up in the connected list, but it is this user's own
     # listening, not a node they linked -- it must not count against the
     # one-at-a-time rule or a user-role account could never connect a node
@@ -15871,10 +15871,18 @@ def _get_stream_relay_config():
 #
 #   1. An on-air identity. The app_rpt link name is derived from the account's
 #      callsign, so `rpt lstats` and the Connected Nodes list name the person
-#      instead of showing a shared "HenWen-Web". It is '0'-prefixed because
-#      app_rpt announces any link whose name starts with a letter -- that was
-#      a real bug in 1.x (fixed in v2026.10.28.2) and it would come back once
-#      per listener here.
+#      instead of showing a shared "HenWen-Web". It is the bare callsign.
+#      An earlier version '0'-prefixed it, and that hid the link everywhere:
+#      app_rpt 3.10.8 skips every '0' name in `rpt lstats`, RPT_ALINKS (the
+#      per-link keyed flag), the link list sent to peers and to
+#      stats.allstarlink.org, and telemetry. A letter-led name does make
+#      app_rpt raise CONNECTED, but on a normal (non-remote-base) node that
+#      is only a text message to the linked nodes plus a local VARCMD, and
+#      VARCMD is dropped while telemmode < 2 -- i.e. with telemdefault=0 the
+#      node itself says nothing (rpt_telemetry.c, the !myrpt->remote branch).
+#      A linked peer with its own telemetry on may announce it, exactly as
+#      it would for any IAX client. The 1.x announcement bug (v2026.10.28.2)
+#      was the shared "HenWen-Web-P" link.
 #
 #   2. Its own credential, so a leak is attributable and revocable for one
 #      account instead of for everyone. Rotating sip_secret *is* revocation.
@@ -15983,9 +15991,9 @@ def sip_identity(callsign):
         'auth':      'henwen-u-' + slug + '-auth',
         'aor':       'henwen-u-' + slug,
         'context':   'henwen-u-' + slug,
-        # '0'-prefixed: app_rpt announces a link whose name starts with a
-        # letter. See point 1 in the block comment above.
-        'link_name': '0' + cs,
+        # The bare callsign, so the link shows in `rpt lstats`/RPT_ALINKS
+        # with its keyed flag. See point 1 in the block comment above.
+        'link_name': cs,
     }
 
 
@@ -16194,15 +16202,37 @@ SIP_USERS_APPLY_SCRIPT_PATH = os.path.join(
 SIP_RELOAD_COMMANDS = ("module reload res_pjsip.so", "dialplan reload")
 
 
+@_ttl_cached(30)
+def _sip_session_callsigns():
+    """Callsigns of every account with a SIP identity -- i.e. every name a
+    2.0 session link can have. Cached because the AMI poll loop asks once per
+    peer per second; sip_provision_accounts() clears it whenever the set can
+    have changed, so the TTL only bounds a change made some other way."""
+    try:
+        return frozenset(r["callsign"].upper() for r in get_db().execute(
+            "SELECT callsign FROM users WHERE callsign IS NOT NULL AND callsign != '' "
+            "AND sip_secret IS NOT NULL AND sip_secret != ''").fetchall())
+    except Exception as e:
+        log("WARN", f"[SIP] Could not read session callsigns: {e}")
+        return frozenset()
+
+
 def _sip_session_link(peer):
     """True for an app_rpt link that is a HenWen audio session rather than a
-    node: the shared 1.x browser-TX link ("0HenWen-Web") and every 2.0
-    per-user link ("0<CALLSIGN>", see sip_identity()). Both are '0'-prefixed
-    so app_rpt stays quiet about them, and no AllStarLink node number starts
-    with 0, so the prefix is a reliable discriminator -- but a numeric peer
-    is never treated as a session regardless, since that would be a node."""
+    node: the shared 1.x browser-TX link ("0HenWen-Web"), and every 2.0
+    per-user link, which is named by the bare callsign (see sip_identity()).
+
+    The callsign alone can't decide it -- an IAX client (IAXRpt, DVSwitch
+    Mobile) also links under a callsign -- so a letter-led name only counts
+    when it is an account's provisioned callsign. A '0'-prefixed name still
+    counts too: that is 0HenWen-Web, and a 2.0 session placed before the
+    rename. A numeric peer is never a session; that would be a node."""
     p = str(peer or '')
-    return p.startswith('0') and not p.isdigit()
+    if not p or p.isdigit():
+        return False
+    if p.startswith('0'):
+        return True
+    return p.upper() in _sip_session_callsigns()
 
 
 def _sip_identity_rows(db=None):
@@ -16305,6 +16335,7 @@ def sip_provision_accounts(reason="", force_reload=False, db=None):
                                                 "nothing written")
                 return result
             w = write_sip_user_files(rows, node)
+            _sip_session_callsigns.cache_clear()
             result["pjsip_changed"]    = w["pjsip_changed"]
             result["dialplan_changed"] = w["dialplan_changed"]
             inc = sip_include_status()
@@ -18492,7 +18523,7 @@ def _connector_do_connect(local: str, target: str, disconnect_first: bool = Fals
                 # (skip_permanent unchecked), it has to be used for every
                 # connected peer, not just the ones we happen to know are
                 # permanent.
-                # A HenWen audio session (0HenWen-Web, 0<CALLSIGN>) is a
+                # A HenWen audio session (0HenWen-Web, <CALLSIGN>) is a
                 # link too, and `ilink 11` would end a listener's call. In
                 # 2.0 every listener is one of these, so "disconnect all" has
                 # to mean "all *nodes*" -- playbook risk 3.

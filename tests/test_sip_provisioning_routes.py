@@ -66,14 +66,32 @@ def _row(fresh_db, username):
     return fresh_db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
 
 
+@pytest.fixture
+def _session_callsigns(monkeypatch):
+    """Pretend N8GMZ is a provisioned account, without a DB round trip."""
+    monkeypatch.setattr(app, "_sip_session_callsigns", lambda: frozenset({"N8GMZ"}))
+
+
 class TestSessionLink:
-    def test_session_links_are_recognised(self):
+    def test_session_links_are_recognised(self, _session_callsigns):
         assert app._sip_session_link("0HenWen-Web")
+        assert app._sip_session_link("N8GMZ")
+        assert app._sip_session_link("n8gmz")
+        # A call placed before the rename keeps its old name until it redials.
         assert app._sip_session_link("0N8GMZ")
 
-    def test_nodes_are_not(self):
+    def test_nodes_and_iax_clients_are_not(self, _session_callsigns):
+        # NT0Y is a callsign too -- an IAX client, not a HenWen account.
         for peer in ("643930", "27664", "NT0Y", "", None, "0"):
             assert not app._sip_session_link(peer)
+
+    def test_provisioning_a_callsign_makes_it_a_session_link(self, owner, fresh_db, _isolated_sip):
+        app._sip_session_callsigns.cache_clear()
+        assert not app._sip_session_link("N8GMZ")
+        r = owner.post("/api/users", json={"username": "bob", "password": "bobs-password-1",
+                                           "role": "user", "callsign": "N8GMZ"})
+        assert r.status_code == 200, r.get_json()
+        assert app._sip_session_link("N8GMZ")
 
 
 class TestCreateWithCallsign:
@@ -87,7 +105,7 @@ class TestCreateWithCallsign:
         # Provisioned: both files written, reload fired.
         assert os.path.exists(app.SIP_USERS_CONF)
         assert "henwen-u-n8gmz" in open(app.SIP_USERS_CONF).read()
-        assert "Rpt(643930,P,0N8GMZ)" in open(app.SIP_USERS_DIALPLAN).read()
+        assert "Rpt(643930,P,N8GMZ)" in open(app.SIP_USERS_DIALPLAN).read()
         assert _isolated_sip["reload"] == 1
 
     def test_no_callsign_means_no_secret_and_no_provisioning(self, owner, fresh_db, _isolated_sip):
@@ -265,7 +283,7 @@ class TestReloadCommand:
 class TestHangup:
     def test_only_that_endpoints_channels_are_hung_up(self, monkeypatch):
         hung = []
-        row = lambda name: f"{name}!henwen-u-n8gmz!643930!1!Up!Rpt!643930,P,0N8GMZ!N8GMZ!!!3!42!!1700000000.1"
+        row = lambda name: f"{name}!henwen-u-n8gmz!643930!1!Up!Rpt!643930,P,N8GMZ!N8GMZ!!!3!42!!1700000000.1"
         class Ami:
             timeout = 2
             def command(self, c, **kw):
@@ -308,7 +326,7 @@ class TestTxConfig:
         assert b["auth_user"] == "N8GMZ"               # auth username = callsign
         assert b["password"] == _row(fresh_db, "bob")["sip_secret"]
         assert b["dial"] == "643930"                   # own context: bare node
-        assert b["link_name"] == "0N8GMZ"
+        assert b["link_name"] == "N8GMZ"
         assert r.headers["Cache-Control"] == "no-store"
 
     def test_probe_says_which_identity(self, owner, client, tmp_path, monkeypatch):
@@ -389,25 +407,25 @@ class TestApplyRoute:
 
 
 class TestConnectorExclusion:
-    def test_disconnect_all_skips_session_links(self, monkeypatch):
+    def test_disconnect_all_skips_session_links(self, monkeypatch, _session_callsigns):
         sent = []
         class Ami:
             def rpt_cmd(self, node, cmd):
                 sent.append(cmd); return {"success": True}
         monkeypatch.setattr(app, "ami_send_command", lambda fn: fn(Ami()))
         monkeypatch.setitem(app._ami_cache, "643930",
-                            {"connected": ["27664", "0N8GMZ", "0HenWen-Web", "2000"]})
+                            {"connected": ["27664", "N8GMZ", "0HenWen-Web", "2000"]})
         monkeypatch.setattr(app.time, "sleep", lambda s: None)
         app._connector_do_connect("643930", "55553", disconnect_first=True, skip_permanent=False)
         assert sent == ["ilink 11 27664", "ilink 11 2000", "ilink 3 55553"]
 
-    def test_preserve_permanent_variant_skips_them_too(self, monkeypatch):
+    def test_preserve_permanent_variant_skips_them_too(self, monkeypatch, _session_callsigns):
         sent = []
         class Ami:
             def rpt_cmd(self, node, cmd):
                 sent.append(cmd); return {"success": True}
         monkeypatch.setattr(app, "ami_send_command", lambda fn: fn(Ami()))
-        monkeypatch.setitem(app._ami_cache, "643930", {"connected": ["27664", "0N8GMZ"]})
+        monkeypatch.setitem(app._ami_cache, "643930", {"connected": ["27664", "N8GMZ"]})
         monkeypatch.setattr(app.time, "sleep", lambda s: None)
         app._connector_do_connect("643930", "55553", disconnect_first=True, skip_permanent=True)
         assert sent == ["ilink 11 27664", "ilink 3 55553"]
@@ -442,9 +460,10 @@ class TestConnectGateIgnoresSessionLinks:
         create_user("kiosk1", password="kiosk1s-password1", role="user")
         _login(client, "kiosk1", "kiosk1s-password1")
 
-    def test_own_listening_session_does_not_block_a_first_connect(self, client, create_user, monkeypatch):
+    def test_own_listening_session_does_not_block_a_first_connect(self, client, create_user, monkeypatch,
+                                                                 _session_callsigns):
         self._kiosk(client, create_user)
-        monkeypatch.setattr(app, "get_cached_status", lambda n: {"connected": ["0N8GMZ", "0HenWen-Web"]})
+        monkeypatch.setattr(app, "get_cached_status", lambda n: {"connected": ["N8GMZ", "0HenWen-Web"]})
         sent = []
         class Ami:
             def rpt_cmd(self, node, cmd):
@@ -455,8 +474,8 @@ class TestConnectGateIgnoresSessionLinks:
         assert r.status_code != 403, r.get_json()
         assert any("27664" in c for c in sent)
 
-    def test_a_real_link_still_blocks(self, client, create_user, monkeypatch):
+    def test_a_real_link_still_blocks(self, client, create_user, monkeypatch, _session_callsigns):
         self._kiosk(client, create_user)
-        monkeypatch.setattr(app, "get_cached_status", lambda n: {"connected": ["0N8GMZ", "27664"]})
+        monkeypatch.setattr(app, "get_cached_status", lambda n: {"connected": ["N8GMZ", "27664"]})
         r = client.post("/api/status/connect", json={"local_node": "643930", "remote_node": "2000"})
         assert r.status_code == 403
