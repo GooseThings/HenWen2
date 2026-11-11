@@ -1,9 +1,10 @@
 # HenWen 2.0 — audio as native Asterisk VoIP
 
-**Status (2026-11-11):** Phases 0-3 **done**. PRs #1, #2 and #3 are merged
-to `main`, and `/opt/HenWen2` runs `main`. Phase 3's exit criterion was met
-live on 2026-11-10 (three accounts at once, details below). Next is issue #5
-(see "Next action"), then Phase 4.
+**Status (2026-11-11):** Phases 0-3 **done**. PRs #1, #2, #3 and #8 are
+merged to `main`, and `/opt/HenWen2` runs `main`. Phase 3's exit criterion was
+met live on 2026-11-10 (three accounts at once, details below). Listeners now
+show as Connected Nodes (PR #8). Next: keyed state for listeners (see "Next
+action"), then Phase 4.
 **Repo:** `GooseThings/HenWen2`, forked from `GooseThings/HenWen` at `c875598`
 (full history preserved; `henwen1` remote is fetch-only).
 
@@ -20,7 +21,7 @@ stopped and `disable`d. The 2.0 database is a copy of 1.x's, so
 Rollback is `systemctl stop HenWen2 && systemctl enable --now HenWen`; 1.x's
 own database is untouched. Backups: `/root/henwen-cutover-20261110-103223/`.
 
-**What is deployed:** `main` (merge of PR #3). The include wiring
+**What is deployed:** `main` (merge of PR #8). The include wiring
 (`sip-users/apply.sh`) and the sudoers line have been run by the owner.
 Accounts with a callsign (N8GMZ, K8DIY, WO8E so far) get the one-call path;
 every other account still gets the 1.x Listen and Arm TX unchanged.
@@ -42,40 +43,54 @@ automatic retry within 3s; it was not caused by a provisioning reload (the
 last one was 18:44:45). This is a small sample for D3: it says STUN reaches
 ordinary home networks, not that TURN is never needed.
 
-**Resolved: session links are invisible to app_rpt's reporting — by our own
-choice of name.** app_rpt 3.10.8 skips every link whose name starts with
-`0` in `rpt lstats` (`rpt_cli.c:396`), `rpt stats`/`rpt nodes`
-(`rpt_cli.c:287/596`), the AMI `RPT_ALINKS`/`RPT_LINKS` export
-(`rpt_manager.c:111/244/578`), the link list sent to peers and to
-stats.allstarlink.org (`rpt_link.c:344/391/507`), and connect telemetry
-(`rpt_telemetry.c`). The `0` prefix was chosen to suppress the connect
-announcement, and it suppresses all of the above with it. Consequences:
+**Resolved: session links are visible, by bare callsign (PR #8, 2026-11-11).**
+app_rpt 3.10.8 hides every link whose name starts with `0` from `rpt lstats`
+(`rpt_cli.c:396`), `RPT_ALINKS`/`RPT_LINKS` (`rpt_manager.c`), the link list
+sent to peers and stats.allstarlink.org (`rpt_link.c:344/391/507`) and
+telemetry. The original `0<CALLSIGN>` name hid listeners from all of it. PR #8
+links as the bare callsign (`Rpt(<node>,P,N8GMZ)`; no legal callsign starts
+with `0`, so nothing else needs it). Verified from source and live:
 
-- The old "side benefit" (Connected Nodes shows who is listening) does not
-  happen on its own. It has to be built from HenWen's own data — issue #5.
-- Issue #4 (show SIP users on stats.allstarlink.org) is not reachable while
-  the prefix stays. Dropping it would bring back the connect announcement
-  and put every listener into the link list propagated to peer nodes across
-  the network. Parked as the owner's decision; not recommended now.
-- `_sip_session_link()`'s exclusions (connector `ilink 11`, connect gate,
-  alerts) are guarding against links app_rpt never reports through those
-  paths. Harmless; review them in Phase 5 rather than delete now.
+- **No local connect announcement.** The `CONNECTED` telemetry's local
+  playback goes through VARCMD, which returns early at `telemmode < 2`
+  (`rpt_telemetry.c:3573`); `telemdefault=0` on 643930 makes that 0. Peers
+  that run their own telemetry may announce it. Inbound phone links never
+  fire `REMDISC`, so there is no disconnect announcement either.
+- **Listeners are in `rpt lstats`, `RPT_ALINKS`, and the link list sent to
+  peers/stats** (owner's choice). A PJSIP call has no IAX peer, so the lstats
+  PEER column is blank; the parser now finds the direction column instead of
+  assuming a fixed index.
+- **Kiosk:** each listener is a Connected Nodes row labelled
+  `<node> HenWen User` where a node's location would be. Those rows are
+  skipped by Favorites' connected set, the connect/monitor gates and the
+  "already connected" bridge prompt.
+- **Classification is by name:** `_sip_session_link()` = a provisioned
+  callsign (cached 30s, cleared on provisioning) or a `0` name (shared
+  `0HenWen-Web`). Known collision: an IAX link named like a provisioned
+  callsign (e.g. a node whose link name is NT0Y) is treated as a session.
+- **Not reachable through app_rpt:** the keyed flag. `RPT_ALINKS`'s `K` is
+  `l->lastrx1`, set only by a `RADIO_KEY` frame or by voice on non-phone
+  links; a phone link's `*99` keys the node (`TXKEY,MAIN`) but never sets
+  it. The node's archive log (`/var/spool/asterisk/monitor/<node>/`) does
+  record `DTMF(P),<link>,<digit>` per link.
+- Startup re-renders the SIP files (`start_sip_startup_provision()`), so an
+  upgraded install picks up the new link name without a callsign edit.
 
 **Next action, in order:**
 
-1. **Issue #6** — Mute button height. Small CSS fix.
-2. **Issue #5, built server-side.** List connected session users from the
-   live `PJSIP/henwen-u-<callsign>-*` channels (callsign from the endpoint
-   name), not from app_rpt. Keyed status from the AMI `DTMFEnd` events on
-   those channels (`*99` keys, `#` unkeys), **not** from the browser's
-   `tx-dtmf` client-log lines. That second part also closes a real D1-a gap:
-   today the attributable "who keyed" record is reported by the browser, and
-   a non-HenWen SIP client holding a valid credential would simply not send
-   it. Asterisk sees the digits regardless (they are in `messages.log`), so
-   an AMI-sourced, server-side key log per callsign is what D1-a actually
-   promised. Show them as their own kind of row (callsign, keyed state), not
-   disguised as nodes.
-3. **Phase 4** — recording and stream relay onto `outstreamcmd`.
+1. **Step 3 of the session-link work (issue #5 remainder):**
+   - Keyed light from AMI `DTMFEnd` on `PJSIP/henwen-u-*` channels (`*99`
+     keys, `#` unkeys, hangup clears). This is also the server-side,
+     per-callsign key log D1-a promised; the browser's `tx-dtmf` lines are
+     self-reported.
+   - Classify sessions by their live PJSIP channel instead of by name, which
+     removes the NT0Y-style collision.
+   - The row's Disconnect hangs up the call; Smart Connector's idle-wait
+     handles listener links.
+2. **Issue #4** — check stats.allstarlink.org now shows listeners; close it
+   if so.
+3. **Issue #6** — Mute button height. Small CSS fix.
+4. **Phase 4** — recording and stream relay onto `outstreamcmd`.
 
 **Do not** press "Launch Updater": `update.sh`'s `REPO_URL` still points at
 the 1.x repo, so it would reset this checkout onto 1.x. Held for Phase 6 by
@@ -293,18 +308,17 @@ Each HenWen account becomes a real Asterisk endpoint:
 - Its own PJSIP endpoint/auth/aor, in a context exposing **only** its own
   node's extension — keeping HenWen 1's "a leaked credential can't dial
   anywhere else" property.
-- app_rpt link name `0<callsign>`: `0`-prefixed so app_rpt doesn't announce
-  connects (HenWen 1 v2026.10.28.2 fixed exactly this), unique per user so
+- app_rpt link name `<CALLSIGN>` (was `0<callsign>` until PR #8; the `0`
+  hid the link from lstats/ALINKS/stats, see "Resolved" above), unique per user so
   links stay unambiguous in app_rpt's container. app_rpt's duplicate-name
   kill only applies to all-digit names, so same-named sessions would pile up
   ambiguously.
 - Secret rotates on password change (reuse the `password_epoch` pattern) and
   on revoke/delete.
 
-~~Side benefit: `rpt lstats` and the Connected Nodes list start showing the
-real callsigns of who is listening.~~ **Wrong:** app_rpt hides `0`-prefixed
-links from `rpt lstats`, `RPT_ALINKS` and the stats link list (see "Resolved:
-session links are invisible" above). HenWen has to show them itself (issue #5).
+Side benefit: `rpt lstats` and the Connected Nodes list show the real
+callsigns of who is listening (since PR #8; it did not hold with the `0`
+prefix).
 
 Provisioning: spike PJSIP realtime config (sorcery + `res_config_sqlite3`) so
 a user row *is* a SIP account with no reload. Fall back to a generated
@@ -391,7 +405,7 @@ per-listener (bridge member + link thread + DTLS-SRTP).
 | **2** ✅ | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential. **Built:** PR #1 (schema, renderers, writer) merged; PR #2 (assignment route + Manager field, provisioning trigger + reload, revocation incl. hangup of live calls, `sip-users/apply.sh`, `/api/tx/config` per-user identity, connector exclusion) open and deployed. **Verified live 2026-11-10** (N8GMZ registered and heard node audio on its own credential). |
 | **3** ✅ | Frontend: one call = audio; connect / MUTE / PTT | Two accounts connected at once, neither hears itself, PTT keys. **Built (PR #3):** `/api/audio/session` + `_doStartListenSIP()`; mic up front, PTT bar on confirm, playback-side Mute, no keyed RX mute, 1.x stream as the instrumented fallback. **Verified live 2026-11-10** (three accounts at once, no self-echo, PTT from each, zero fallbacks). |
 | **4** | Recording + stream relay onto `outstreamcmd` | A mid-QSO forced ID provably appears in a recording |
-| **5** | Delete the old pipeline and its tests; wire `listen_only`; review the `_sip_session_link()` exclusions (app_rpt already hides `0`-prefixed links from lstats/ALINKS); show session users on the board as their own rows (issue #5, may land earlier) | Full suite green on a smaller codebase |
+| **5** | Delete the old pipeline and its tests; wire `listen_only`; classify session links by live channel rather than name (may land earlier, with issue #5 step 3) | Full suite green on a smaller codebase |
 | **6** | Scaling measurement, concurrency cap, TURN, 1.x→2.0 migration | Documented concurrent-session ceiling |
 
 ### Phase 1 spike list

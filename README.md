@@ -1,62 +1,48 @@
 # HenWen 2.0 — AllStarLink 3 Node Manager & Kiosk
 
-> **Work in progress.** HenWen 2.0 is a fork of
-> [HenWen 1.x](https://github.com/GooseThings/HenWen) that rebuilds audio on
-> Asterisk's own interfaces: every audio stream becomes a native VoIP call
-> into the node instead of a tap on its radio channel. **1.x is the version to
-> run today**; this one is under active development and is not yet a
-> replacement. Start with [`docs/HENWEN2-PLAYBOOK.md`](docs/HENWEN2-PLAYBOOK.md),
-> and [`docs/app-rpt-audio-notes.md`](docs/app-rpt-audio-notes.md) for the
-> source-level reasoning behind the change.
->
-> Much of what this README describes is still 1.x behavior, because the 1.x
-> code is still here until each phase of the playbook retires it.
+A browser-based manager and public kiosk display for an AllStarLink 3 node,
+running as a systemd service next to Asterisk.
 
-A browser-based web interface for managing and using your AllStarLink 3 node, with a public kiosk display for shared spaces. Runs as a systemd service on the same machine as Asterisk — no separate server required.
+**What's new in 2.0:** listening and transmitting from the browser are a real
+VoIP call into the node. Each account with a callsign gets its own SIP login,
+shows up under Connected Nodes by callsign, hears the node without hearing
+itself, and keys up with push-to-talk. Accounts without a callsign keep the
+1.x stream.
+
+> **Work in progress.** 2.0 is forked from
+> [HenWen 1.x](https://github.com/GooseThings/HenWen) and is being built in
+> phases; some of the 1.x audio code is still here until a phase retires it.
 
 ![Kiosk](images/Screenshot_2026-10-07_142154.jpg)
 
-![Manager](images/HenWen-manager-v2026.08.06.jpg)
-
 ## Highlights
 
-- **Node management** — edit `rpt.conf` field-by-field or raw, connect/disconnect/monitor nodes from the browser, and schedule automatic links with Smart Connector
-- **Audio** — listen live from any browser tab, transmit back with no radio, record on demand, relay to Broadcastify/YouTube Live, and schedule announcements (upload or text-to-speech)
-- **Weather Alerts** — auto-plays NWS Tornado/Severe Thunderstorm/Flash Flood warnings on your node the moment they go active
-- **Status Board** — a full-screen kiosk display for TVs and public screens, no login required to view, with a live network map (grayline, radar, APRS, ISS passes)
-- **Multi-user accounts** with role-based access (Owner/Superuser/Admin/Kiosk), plus a live Asterisk console and system dashboard
-
-Full feature tour → **[HenWen Wiki](https://github.com/GooseThings/HenWen/wiki)**
+- **Node management:** `rpt.conf` editor, connect/disconnect/monitor, Smart Connector schedules
+- **Audio:** Listen and push-to-talk over one call per user, recording, Broadcastify/YouTube relay, scheduled and TTS announcements, NWS alerts
+- **Status Board:** full-screen kiosk with a live map, no login needed to view
+- **Accounts:** Owner/Superuser/Admin/Kiosk roles, 2FA, per-user SIP credentials
 
 ## Requirements
 
-AllStarLink 3 on Debian 12/13, Python 3.8+, root access, and `ffmpeg`. A Raspberry Pi Zero 2 W is a reasonable minimum for everything except the Stream Relay's YouTube target — see [Installation → Requirements](https://github.com/GooseThings/HenWen/wiki/Installation#requirements) for the full breakdown.
+AllStarLink 3 on Debian 12/13, Python 3.8+, root, `ffmpeg`. Minimum hardware
+is a Raspberry Pi 4 (4GB) or a 2+ core x86-64 machine. Browser audio needs
+HTTPS.
 
 ## Install
 
-```bash
-git clone https://github.com/GooseThings/HenWen.git
-cd HenWen
-sudo bash install.sh
-```
-
-No `sudo` on the box? It isn't required — run the same thing from a root shell (`su -`, then `bash install.sh`). See [Does HenWen need sudo?](https://github.com/GooseThings/HenWen/wiki/Installation#does-henwen-need-sudo) for what that does and doesn't change.
-
-Then open `http://YOUR_NODE_IP:5000` to create your Owner account. The installer runs AMI setup for you interactively — full walkthrough (AMI setup, rotating the secret key, verifying rpt.conf, updating) is in the **[Installation guide](https://github.com/GooseThings/HenWen/wiki/Installation)**.
+There is no 2.0 installer or upgrade path from 1.x yet (Phase 6). For now,
+run [HenWen 1.x](https://github.com/GooseThings/HenWen#install).
 
 ## Documentation
 
-Everything beyond a quick install lives in the **[wiki](https://github.com/GooseThings/HenWen/wiki)**:
+- **[HenWen 2.0 wiki](https://github.com/GooseThings/HenWen2/wiki)** — what changed in 2.0, per-user SIP setup, Connected Nodes
+- [`docs/HENWEN2-PLAYBOOK.md`](docs/HENWEN2-PLAYBOOK.md) — plan, phase status, decisions
+- [HenWen 1.x wiki](https://github.com/GooseThings/HenWen/wiki) — everything shared with 1.x (install, features, troubleshooting)
 
-- [Installation](https://github.com/GooseThings/HenWen/wiki/Installation) — requirements, setup steps, updating
-- [Status Board & Accounts](https://github.com/GooseThings/HenWen/wiki/Status-Board-and-Accounts) — kiosk display, roles, node lockout
-- [Features](https://github.com/GooseThings/HenWen/wiki/Features) — Smart Connector, Announcements, Weather Alerts, Node ID, Audio Recording, Stream Relay, Browser TX
-- [Troubleshooting](https://github.com/GooseThings/HenWen/wiki/Troubleshooting)
-- [Environment Variables & File Structure](https://github.com/GooseThings/HenWen/wiki/Reference)
+## Contributing
 
-## Contributing & Feedback
-
-Bug reports, feature requests, and pull requests are welcome — open an [issue](https://github.com/GooseThings/HenWen/issues) or check [open-issues.md](open-issues.md) for a running log of known items. See [CHANGELOG.md](CHANGELOG.md) for release history.
+Issues and pull requests welcome: [issues](https://github.com/GooseThings/HenWen2/issues).
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
