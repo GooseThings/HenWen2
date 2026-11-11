@@ -8775,7 +8775,12 @@ def api_status_board():
             ls_snapshot = dict(_link_stats)
         node_str_local = str(node)
         for cn in cached.get("connected", []):
-            cn_info    = lookup_node(cn)
+            # A HenWen 2.0 session link is named by the account's callsign and
+            # is in no node database, so lookup_node() would only come back
+            # empty (after an allmondb miss). Label it instead of leaving the
+            # kiosk's callsign slot showing a bare dash.
+            is_session = _sip_session_link(cn)
+            cn_info    = {} if is_session else lookup_node(cn)
             cn_loc     = cn_info.get("location", "")
             cn_coords  = _geocode_nonblocking(cn_loc) if cn_loc else None
             ls = ls_snapshot.get(cn, {})
@@ -8837,6 +8842,7 @@ def api_status_board():
                 "idle_elapsed":   idle_elapsed,
                 "idle_remaining": idle_remaining,
                 "permanent":      is_permanent,
+                "session_label":  f"{node_str_local} HenWen User" if is_session else "",
                 "no_timeout":     no_timeout,
                 "connector_managed": (node_str_local, cn) in connector_managed_pairs,
                 # Whether *this* logged-in caller is the one who made this

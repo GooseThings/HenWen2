@@ -781,6 +781,10 @@ svg.kiosk-login-icon { display: none; }
 .nr-call { flex: 0 0 auto;
   font-size: 0.95rem; font-weight: 600; color: var(--text); letter-spacing: .03em; text-decoration: none; }
 .nr-call:hover { text-decoration: underline; }
+/* "643930 HenWen User" on a 2.0 session link: may shrink, unlike a callsign. */
+.nr-session { flex: 0 1 auto; min-width: 0; font-weight: 500; color: var(--text2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nr-session:hover { text-decoration: none; }
 .nr-flag { flex: 0 0 auto; margin-left: calc(-10px + 0.3em); /* cancels .nr-line's 10px gap, leaving ~one space */  height: 0.8rem; width: auto; align-self: center; border-radius: 2px; box-shadow: 0 0 0 1px rgba(128,128,128,.35); }
 .nr-loc  { flex: 0 1 auto; min-width: 0; font-size: 0.82rem; color: var(--text2);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -5265,7 +5269,9 @@ async function refreshBoard() {
           '<div class="nr-main">' +
             '<div class="nr-line">' +
               nodeLink(c.node, 'nr-num') +
-              (c.callsign ? callsignLink(c.callsign, 'nr-call') : '<div class="nr-call">—</div>') +
+              (c.callsign ? callsignLink(c.callsign, 'nr-call')
+                : c.session_label ? '<div class="nr-call nr-session">' + esc(c.session_label) + '</div>'
+                : '<div class="nr-call">—</div>') +
               (isDvswitchBridge && c.callsign ? countryFlag(c.country) : '') +
               '<div class="nr-loc">' + esc(c.dmr_talker ? (c.dmr_name || '') : (c.location||c.desc||'')) + '</div>' +
             '</div>' +

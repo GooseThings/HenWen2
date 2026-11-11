@@ -479,3 +479,26 @@ class TestConnectGateIgnoresSessionLinks:
         monkeypatch.setattr(app, "get_cached_status", lambda n: {"connected": ["N8GMZ", "27664"]})
         r = client.post("/api/status/connect", json={"local_node": "643930", "remote_node": "2000"})
         assert r.status_code == 403
+
+
+class TestBoardSessionLabel:
+    """A session link is in no node database, so the kiosk's callsign slot
+    would show a bare dash; the board labels it instead."""
+
+    def test_session_link_gets_a_label_and_a_node_does_not(self, client, create_user,
+                                                          monkeypatch, _session_callsigns):
+        create_user("owner1", role="owner")
+        with open(app.RPT_CONF_PATH, "w") as f:
+            f.write("[643930]\nrxchannel = SimpleUSB/643930\n")
+        monkeypatch.setattr(app, "get_cached_status",
+                            lambda n: {"connected": ["N8GMZ", "27664"], "links": {}})
+        looked_up = []
+        monkeypatch.setattr(app, "lookup_node",
+                            lambda n: looked_up.append(n) or {"callsign": "W1AW", "desc": "", "location": ""})
+        nodes = client.get("/api/status/board").get_json()["nodes"]
+        rows = {c["node"]: c for c in nodes[0]["connected"]}
+        assert rows["N8GMZ"]["session_label"] == "643930 HenWen User"
+        assert rows["N8GMZ"]["callsign"] == ""
+        assert rows["27664"]["session_label"] == ""
+        assert rows["27664"]["callsign"] == "W1AW"
+        assert "N8GMZ" not in looked_up      # no pointless allmondb miss per refresh
