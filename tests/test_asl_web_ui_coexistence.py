@@ -100,6 +100,12 @@ def test_non_henwen_blocks_are_left_alone(tmp_path):
     assert rc == 0 and out.startswith(other) and out.count("asl-web-ui !") == 1
 
 
+def test_section_tags_match_case_insensitively(tmp_path):
+    """PR #14 review: Apache accepts <virtualhost>, so must the patcher."""
+    rc, out = _patch(tmp_path, vhost_text=VHOST.replace("VirtualHost", "virtualHost"))
+    assert rc == 0 and "ProxyPass /asl-web-ui !" in out
+
+
 def test_backup_dir_is_unique_per_run():
     """PR #14 review: two runs in one second must not share a backup dir."""
     assert 'BACKUP_DIR=$(mktemp -d "/root/henwen-asl-web-ui-backup-${STAMP}-XXXXXX")' in SRC

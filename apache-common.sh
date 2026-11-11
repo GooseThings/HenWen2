@@ -185,14 +185,15 @@ henwen_insert_before_proxypass_each_block() {
             n = 0; has_marker = 0; has_catch = 0; inblock = 0
         }
         BEGIN { n = 0; inblock = 0; patched = 0; henwen = 0; already = 0 }
-        /<VirtualHost/ { if (inblock) flush(); inblock = 1 }
+        # Apache matches section tags case-insensitively; so must this.
+        tolower($0) ~ /<virtualhost/ { if (inblock) flush(); inblock = 1 }
         {
             if (!inblock) { print; next }
             buf[++n] = $0
             if (index($0, marker) > 0) has_marker = 1
             if ($0 ~ pat) has_catch = 1
         }
-        /<\/VirtualHost>/ { flush() }
+        tolower($0) ~ /<\/virtualhost>/ { flush() }
         END {
             if (inblock) flush()
             if (patched > 0) exit 0
