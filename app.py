@@ -20397,6 +20397,20 @@ def node_drift_report(db, local_nodes):
         stale.setdefault(node, []).append({
             "label": "Per-user SIP dialplan", "table": None, "count": 1, "names": [],
             "min_role": "admin"})
+    # The DVSwitch bridge is a node stanza DVSwitch apply writes, and its
+    # number is also in Analog_Bridge's and MMDVM_Bridge's own config, so
+    # moving the row alone would not fix it: reported, never re-pointed.
+    try:
+        row = db.execute("SELECT bridge_node FROM dvswitch_config WHERE enabled=1").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    bridge = str(row["bridge_node"] or "").strip() if row else ""
+    if bridge and bridge not in local:
+        stale.setdefault(bridge, []).append({
+            "label": "DVSwitch bridge node (change it in Manager > DVSwitch and apply; "
+                     "Re-point leaves it alone)",
+            "table": "dvswitch_config", "count": 1, "names": [], "min_role": "owner",
+            "repoint": False})
     return dict(sorted(stale.items()))
 
 

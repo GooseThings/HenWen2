@@ -7976,7 +7976,7 @@ async function checkNodeDrift() {
     return '<div class="alert alert-warn">'
       + '<strong>Node ' + esc(node) + ' is not in rpt.conf any more</strong>, but HenWen still uses it for '
       + uses + '. A node renamed or removed in the ASL Web UI (or by hand) leaves these behind.'
-      + (local.length
+      + (local.length && stale[node].some(function(u) { return u.repoint !== false; })
         ? '<div class="btn-row" style="margin-top:8px">Re-point to '
           + '<select id="drift-to-' + esc(node) + '">' + opts + '</select> '
           + '<button class="btn btn-sm btn-warn" onclick="repointNode(' + esc(JSON.stringify(node)) + ')">Re-point</button></div>'

@@ -194,3 +194,20 @@ def test_sip_reload_failure_is_kept_and_retryable(admin, monkeypatch):
     retry = client.post("/api/node-drift/sip-reload").get_json()
     assert retry["ok"] is True
     assert client.get("/api/node-drift").get_json()["sip_reload_error"] is None
+
+
+def test_dvswitch_bridge_node_is_reported_but_not_repointed(fresh_db):
+    """Review of PR #16: dvswitch_config.bridge_node names a local node too.
+    Its number also lives in the DVSwitch daemons' own config, so it is
+    reported and left for Manager > DVSwitch to change."""
+    fresh_db.execute("DELETE FROM dvswitch_config")
+    fresh_db.execute("INSERT INTO dvswitch_config (id, enabled, bridge_node) VALUES (1, 1, '643999')")
+    fresh_db.commit()
+    stale = app.node_drift_report(fresh_db, ["643931"])
+    assert stale["643999"][0]["table"] == "dvswitch_config" and stale["643999"][0]["repoint"] is False
+    app.node_drift_repoint(fresh_db, "643999", "643931", "owner")
+    assert fresh_db.execute("SELECT bridge_node FROM dvswitch_config").fetchone()[0] == "643999"
+    # A disabled bridge, or one rpt.conf has, is not drift.
+    assert "643999" not in app.node_drift_report(fresh_db, ["643931", "643999"])
+    fresh_db.execute("UPDATE dvswitch_config SET enabled=0"); fresh_db.commit()
+    assert app.node_drift_report(fresh_db, ["643931"]) == {}
