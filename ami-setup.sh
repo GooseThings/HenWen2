@@ -64,7 +64,9 @@ echo ""
 echo -e "${CYAN}[2/5] Current manager.conf contents:${NC}"
 if [ -f "$MANAGER_CONF" ]; then
     echo "---"
-    cat "$MANAGER_CONF"
+    # Secrets are masked: this output ends up in terminals, install logs
+    # and pasted bug reports.
+    sed -E 's/^([[:space:]]*secret[[:space:]]*=[[:space:]]*)[^;[:space:]]+/\1(hidden)/I' "$MANAGER_CONF"
     echo "---"
 else
     echo -e "      ${RED}$MANAGER_CONF not found!${NC}"
@@ -357,7 +359,7 @@ else
 fi
 echo ""
 echo "  AMI User:   $USER"
-echo "  AMI Secret: $SECRET"
+echo "  AMI Secret: (hidden; it is in $MANAGER_CONF under [$USER] and in $SERVICE_FILE)"
 echo "  AMI Port:   ${PORT:-5038}"
 echo ""
 echo "  To verify in the web UI:"
@@ -386,5 +388,5 @@ fi
 echo "    -> AMI Diagnostics -> Run Test"
 echo ""
 echo "  To check logs:"
-echo "    journalctl -u HenWen -f"
+echo "    journalctl -u $SERVICE_NAME -f"
 echo "============================================"
