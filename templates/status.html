@@ -1077,8 +1077,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
 .sb-btn.btmic.on    { background: rgba(88,166,255,.08); border-color: rgba(88,166,255,.3); color: var(--accent); }
 .sb-btn.btmic.on:hover { background: rgba(88,166,255,.2); }
 
-/* always-visible connect bar */
-.conn-form-bar { padding: 7px 18px; border-bottom: 1px solid var(--border);
+/* always-visible connect bar: last row of the Controls card */
+.conn-form-bar { padding: 8px 0 0; border-top: 1px solid var(--border);
   display: flex; gap: 6px; align-items: center; flex-shrink: 0; flex-wrap: wrap; }
 .conn-form-bar input { width: 100px; font-family: var(--mono); font-size: 0.82rem;
   padding: 3px 7px; border: 1px solid var(--border); border-radius: 4px;
@@ -1936,6 +1936,19 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
           </div>
           <div id="tx-status" style="font-size:0.75rem;color:var(--accent);min-height:1em"></div>
         </div>
+        <!-- Connect form (Node #, Connect, Monitor, Fav, Permanent): last thing
+             in the card. It used to head the Connected Nodes list. -->
+        <div class="conn-form-bar" id="conn-form-bar">
+          <input id="conn-form-node" type="text" inputmode="numeric" placeholder="Node #" maxlength="7"
+                 onkeydown="if(event.key==='Enter')statusConnectNew()">
+          <button class="sb-btn connect" onclick="statusConnectNew()">Connect</button>
+          <button class="sb-btn monitor" onclick="statusMonitorNew()">Monitor</button>
+          <button class="sb-btn fav" id="fav-add-btn" onclick="addToFavorites()" title="Add node to your Favorites list"><svg class="icon"><use href="#icon-star"></use></svg> Fav</button>
+          <label class="perm-label" id="perm-label" style="display:none">
+            <input type="checkbox" id="conn-perm-chk"> Permanent
+          </label>
+          <span id="conn-form-msg" style="font-size:0.75rem;color:var(--text2)"></span>
+        </div>
       </div>
     </div>
 
@@ -1952,17 +1965,6 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
       </div>
       <div class="connector-warn-bar" id="connector-warn-bar" style="display:none">
         <svg class="icon"><use href="#icon-triangle-alert"></use></svg> <span id="connector-warn-text"></span>
-      </div>
-      <div class="conn-form-bar" id="conn-form-bar">
-        <input id="conn-form-node" type="text" inputmode="numeric" placeholder="Node #" maxlength="7"
-               onkeydown="if(event.key==='Enter')statusConnectNew()">
-        <button class="sb-btn connect" onclick="statusConnectNew()">Connect</button>
-        <button class="sb-btn monitor" onclick="statusMonitorNew()">Monitor</button>
-        <button class="sb-btn fav" id="fav-add-btn" onclick="addToFavorites()" title="Add node to your Favorites list"><svg class="icon"><use href="#icon-star"></use></svg> Fav</button>
-        <label class="perm-label" id="perm-label" style="display:none">
-          <input type="checkbox" id="conn-perm-chk"> Permanent
-        </label>
-        <span id="conn-form-msg" style="font-size:0.75rem;color:var(--text2)"></span>
       </div>
       <div class="node-list" id="node-list">
         <div class="empty-msg">Loading&hellip;</div>
@@ -9859,7 +9861,12 @@ function dashPositionDividers() {
 (function() {
   var bar = document.getElementById('tx-bar');
   if (!bar || typeof ResizeObserver === 'undefined') return;
-  new ResizeObserver(function() { dashFitNodeCard(); }).observe(bar);
+  var ro = new ResizeObserver(function() { dashFitNodeCard(); });
+  ro.observe(bar);
+  /* The connect form below it wraps and shows messages, so it changes
+     height too. */
+  var form = document.getElementById('conn-form-bar');
+  if (form) ro.observe(form);
 })();
 
 function initDashLayout() {
