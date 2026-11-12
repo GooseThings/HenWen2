@@ -35,7 +35,7 @@ run [HenWen 1.x](https://github.com/GooseThings/HenWen#install).
 
 ## Documentation
 
-- **[HenWen 2.0 wiki](https://github.com/GooseThings/HenWen2/wiki)** — what changed in 2.0, per-user SIP setup, Connected Nodes
+- **[HenWen 2.0 wiki](https://github.com/GooseThings/HenWen2/wiki)** — what changed in 2.0, per-user SIP setup, Connected Nodes, [running with the ASL Web UI](https://github.com/GooseThings/HenWen2/wiki/Running-with-the-ASL-Web-UI)
 - [`docs/HENWEN2-PLAYBOOK.md`](docs/HENWEN2-PLAYBOOK.md) — plan, phase status, decisions
 - [`docs/ASL-WEB-UI-PLAN.md`](docs/ASL-WEB-UI-PLAN.md) — what HenWen hands over to AllStarLink's new web UI, and what it keeps
 - [HenWen 1.x wiki](https://github.com/GooseThings/HenWen/wiki) — everything shared with 1.x (install, features, troubleshooting)
@@ -44,7 +44,9 @@ run [HenWen 1.x](https://github.com/GooseThings/HenWen#install).
 
 Phases 0-3 are done: per-user SIP accounts, one call for Listen and
 push-to-talk, and listeners shown by callsign. Next is keyed state for
-listeners, then recording and the stream relay on the new audio path. See the
+listeners, then recording and the stream relay on the new audio path. HenWen
+also runs alongside AllStarLink's ASL Web UI and hands node configuration
+over to it where that UI is set up. See the
 wiki's [Status](https://github.com/GooseThings/HenWen2/wiki/Status) page.
 
 ## Support and contributing
