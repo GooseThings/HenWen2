@@ -466,7 +466,9 @@ if [ "$LAN" = "1" ]; then
     if [ -f "$SSL_AVAIL" ]; then
         # Each feature's marker comment line plus its ProxyPass line -- the
         # two things apply.sh / ws-audio/apply.sh grep for to stay idempotent.
-        CARRY=$(grep -E 'HenWen (browser transmitter|low-latency RX audio):|^[[:space:]]*ProxyPass /(asterisk-ws|ws-audio) ' "$SSL_AVAIL" || true)
+        # Also asl-web-ui/apply.sh's include + exclusion: with the package's
+        # global conf disabled, dropping them would send /asl-web-ui/ to Flask.
+        CARRY=$(grep -E 'HenWen (browser transmitter|low-latency RX audio):|HenWen: ASL Web UI|^[[:space:]]*ProxyPass /(asterisk-ws|ws-audio) |^[[:space:]]*IncludeOptional [^[:space:]]*/asl-web-ui\.conf$|^[[:space:]]*ProxyPass /asl-web-ui !$' "$SSL_AVAIL" || true)
     fi
     echo "[LAN] Writing $SSL_AVAIL (port ${HTTPS_PORT})..."
     {
@@ -530,6 +532,13 @@ else
     echo "[3/7] Writing Apache vhost for $HOSTNAME_ARG..."
     SERVERNAME_LINE="    ServerName ${HOSTNAME_ARG}"
 fi
+# This rewrites the port-80 vhost from scratch. Keep asl-web-ui/apply.sh's
+# include + exclusion if the old file had them: with the package's global
+# conf disabled, dropping them would send /asl-web-ui/ here to Flask.
+ASL_CARRY=""
+if [ -f "$HTTP_AVAIL" ]; then
+    ASL_CARRY=$(grep -E 'HenWen: ASL Web UI|^[[:space:]]*IncludeOptional [^[:space:]]*/asl-web-ui\.conf$|^[[:space:]]*ProxyPass /asl-web-ui !$' "$HTTP_AVAIL" || true)
+fi
 cat > "$HTTP_AVAIL" <<VHOST
 <VirtualHost *:80>
 ${SERVERNAME_LINE}
@@ -540,6 +549,9 @@ ${SERVERNAME_LINE}
 VHOST
 chmod 644 "$HTTP_AVAIL"
 inject_exclusions "$HTTP_AVAIL"
+if [ -n "$ASL_CARRY" ]; then
+    henwen_insert_before_proxypass_each_block "$HTTP_AVAIL" "$FLASK_PORT" "HenWen: ASL Web UI" "$ASL_CARRY" || true
+fi
 
 if [ "${#PRESERVED[@]}" -gt 0 ]; then
     echo "      Preserving paths already served from ${DOCROOT}: ${PRESERVED[*]}"
