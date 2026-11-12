@@ -53,7 +53,7 @@ def owner(client, create_user, tmp_path, monkeypatch):
     return client, conf
 
 
-VIA_APACHE = {"X-Forwarded-Host": "henwen.example.com"}
+VIA_APACHE = {"X-Forwarded-Host": "henwen.example.com", "X-Forwarded-Server": "henwen.example.com"}
 
 
 def _handover(monkeypatch, on):
@@ -92,9 +92,23 @@ def test_no_handover_no_gate(owner, monkeypatch):
 def test_handover_needs_reachable_and_not_disabled(tmp_path, monkeypatch):
     www = tmp_path / "www"; www.mkdir(); (www / "index.html").write_text("")
     glob = tmp_path / "g.conf"; glob.write_text("")
+    sites = tmp_path / "sites"; sites.mkdir()
+    vhost = sites / "henwen.conf"
+    vhost.write_text(f"<VirtualHost *:443>\n    ProxyPass / http://127.0.0.1:{app.PORT}/\n</VirtualHost>\n")
+    monkeypatch.setattr(app, "HENWEN_APACHE_SITES_DIR", str(sites))
+    monkeypatch.setattr(app, "HENWEN_APACHE_VHOST_CANDIDATES", ())
     monkeypatch.setattr(app, "ASL_WEB_UI_WWW", str(www))
     monkeypatch.setattr(app, "ASL_WEB_UI_GLOBAL_CONF", str(glob))
     monkeypatch.setattr(app, "ASL_WEB_UI_SOCKET", str(tmp_path / "web.sock"))
+    (tmp_path / "web.sock").write_text("")
+    monkeypatch.setattr(app, "ASL_WEB_UI_HANDOVER", True)
+    app.asl_web_ui_status.cache_clear()
+    # Review of PR #18: the package's default state -- global conf on, API
+    # up, HenWen's vhost not yet scoped -- sends /asl-web-ui/ to Flask, so
+    # nothing is handed over until apply.sh has run.
+    assert app.asl_web_ui_status()["handover"] is False
+    vhost.write_text(vhost.read_text().replace("    ProxyPass /", "    # HenWen: ASL Web UI.\n    ProxyPass /"))
+    (tmp_path / "web.sock").unlink()
     monkeypatch.setattr(app, "ASL_WEB_UI_HANDOVER", True)
     app.asl_web_ui_status.cache_clear()
     # PR #18 review: installed and reachable but its API socket is down, so
