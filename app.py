@@ -20497,6 +20497,198 @@ def api_id_morse():
 
 
 # ---------------------------------------------------------------------------
+# Node-number drift (docs/ASL-WEB-UI-PLAN.md, hazard 4)
+#
+# The ASL Web UI can rename or remove a node: it rewrites rpt.conf, AstDB and
+# Allmon3, but not HenWen's own rows, which name local nodes by number. After
+# a rename those rows point at a node Asterisk no longer runs, and every one
+# of them fails quietly (a connector that never fires, an ID that never
+# plays). This finds them, and re-points them on request.
+# ---------------------------------------------------------------------------
+
+# (table, column, label, name column or None, extra WHERE, minimum role).
+# Local-node references only: favorites, connection history and recordings
+# name remote nodes or past events, and a rename doesn't make them wrong.
+# The minimum role mirrors the gate on the route that edits that setting
+# (/api/id is superuser+, stream relay config and node lockout are owner-
+# only, the rest admin+), so re-pointing can't be a way around it.
+NODE_DRIFT_REFS = (
+    ("connectors",          "local_node",  "Smart Connector",       "name", "", "admin"),
+    ("id_configs",          "node",        "Node ID",               "name", "", "superuser"),
+    ("announcements",       "node",        "Announcements",         "name", "", "admin"),
+    ("permanent_links",     "local_node",  "Permanent links",       "peer_node", "", "admin"),
+    ("kiosk_temp_conns",    "local_node",  "Kiosk temporary links", "peer_node", "", "admin"),
+    ("node_lockouts",       "node",        "Node lockout",          None, "", "owner"),
+    ("nws_alert_config",    "node",        "NWS alerts",            None, "node != ''", "admin"),
+    ("stream_relay_config", "target_node", "Stream relay",          None, "target_node != ''", "owner"),
+)
+
+_SIP_DIALPLAN_NODE_RE = re.compile(r'^\s*same\s*=>\s*n,Rpt\((\d+),', re.M)
+
+
+def _sip_dialplan_nodes():
+    """Node numbers the generated per-user dialplan currently dials, or an
+    empty set when the file doesn't exist yet."""
+    try:
+        with open(SIP_USERS_DIALPLAN) as f:
+            return set(_SIP_DIALPLAN_NODE_RE.findall(f.read()))
+    except OSError:
+        return set()
+
+
+def node_drift_report(db, local_nodes):
+    """Every HenWen reference to a local node number that is not in
+    `local_nodes` (rpt.conf's node stanzas). Returns {node: [{label, table,
+    count, names}]}, ordered by node; empty when nothing is stale.
+
+    An empty `local_nodes` (rpt.conf unreadable) reports nothing rather than
+    calling every reference stale."""
+    local = {str(n) for n in local_nodes}
+    if not local:
+        return {}
+    stale = {}
+    for table, col, label, name_col, where, min_role in NODE_DRIFT_REFS:
+        cond = f"WHERE {where}" if where else ""
+        try:
+            rows = db.execute(
+                f"SELECT {col} AS node, {name_col or 'NULL'} AS name FROM {table} {cond}"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            continue   # table/column absent on an older schema
+        per_node = {}
+        for r in rows:
+            node = str(r["node"] or "").strip()
+            if not node or node in local:
+                continue
+            per_node.setdefault(node, []).append(r["name"])
+        for node, names in per_node.items():
+            stale.setdefault(node, []).append({
+                "label": label, "table": table, "count": len(names),
+                "min_role": min_role,
+                "names": sorted({str(n) for n in names if n is not None})[:10],
+            })
+    for node in sorted(_sip_dialplan_nodes() - local):
+        stale.setdefault(node, []).append({
+            "label": "Per-user SIP dialplan", "table": None, "count": 1, "names": [],
+            "min_role": "admin"})
+    # The DVSwitch bridge is a node stanza DVSwitch apply writes, and its
+    # number is also in Analog_Bridge's and MMDVM_Bridge's own config, so
+    # moving the row alone would not fix it: reported, never re-pointed.
+    try:
+        row = db.execute("SELECT bridge_node FROM dvswitch_config WHERE enabled=1").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    bridge = str(row["bridge_node"] or "").strip() if row else ""
+    if bridge and bridge not in local:
+        stale.setdefault(bridge, []).append({
+            "label": "DVSwitch bridge node (change it in Manager > DVSwitch and apply; "
+                     "Re-point leaves it alone)",
+            "table": "dvswitch_config", "count": 1, "names": [], "min_role": "owner",
+            "repoint": False})
+    return dict(sorted(stale.items()))
+
+
+def node_drift_repoint(db, old, new, role):
+    """Move every NODE_DRIFT_REFS row from local node `old` to `new`. Rows
+    whose key already exists under `new` (permanent/temp links, lockouts) keep
+    the `new` row and drop the `old` one. A setting whose minimum role `role`
+    doesn't meet is left alone. Returns ({table: rows moved}, [labels
+    skipped])."""
+    moved, skipped = {}, []
+    rank = ROLE_RANK.get(role, -1)
+    for table, col, label, _name, _where, min_role in NODE_DRIFT_REFS:
+        if rank < ROLE_RANK[min_role]:
+            try:
+                if db.execute(f"SELECT 1 FROM {table} WHERE {col}=? LIMIT 1", (old,)).fetchone():
+                    skipped.append(label)
+            except sqlite3.OperationalError:
+                pass
+            continue
+        try:
+            cur = db.execute(f"UPDATE OR IGNORE {table} SET {col}=? WHERE {col}=?", (new, old))
+            moved[table] = cur.rowcount
+            db.execute(f"DELETE FROM {table} WHERE {col}=?", (old,))
+        except sqlite3.OperationalError:
+            continue
+    db.commit()
+    # The running server tracks links in memory too (_kiosk_temp_conns, read
+    # from the table only at startup): permanent-link status, temp-link
+    # timeouts and Smart Connector's skip-permanent all key on it. Move the
+    # old node's entries, keeping any the new node already has.
+    if rank >= ROLE_RANK["admin"]:
+        with _kiosk_temp_lock:
+            for key in [k for k in _kiosk_temp_conns if k[0] == old]:
+                entry = _kiosk_temp_conns.pop(key)
+                _kiosk_temp_conns.setdefault((new, key[1]), entry)
+    return {t: n for t, n in moved.items() if n}, skipped
+
+
+@app.route("/api/node-drift")
+def api_node_drift():
+    """Admin+ (default gate). Which HenWen settings name a local node that
+    rpt.conf no longer has, plus the nodes it does have to re-point them to."""
+    content = read_conf_file(RPT_CONF_PATH)
+    local = get_node_numbers(content) if content else []
+    return jsonify({"local_nodes": local,
+                    "stale": node_drift_report(get_db(), local),
+                    "conf_readable": content is not None,
+                    "sip_reload_error": _node_drift_sip_error})
+
+
+# A re-point that rewrote the SIP dialplan but couldn't reload Asterisk: the
+# file no longer names the old node, so the report goes quiet, while
+# Asterisk may still dial it. Kept until a reload succeeds.
+_node_drift_sip_error = None
+
+
+def _node_drift_provision_sip(reason):
+    """Re-render and reload the per-user SIP files. Returns what the caller
+    shows: which node SIP calls now dial (always rpt.conf's first node, not
+    the re-point target), whether Asterisk reloaded, and any error."""
+    global _node_drift_sip_error
+    prov = sip_provision_accounts(reason, force_reload=True)
+    ok = bool(prov.get("ok")) and (bool(prov.get("reloaded")) or not prov.get("included"))
+    if not ok:
+        # The detail can carry exception text; it goes to the journal, and
+        # the client gets a fixed message (CodeQL py/stack-trace-exposure).
+        log("WARN", f"[NODE-DRIFT] SIP re-provisioning after a re-point did not finish: "
+                    f"{prov.get('error') or prov.get('detail')}")
+    _node_drift_sip_error = None if ok else (
+        "Asterisk did not reload the per-user SIP files; see the HenWen journal for why")
+    return {"node": prov.get("node"), "ok": ok, "reloaded": bool(prov.get("reloaded")),
+            "error": _node_drift_sip_error}
+
+
+@app.route("/api/node-drift/sip-reload", methods=["POST"])
+def api_node_drift_sip_reload():
+    """Retry the SIP reload a re-point couldn't finish."""
+    return jsonify(_node_drift_provision_sip("retry after node re-point"))
+
+
+@app.route("/api/node-drift/repoint", methods=["POST"])
+def api_node_drift_repoint():
+    data = request.get_json(silent=True) or {}
+    old = str(data.get("from") or "").strip()
+    new = str(data.get("to") or "").strip()
+    content = read_conf_file(RPT_CONF_PATH)
+    local = get_node_numbers(content) if content else []
+    if not re.fullmatch(r"\d{4,7}", old) or new not in local:
+        return jsonify({"error": "'to' must be one of this box's nodes and 'from' a node number"}), 400
+    if old in local:
+        return jsonify({"error": f"Node {old} still exists in rpt.conf; nothing to re-point"}), 400
+    db = get_db()
+    moved, skipped = node_drift_repoint(db, old, new, session.get('role'))
+    log("INFO", f"[NODE-DRIFT] {session.get('username')} re-pointed node {old} -> {new}: {moved}")
+    sip = None
+    if old in _sip_dialplan_nodes():
+        sip = _node_drift_provision_sip(f"node {old} re-pointed to {new}")
+    return jsonify({"ok": True, "moved": moved,
+                    "skipped": skipped,
+                    "sip": sip,
+                    "stale": node_drift_report(db, local)})
+
+
+# ---------------------------------------------------------------------------
 # Node access (incoming-connection allowlist / denylist)
 # ---------------------------------------------------------------------------
 # ASL3's stock extensions.conf [radio-secure] context already enforces this,

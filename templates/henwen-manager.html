@@ -610,6 +610,8 @@ input:checked + .slider::before  { transform: translateX(16px); background: var(
   font-size: 0.92rem; color: var(--accent, #58a6ff);
 }
 #update-bar.show { display: flex; }
+#node-drift-bar { margin-bottom: 16px; }
+#node-drift-bar:empty { display: none; }
 
 .asl-log { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; font-family: var(--mono); font-size: 0.8rem; line-height: 1.45; height: 380px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
 .asl-log div { padding: 0 2px; }
@@ -777,6 +779,9 @@ pre.codeblock { background: var(--bg3); padding: 12px; border-radius: 4px; font-
       <button class="btn btn-sm" onclick="dismissUpdateBar()">Dismiss</button>
     </div>
   </div>
+
+  <!-- Settings that name a node rpt.conf no longer has (filled by checkNodeDrift) -->
+  <div id="node-drift-bar"></div>
 
   <!-- Dashboard -->
   <section class="page active" id="page-dashboard">
@@ -8007,7 +8012,71 @@ window.addEventListener('DOMContentLoaded', async function() {
   checkNodeDB();
   checkForUpdate();
   aslUpdateBadge();
+  checkNodeDrift();
 });
+
+/* ── Node-number drift ──────────────────────────────────────────────────────
+   The ASL Web UI can rename or remove a node; HenWen's own settings keep the
+   old number and silently stop working. /api/node-drift lists them, and
+   Re-point moves them to a node rpt.conf still has. */
+async function checkNodeDrift() {
+  var bar = document.getElementById('node-drift-bar');
+  if (!bar) return;
+  var r = await api('/api/node-drift');
+  if (!r.ok || !r.data || !r.data.stale) { bar.innerHTML = ''; return; }
+  var stale = r.data.stale, local = r.data.local_nodes || [];
+  var nodes = Object.keys(stale);
+  var sipErr = r.data.sip_reload_error
+    ? '<div class="alert alert-danger">After a node re-point, the per-user SIP dialplan was rewritten but Asterisk '
+      + 'did not reload it (' + esc(r.data.sip_reload_error) + '), so SIP calls may still dial the old node. '
+      + '<button class="btn btn-sm" onclick="retrySipReload()">Retry reload</button></div>'
+    : '';
+  if (!nodes.length) { bar.innerHTML = sipErr; return; }
+  var opts = local.map(function(n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
+  bar.innerHTML = nodes.map(function(node) {
+    var uses = stale[node].map(function(u) {
+      return esc(u.label) + (u.count > 1 ? ' (' + u.count + ')' : '')
+        + (u.names && u.names.length ? ': ' + u.names.map(esc).join(', ') : '');
+    }).join('; ');
+    return '<div class="alert alert-warn">'
+      + '<strong>Node ' + esc(node) + ' is not in rpt.conf any more</strong>, but HenWen still uses it for '
+      + uses + '. A node renamed or removed in the ASL Web UI (or by hand) leaves these behind.'
+      + (local.length && stale[node].some(function(u) { return u.repoint !== false; })
+        ? '<div class="btn-row" style="margin-top:8px">Re-point to '
+          + '<select id="drift-to-' + esc(node) + '">' + opts + '</select> '
+          + '<button class="btn btn-sm btn-warn" onclick="repointNode(' + esc(JSON.stringify(node)) + ')">Re-point</button></div>'
+        : '')
+      + '</div>';
+  }).join('') + sipErr;
+}
+
+async function retrySipReload() {
+  var r = await api('/api/node-drift/sip-reload', {method: 'POST'});
+  if (r.ok && r.data.ok) log('SIP dialplan reloaded.', 'OK');
+  else log('SIP reload failed again: ' + ((r.data && r.data.error) || r.status), 'ERROR');
+  checkNodeDrift();
+}
+
+async function repointNode(node) {
+  var sel = document.getElementById('drift-to-' + node);
+  if (!sel) return;
+  if (!confirm('Move every HenWen setting that uses node ' + node + ' to node ' + sel.value + '?')) return;
+  var r = await api('/api/node-drift/repoint', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({from: node, to: sel.value})
+  });
+  if (r.ok) {
+    log('Re-pointed node ' + node + ' to ' + sel.value + '.', 'OK');
+    if ((r.data.skipped || []).length)
+      log('Left for a higher role to re-point: ' + r.data.skipped.join(', '), 'WARN');
+    var sip = r.data.sip;
+    if (sip && sip.node && sip.node !== sel.value)
+      log('Per-user SIP calls dial node ' + sip.node + ' (the first node in rpt.conf), not ' + sel.value + '.', 'WARN');
+    if (sip && !sip.ok) log('SIP dialplan rewritten but Asterisk did not reload: ' + (sip.error || ''), 'ERROR');
+  }
+  else      log('Re-point failed: ' + (r.data.error || r.status), 'ERROR');
+  checkNodeDrift();
+}
 
 async function checkForUpdate(live) {
   // Only superuser/owner are in a position to act on an update (shell/deploy
