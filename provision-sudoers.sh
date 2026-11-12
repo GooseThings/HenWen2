@@ -45,7 +45,6 @@ asterisk ALL=(root) NOPASSWD: ${INSTALL_DIR}/rotate_secret_key.sh
 asterisk ALL=(root) NOPASSWD: ${INSTALL_DIR}/update_service_ports.sh
 asterisk ALL=(root) NOPASSWD: ${SYSTEMD_RUN_BIN} --unit=henwen-updater --collect ${INSTALL_DIR}/update.sh
 asterisk ALL=(root) NOPASSWD: ${INSTALL_DIR}/asl-asterisk-update.sh check
-asterisk ALL=(root) NOPASSWD: ${SYSTEMD_RUN_BIN} --unit=henwen-asl-upgrade --collect ${INSTALL_DIR}/asl-asterisk-update.sh install
 asterisk ALL=(root) NOPASSWD: ${INSTALL_DIR}/audiosocket-tap/apply.sh
 asterisk ALL=(root) NOPASSWD: ${INSTALL_DIR}/ws-audio/apply.sh
 asterisk ALL=(root) NOPASSWD: ${INSTALL_DIR}/tx-spike/apply.sh

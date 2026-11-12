@@ -51,7 +51,7 @@ def test_global_conf_alone_is_not_reachable_and_suggests_scoping(paths):
     s = app.asl_web_ui_status()
     assert s["reachable"] is False and s["url"] is None and s["global_conf"] is True
     assert s["apply_script"] == str(paths / "apply.sh")
-    assert "raw-editor" in s["overlap"] and s["running"] is False
+    assert set(s["overlap"]) == {"asl-update", "node-access"} and s["running"] is False
 
 
 def test_global_conf_plus_scoped_vhost_is_reachable_and_still_suggests_scoping(paths):
@@ -125,13 +125,6 @@ def test_route_refuses_plain_users(client, create_user, paths):
 def test_overlap_routes_are_hash_routes():
     for page, o in app.ASL_WEB_UI_OVERLAP.items():
         assert o["route"].startswith("#/"), page
-
-
-def test_manager_picks_a_real_node_page_for_node_routes():
-    """PR #17 review: page-node-control matches the page-node- prefix first."""
-    src = open(os.path.join(os.path.dirname(__file__), "..", "templates", "henwen-manager.html")).read()
-    assert "document.querySelector('section[id^=\"page-node-\"]')" not in src
-    assert "if (!firstNode) firstNode = _aslPageKey(sec.id).node;" in src
 
 
 def test_only_a_visit_through_apache_gets_the_link(client, create_user, paths):

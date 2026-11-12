@@ -2,20 +2,32 @@
 
 The ASL Web UI writes rpt.conf too. Every HenWen read of it carries a
 conf_hash; a save that sends back base_hash is refused with 409 when the file
-changed in between, and nothing is written.
+changed in between, and nothing is written. Since phase W3 HenWen saves only
+macro and schedule stanzas, so those are what the guard protects.
 """
+import os
+
 import pytest
 
 import app
 
 CONF = """[general]
-node_lookup_method = both
 
 [643930]
 rxchannel = dahdi/pseudo
-duplex = 0
 idtime = 540000
+
+[functions]
+1 = ilink,1
+
+[macro]
+1 = *32000
+
+[schedule]
+1 = 00 00 * * *
 """
+
+CHANGE = {"section": "macro", "changes": {"2": {"value": "*32001", "enabled": True}}}
 
 
 @pytest.fixture()
@@ -42,72 +54,46 @@ def test_reads_carry_the_hash(owner):
     client, conf = owner
     h = app.conf_hash(CONF)
     assert client.get("/api/conf").get_json()["conf_hash"] == h
-    assert client.get("/api/conf/node/643930").get_json()["conf_hash"] == h
-    assert client.get("/api/backups").get_json()["conf_hash"] == h
+    assert client.get("/api/conf/macro/macro").get_json()["conf_hash"] == h
+    assert client.get("/api/conf/schedule/schedule").get_json()["conf_hash"] == h
 
 
-def test_raw_save_against_current_version_succeeds(owner):
+def test_save_against_current_version_succeeds(owner):
     client, conf = owner
-    new = CONF + "\n; edited\n"
-    r = client.post("/api/save", json={"raw_content": new, "base_hash": app.conf_hash(CONF)})
+    r = client.post("/api/save", json=dict(CHANGE, base_hash=app.conf_hash(CONF)))
     assert r.status_code == 200
-    assert r.get_json()["conf_hash"] == app.conf_hash(new)
-    assert conf.read_text() == new
+    assert r.get_json()["conf_hash"] == app.conf_hash(conf.read_text())
+    assert "*32001" in conf.read_text()
 
 
-def test_raw_save_from_stale_page_is_refused(owner):
+def test_save_from_stale_page_is_refused(owner):
     client, conf = owner
-    base = client.get("/api/conf").get_json()["conf_hash"]
+    base = client.get("/api/conf/macro/macro").get_json()["conf_hash"]
     _external_edit(conf)
-    r = client.post("/api/save", json={"raw_content": CONF, "base_hash": base})
+    r = client.post("/api/save", json=dict(CHANGE, base_hash=base))
     assert r.status_code == 409
     body = r.get_json()
     assert body["conflict"] is True and "ASL Web UI" in body["error"]
-    assert "idtime = 600000" in conf.read_text()   # the newer edit survived
-
-
-def test_stanza_save_from_stale_page_is_refused(owner):
-    client, conf = owner
-    base = client.get("/api/conf/node/643930").get_json()["conf_hash"]
-    _external_edit(conf)
-    r = client.post("/api/save", json={
-        "section": "643930", "changes": {"duplex": {"value": "1", "enabled": True}},
-        "base_hash": base})
-    assert r.status_code == 409
-    assert "duplex = 0" in conf.read_text()
+    text = conf.read_text()
+    assert "idtime = 600000" in text and "*32001" not in text
 
 
 def test_save_without_base_hash_is_unchecked(owner):
     """Scripts and older pages that don't send a version keep working."""
     client, conf = owner
     _external_edit(conf)
-    r = client.post("/api/save", json={
-        "section": "643930", "changes": {"duplex": {"value": "1", "enabled": True}}})
+    r = client.post("/api/save", json=CHANGE)
     assert r.status_code == 200
     text = conf.read_text()
-    assert "duplex = 1" in text and "idtime = 600000" in text
-
-
-def test_restore_from_stale_page_is_refused(owner):
-    client, conf = owner
-    first = client.post("/api/save", json={"raw_content": CONF + "; v2\n"})
-    name = first.get_json()["backup"].rsplit("/", 1)[-1]
-    base = client.get("/api/backups").get_json()["conf_hash"]
-    _external_edit(conf)
-    r = client.post(f"/api/backups/{name}/restore", json={"base_hash": base})
-    assert r.status_code == 409
-    assert "idtime = 600000" in conf.read_text()
+    assert "*32001" in text and "idtime = 600000" in text
 
 
 def test_manager_page_keeps_the_guard_wired():
-    """PR #15 review. No JS test harness here, so pin the three invariants
-    in the Manager source: the General editor records its version, the raw
-    editor is never advanced by a stanza save, and a reload doesn't
-    re-baseline an editor that still has unsaved changes."""
-    import os
+    """No JS test harness here, so pin the invariants in the Manager source:
+    the list editors record the version they loaded, a save sends it back,
+    and a reload doesn't re-baseline an editor with unsaved changes."""
     src = open(os.path.join(os.path.dirname(__file__), "..", "templates", "henwen-manager.html")).read()
-    assert "_confHashLoaded('general', conf.conf_hash);" in src
-    assert "k !== '__raw__' && _confHash[k] === oldHash" in src
+    assert "base_hash: _confHash[section]" in src
+    assert "_confHashLoaded(name, r.data.conf_hash);" in src
     loaded = src.split("function _confHashLoaded(section, hash) {", 1)[1].split("}\n", 1)[0]
     assert "pendingChanges[section]" in loaded and "return;" in loaded
-    assert src.count("_confHashLoaded(") >= 4   # definition + general, stanza, list editors

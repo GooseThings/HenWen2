@@ -1,7 +1,7 @@
-"""Tests for the Manager > Asterisk Updates feature: apt output parsing, log
-line classification, the weekly-check state machine and the owner-gated
-routes. Nothing here touches apt, sudo or systemd -- every subprocess seam
-(_asl_run, _asl_upgrade_running, subprocess.run) is stubbed."""
+"""Tests for the Manager > Asterisk Updates check: apt output parsing, the
+weekly-check state machine and the owner-gated routes. Installing was handed
+to Cockpit/the ASL Web UI (docs/ASL-WEB-UI-PLAN.md, decision 2). Nothing here
+touches apt, sudo or systemd -- _asl_run is stubbed."""
 import json
 import subprocess
 
@@ -60,37 +60,6 @@ class TestParsing:
         assert out[2]["old"] == "" and out[2]["new"] == "1.0"
 
 
-class TestLineClassification:
-    def levels(self, lines):
-        return [lv for lv, _ in app.classify_asl_update_lines(lines)]
-
-    def test_script_prefixes(self):
-        assert self.levels([
-            "[10:00:00] [INFO] hello",
-            "[10:00:01] [WARN] careful",
-            "[10:00:02] [ERROR] bad",
-        ]) == ["info", "warn", "error"]
-
-    def test_apt_passthrough_patterns(self):
-        assert self.levels([
-            "Unpacking asl3-asterisk (2:22.10.1) over (2:22.9.0) ...",
-            "E: Sub-process /usr/bin/dpkg returned an error code (1)",
-            "W: some apt warning",
-            " ==> Keeping old config file as default.",
-            "dpkg: error processing package asl3-asterisk (--configure):",
-        ]) == ["info", "error", "warn", "warn", "error"]
-
-    def test_indented_continuations_inherit_previous_warn_or_error(self):
-        lv = self.levels([
-            "[10:00:00] [WARN] new defaults saved:",
-            "        /etc/asterisk/rpt.conf.dpkg-dist",
-            "[10:00:01] [INFO] next",
-            "        2:22.9.0",
-        ])
-        assert lv == ["warn", "warn", "info", "info"]
-
-    def test_result_markers(self):
-        assert self.levels(["=== RESULT: SUCCESS ===", "=== RESULT: FAILED ==="]) == ["ok", "error"]
 
 
 @pytest.fixture()
@@ -172,7 +141,6 @@ class TestRoutes:
 
     @pytest.mark.parametrize("method,path", [
         ("get", "/api/asl-update/status"), ("post", "/api/asl-update/check"),
-        ("post", "/api/asl-update/install"), ("get", "/api/asl-update/log"),
     ])
     def test_non_owner_is_refused(self, client, create_user, method, path):
         create_user("owner1", role="owner")
@@ -180,89 +148,20 @@ class TestRoutes:
         _login(client, "admin1", "admin1s-password1")
         assert getattr(client, method)(path).status_code == 403
 
-    def test_install_requires_confirm(self, client, create_user, monkeypatch):
-        self._owner(client, create_user)
-        monkeypatch.setattr(app, "_asl_upgrade_running", lambda: False)
-        assert client.post("/api/asl-update/install", json={}).status_code == 400
-
-    def test_install_refuses_when_up_to_date(self, client, create_user, monkeypatch):
-        self._owner(client, create_user)
-        monkeypatch.setattr(app, "_asl_upgrade_running", lambda: False)
-        monkeypatch.setattr(app, "_asl_collect_update_info",
-                            lambda: {"available": False, "packages": [], "will_upgrade": [], "error": ""})
-        r = client.post("/api/asl-update/install", json={"confirm": True})
-        assert r.status_code == 409
-
-    def test_install_refuses_while_running(self, client, create_user, monkeypatch):
-        self._owner(client, create_user)
-        monkeypatch.setattr(app, "_asl_upgrade_running", lambda: True)
-        assert client.post("/api/asl-update/install", json={"confirm": True}).status_code == 409
-
-    def test_install_launches_exact_sudoers_command(self, client, create_user, monkeypatch):
-        self._owner(client, create_user)
-        monkeypatch.setattr(app, "_asl_upgrade_running", lambda: False)
-        monkeypatch.setattr(app, "_asl_collect_update_info", lambda: {
-            "available": True, "packages": [], "error": "",
-            "will_upgrade": [{"name": "asl3-asterisk", "old": "1", "new": "2"}]})
-        seen = {}
-
-        def fake_run(cmd, **kw):
-            seen["cmd"] = cmd
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-
-        monkeypatch.setattr(app.subprocess, "run", fake_run)
-        r = client.post("/api/asl-update/install", json={"confirm": True})
-        assert r.status_code == 200
-        # Must match provision-sudoers.sh's rule argument-for-argument, or
-        # sudo -n refuses it.
-        assert seen["cmd"] == [app.SUDO_PATH, "-n", app.SYSTEMD_RUN_PATH,
-                               "--unit=henwen-asl-upgrade", "--collect",
-                               app.ASL_UPDATE_SCRIPT_PATH, "install"]
-
-    def test_sudo_failure_is_reported_with_hint(self, client, create_user, monkeypatch):
-        self._owner(client, create_user)
-        monkeypatch.setattr(app, "_asl_upgrade_running", lambda: False)
-        monkeypatch.setattr(app, "_asl_collect_update_info", lambda: {
-            "available": True, "packages": [], "error": "",
-            "will_upgrade": [{"name": "a", "old": "1", "new": "2"}]})
-        monkeypatch.setattr(app.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
-            cmd, 1, "", "sudo: a password is required"))
-        r = client.post("/api/asl-update/install", json={"confirm": True})
-        assert r.status_code == 500 and "sudoers" in r.get_json()["hint"]
 
 
-class TestLogRoute:
-    @pytest.fixture()
-    def logfile(self, tmp_path, monkeypatch, client, create_user):
-        create_user("owner1", role="owner")
-        _login(client, "owner1")
-        path = tmp_path / "asl.log"
-        monkeypatch.setattr(app, "ASL_UPDATE_LOG_PATH", str(path))
-        monkeypatch.setattr(app, "_asl_upgrade_running", lambda: False)
-        return path
 
-    def test_no_log_yet(self, client, logfile):
-        d = client.get("/api/asl-update/log").get_json()
-        assert d["exists"] is False and d["lines"] == []
 
-    def test_incremental_reads_and_result(self, client, logfile):
-        logfile.write_text("[10:00:00] [INFO] a\n[10:00:01] [WARN] b\n=== RESULT: SUCCESS ===\n")
-        d = client.get("/api/asl-update/log").get_json()
-        assert [l["level"] for l in d["lines"]] == ["info", "warn", "ok"]
-        assert d["result"] == "SUCCESS"
-        again = client.get(f"/api/asl-update/log?offset={d['offset']}").get_json()
-        assert again["lines"] == []
 
-    def test_partial_line_held_back_while_running(self, client, logfile, monkeypatch):
-        monkeypatch.setattr(app, "_asl_upgrade_running", lambda: True)
-        logfile.write_text("[10:00:00] [INFO] whole\n[10:00:01] [INF")
-        d = client.get("/api/asl-update/log").get_json()
-        assert [l["text"] for l in d["lines"]] == ["[10:00:00] [INFO] whole"]
-        logfile.write_text("[10:00:00] [INFO] whole\n[10:00:01] [INFO] done\n")
-        d2 = client.get(f"/api/asl-update/log?offset={d['offset']}").get_json()
-        assert [l["text"] for l in d2["lines"]] == ["[10:00:01] [INFO] done"]
 
-    def test_new_run_replacing_the_file_resets_the_offset(self, client, logfile):
-        logfile.write_text("[10:00:00] [INFO] new run\n")
-        d = client.get("/api/asl-update/log?offset=99999").get_json()
-        assert d["reset"] is True and len(d["lines"]) == 1
+
+
+def test_install_half_is_gone():
+    """Decision 2: no install route, no root install rule, script check-only."""
+    import os
+    root = os.path.join(os.path.dirname(__file__), "..")
+    rules = {r.rule for r in app.app.url_map.iter_rules()}
+    assert "/api/asl-update/install" not in rules and "/api/asl-update/log" not in rules
+    assert "asl-asterisk-update.sh install" not in open(os.path.join(root, "provision-sudoers.sh")).read()
+    script = open(os.path.join(root, "asl-asterisk-update.sh")).read()
+    assert "apt-get install" not in script and "usage: $0 check" in script
