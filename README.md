@@ -17,7 +17,7 @@ itself, and keys up with push-to-talk. Accounts without a callsign keep the
 
 ## Highlights
 
-- **Node management:** `rpt.conf` editor, connect/disconnect/monitor, Smart Connector schedules
+- **Node management:** connect/disconnect/monitor, Smart Connector schedules, DTMF macros and schedules, node access lists
 - **Audio:** Listen and push-to-talk over one call per user, recording, Broadcastify/YouTube relay, scheduled and TTS announcements, NWS alerts
 - **Status Board:** full-screen kiosk with a live map, no login needed to view
 - **Accounts:** Owner/Superuser/Admin/Kiosk roles, 2FA, per-user SIP credentials
@@ -27,6 +27,12 @@ itself, and keys up with push-to-talk. Accounts without a callsign keep the
 AllStarLink 3 on Debian 12/13, Python 3.8+, root, `ffmpeg`. Minimum hardware
 is a Raspberry Pi 4 (4GB) or a 2+ core x86-64 machine. Browser audio needs
 HTTPS.
+
+Node settings (call sign, radio interface, the rest of `rpt.conf`) are edited
+in AllStarLink's [ASL Web UI](https://allstarlink.github.io/web-ui/), which
+needs Debian 13. See
+[running with the ASL Web UI](https://github.com/GooseThings/HenWen2/wiki/Running-with-the-ASL-Web-UI)
+for the setup steps.
 
 ## Install
 
