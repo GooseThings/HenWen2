@@ -216,6 +216,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   max-height: 59px; max-width: 293px; object-fit: contain; pointer-events: none;
 }
+/* Narrower desktop windows: shrink it so it stays clear of #node-info on its
+   right (which is capped at 24vw of text for the same reason). */
+@media (max-width: 1100px) { .header-club-logo { max-width: 150px; } }
 .btn-icon { background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
   border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 0.82rem;
   text-decoration: none; display: inline-flex; align-items: center; gap: 4px;
@@ -490,11 +493,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
    account-scoped self-service, not really a control over *this* node's
    audio. */
 .node-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex-shrink: 0; }
-/* The row's own width comes from #node-info next to it (.node-body's
-   widest child, since the identity block's node number/callsign text is
-   normally wider than three small buttons) — without this, the buttons sat
-   left-aligned at their own natural width and left a blank strip on the
-   right up to that width. flex:1 1 0 divides whatever width the row
+/* The row's own width comes from the card's column, normally wider than
+   three small buttons — without this, the buttons sat left-aligned at their
+   own natural width and left a blank strip on the right. flex:1 1 0 divides whatever width the row
    actually has evenly across however many buttons are currently visible
    (role/permission/capability can hide any of them), and justify-content
    here (.btn-icon has none of its own, since it's used all over the app for
@@ -570,57 +571,70 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
   display: flex; align-items: center; }
 .chime-pause-btn:hover { opacity: 1; }
 .chime-pause-btn.active { color: var(--warn); opacity: 1; }
-/* Info-left / status-right grid, used on every width (see the mobile media
-   query below for the phone-tuned size overrides layered on top of this same
-   structure). Was originally mobile-only: the desktop card used a single
-   centered vertical stack, which wasted the column's width for what's really
-   just 3 lines of text plus a status badge and left most of node-card's
-   full-height column empty below it. #node-info's children are flat siblings
-   (see refreshBoard()'s nc.innerHTML), so a 2-column grid can place the
-   number/callsign/location column and the status badge independently
-   without any markup change — .keyed-wrap is explicitly given both axes
-   (col 2, spanning the other three's rows) so the grid's auto-placement
-   slots node-number/callsign/location into column 1 in DOM order around it. */
+/* Node identity block, in the header between the brand and the hamburger
+   (it was the top of the Node card before). Text on the left, right-aligned
+   against the health dot: line 1 is node number + callsign, line 2 the
+   location. min-width:0 + the ellipsis rules below let a long location
+   truncate instead of pushing the header wider; the max-width keeps it clear
+   of the absolutely-centered club logo. Phone sizes are in the mobile media
+   query. */
 #node-info {
-  display: grid; grid-template-columns: 1fr auto; align-items: center;
-  column-gap: 12px; row-gap: 2px; flex-shrink: 0; text-align: left;
+  display: flex; align-items: center; gap: 14px; margin-left: auto; margin-right: 16px;
+  min-width: 0; flex: 0 1 auto;
+}
+.node-info-msg { color: var(--text2); font-size: 0.9rem; white-space: nowrap; }
+.node-id-text { min-width: 0; max-width: 24vw; text-align: right; }
+.node-id-line { display: flex; align-items: baseline; justify-content: flex-end; gap: 10px; white-space: nowrap; }
+/* Only the callsign gives way when the line is too wide for its space (a
+   7-digit node, an -R suffix and the lock badge together on a 320px phone):
+   it truncates with an ellipsis; the number and the badge never shrink. */
+.node-id-line > * { flex-shrink: 0; }
+.node-id-line > .node-callsign { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* LOCKED shrinks to its padlock icon where the header is tight. */
+@media (max-width: 1100px) {
+  .locked-text { display: none; }
+  .node-id-text { max-width: 26vw; }
 }
 
 /* .hist-num is also reused by the node search results list (renderAslResults()) */
 .hist-num { font-size: 0.85rem; font-weight: 700; font-family: var(--mono); color: var(--accent); text-decoration: none; }
-.node-number, .node-callsign, .node-location { grid-column: 1; text-align: left; }
-.node-number { font-size: 2.4rem; font-weight: 700; line-height: 1; color: var(--accent); text-decoration: none; font-variant-numeric: tabular-nums; }
+.node-number { font-size: 1.8rem; font-weight: 700; line-height: 1; color: var(--accent); text-decoration: none; font-variant-numeric: tabular-nums; }
 .el-badge { display: inline-block; font-size: 0.6rem; font-weight: 700; letter-spacing: .02em;
   padding: 1px 4px; border-radius: 3px; background: rgba(88,166,255,.15); color: var(--accent);
   vertical-align: middle; margin-left: 3px; }
 .node-callsign { font-size: 1.25rem; font-weight: 600; color: var(--text); letter-spacing: 0.04em; text-decoration: none; }
 .node-callsign:hover { text-decoration: underline; }
-.node-location { font-size: 0.78rem; color: var(--text2); }
+.node-location { font-size: 0.82rem; color: var(--text2); margin-top: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Narrower desktop windows: a step down so number + callsign + padlock fit
+   beside the club logo without the callsign truncating. */
+@media (max-width: 1100px) {
+  .node-number { font-size: 1.5rem; }
+  .node-callsign { font-size: 1.1rem; }
+}
 
-.keyed-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 0;
-  grid-column: 2; grid-row: 1 / span 3; }
-.keyed-dot { width: 39px; height: 39px; border-radius: 50%; background: #222;
+.keyed-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; flex-shrink: 0; }
+.keyed-dot { width: 32px; height: 32px; border-radius: 50%; background: #222;
   border: 3px solid #333; transition: background .4s, border-color .4s, box-shadow .4s;
   display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .keyed-dot-logo { width: 100%; height: 100%; object-fit: contain; opacity: 0.3; }
 .keyed-dot.healthy { background: var(--green); border-color: #5de073;
-  box-shadow: 0 0 24px rgba(63,185,80,.65), 0 0 56px rgba(63,185,80,.25);
+  box-shadow: 0 0 12px rgba(63,185,80,.65), 0 0 26px rgba(63,185,80,.25);
   animation: pulse-k 2.8s ease-in-out infinite; }
 .keyed-dot.down { background: var(--danger); border-color: var(--danger);
-  box-shadow: 0 0 24px rgba(219,68,55,.65), 0 0 56px rgba(219,68,55,.25);
+  box-shadow: 0 0 12px rgba(219,68,55,.65), 0 0 26px rgba(219,68,55,.25);
   animation: none; }
 @keyframes pulse-k {
-  0%,100% { box-shadow: 0 0 24px rgba(63,185,80,.65), 0 0 56px rgba(63,185,80,.25); }
-  50%      { box-shadow: 0 0 38px rgba(63,185,80,.9),  0 0 75px rgba(63,185,80,.4);  }
+  0%,100% { box-shadow: 0 0 12px rgba(63,185,80,.65), 0 0 26px rgba(63,185,80,.25); }
+  50%      { box-shadow: 0 0 18px rgba(63,185,80,.9),  0 0 36px rgba(63,185,80,.4);  }
 }
-.keyed-label { font-size: 0.8rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+.keyed-label { font-size: 0.62rem; line-height: 1; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
   color: var(--text2); }
 .keyed-label.healthy { color: var(--green); }
 .keyed-label.down { color: var(--danger); }
 .locked-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 0.72rem;
   font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px;
-  border-radius: 3px; margin-top: 4px; background: rgba(219,68,55,.15); color: var(--danger);
-  grid-column: 1 / span 2; justify-self: start; }
+  border-radius: 3px; background: rgba(219,68,55,.15); color: var(--danger); align-self: center; }
 .link-count { font-size: 0.82rem; color: var(--text2); }
 .link-count span { color: var(--text); font-weight: 600; }
 
@@ -1250,26 +1264,28 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
      every other card gets — NOT fused with the Node card below it (an
      earlier iteration of this mobile layout fused them; also since dropped
      is the Node card's own "NODE" title bar that fused box used to rest
-     on — see #node-info further down, now a complete box with no header
-     above it). .board's gap above is what puts normal card-to-card spacing
+     on). The node's identity block (#node-info) sits in this header now. .board's gap above is what puts normal card-to-card spacing
      between this and whatever comes next — normally the net-schedule
      reminder bar, weather-alert ticker, and/or Owner kiosk banner (#net-bar/
      #nws-alert-bar/#kiosk-banner-bar, each independently shown only when
      relevant), then the Node card — since those already sit in that DOM
      order between <header> and .content-area. */
   .header {
-    flex-wrap: wrap; row-gap: 13px;
+    flex-wrap: nowrap;
     background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
     padding: 13px 17px;
   }
   .header-logo { height: 37px; width: 37px; }
-  .header-brand { font-size: 0.96rem; }
+  .header-brand { font-size: 0.96rem; flex-shrink: 0; gap: 9px; }
   .header-brand strong { font-size: 1.1rem; }
   /* "KIOSK" dropped on mobile — the visitor already knows they're on their
      own phone, so the label was just redundant noise crowding the header;
      this leaves the brand line as plain "HenWen" (issue: was "HenWen
      KIOSK MOBILE" before the "MOBILE" suffix was dropped too). */
   .header-brand-kiosk-label { display: none; }
+  /* Narrowest phones: the wordmark gives its width to the node identity
+     block; the logo still carries the brand. */
+  @media (max-width: 400px) { .header-brand strong { display: none; } }
   .header-actions { gap: 11px; }
   .header-club-logo { display: none; }
 
@@ -1379,27 +1395,18 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
 
   /* Cards no longer share an implicit grid-row height, so each gets its own
      cap with an internally-scrolling list instead of flexing to fill a row. */
-  /* .node-card itself carries no visible chrome at all on mobile — it's
-     split into two independent-looking boxes instead, both drawn on its
-     actual children rather than on a wrapper: #node-info (a complete box of
-     its own — no "NODE" title bar above it; the big node number/callsign
-     already identify this card without one, so the label was dead weight)
-     and #node-controls + #listen-vol-row together (the Arm TX/Listen/Rec
-     buttons + volume slider) broken out into what reads as its own separate
-     card below that. .node-body's padding/gap move onto those pieces
-     directly so each can carry its own border/background independently. */
+  /* .node-card itself carries no visible chrome at all on mobile: no "NODE"
+     title bar, and its box is drawn on its children instead (#node-controls
+     + #listen-vol-row together, the Arm TX/Listen/Rec buttons + volume
+     slider, read as one card). The node's identity is in the header. */
   .node-card {
     min-height: 0; max-height: none;
     background: none; border: none; border-radius: 0; padding: 0;
   }
   .node-card > .card-header { display: none; }
   .node-body { padding: 0; gap: 0; }
-  #node-info {
-    background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
-    padding: 13px 19px 17px; row-gap: 1px;
-  }
   #node-controls {
-    margin-top: 13px; background: var(--bg2); border: 1px solid var(--border);
+    background: var(--bg2); border: 1px solid var(--border);
     border-bottom: none; border-radius: 10px 10px 0 0; padding: 17px 19px 10px;
   }
   #listen-vol-row {
@@ -1433,16 +1440,21 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
      below. */
   .card-title { font-size: 0.82rem; }
 
-  /* Node panel: same info-left/status-right grid as desktop now (see
-     #node-info above) — just tightened for phone width, since a single
-     column has less room to spare than the desktop card's full-height
-     column. Text sizes here and in .nr-*/.fav-* below are the pre-scale
-     mobile values × 1.2 ("cards text 20% larger"). */
-  .node-number { font-size: 1.92rem; }
-  .node-callsign { font-size: 1.14rem; }
-  .node-location { font-size: 0.86rem; }
-  .keyed-dot { width: 34px; height: 34px; }
-  .keyed-label { font-size: 0.74rem; }
+  /* Node identity in the header: one row with the logo, wordmark and
+     hamburger, so everything is sized off the viewport width (vw, clamped)
+     to fit down to a 320px-wide phone. The header no longer wraps; the
+     block takes whatever width is left and its location line truncates.
+     ONLINE/OFFLINE text is dropped (the dot's color carries it). */
+  #node-info { flex: 1 1 0; justify-content: flex-end; gap: clamp(6px, 2vw, 10px); margin: 0 clamp(6px, 2vw, 12px) 0 clamp(6px, 2vw, 12px); }
+  .node-id-text { max-width: none; }
+  .node-id-line { gap: clamp(4px, 1.6vw, 8px); }
+  .node-number { font-size: clamp(0.95rem, 4.6vw, 1.45rem); }
+  .node-callsign { font-size: clamp(0.78rem, 3.6vw, 1.1rem); letter-spacing: 0.02em; }
+  .node-location { font-size: clamp(0.62rem, 2.8vw, 0.8rem); margin-top: 2px; }
+  .node-info-msg { font-size: clamp(0.7rem, 3.2vw, 0.9rem); }
+  .keyed-dot { width: clamp(20px, 6.5vw, 28px); height: clamp(20px, 6.5vw, 28px); border-width: 2px; }
+  .keyed-label { display: none; }
+  .locked-badge { padding: 2px 4px; }
 
   /* .node-row's stats line already wraps instead of truncating (see base
      styles) — just tighten sizes/gaps so more fits per line before wrapping
@@ -1769,6 +1781,12 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
       <strong>HenWen</strong> <span class="header-brand-kiosk-label">KIOSK</span>
     </div>
     <img class="header-club-logo" id="club-logo-img" alt="" style="display:none">
+    <!-- Node identity (number, callsign, location) and the ONLINE/OFFLINE
+         health dot. Lived in the Node card until it moved up here; the Node
+         card below keeps only the audio controls. Filled by refreshBoard(). -->
+    <div id="node-info">
+      <div class="node-info-msg">Loading&hellip;</div>
+    </div>
     <div class="header-actions">
       <audio id="node-audio" preload="none">
         <source type="audio/webm; codecs=opus">
@@ -1878,9 +1896,6 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
         <button class="dash-hide-btn" onclick="toggleDashHide('node',event)" title="Hide panel"><svg class="icon"><use href="#icon-eye-off"></use></svg></button>
       </div>
       <div class="node-body" id="node-body">
-        <div id="node-info">
-          <div style="color:var(--text2);font-size:.9rem">Loading&hellip;</div>
-        </div>
         <!-- Node-wide audio controls: these act on the node itself (listen to
              it, record it, transmit through it), not on any one connected
              peer, which is why they live here rather than in the Connected
@@ -4933,23 +4948,27 @@ async function refreshBoard() {
     window._lastBoardNodes = nodes;
     var nc = document.getElementById('node-info');
     if (!nodes.length) {
-      nc.innerHTML = '<div style="color:var(--text2)">No nodes configured</div>';
+      nc.innerHTML = '<div class="node-info-msg">No nodes configured</div>';
     } else {
       var n = nodes[0];
       /* Health circle: green pulse only when Asterisk is running, AMI is
          connected, and this node's AMI data isn't stale. Any one down = solid red. */
       var healthy = !!data.asterisk_active && !!data.ami_connected && !n.stale;
       nc.innerHTML =
-        nodeLink(n.node, 'node-number') +
-        callsignLink(n.callsign, 'node-callsign') +
-        (n.location ? '<div class="node-location">' + esc(n.location) + '</div>' : '') +
+        '<div class="node-id-text">' +
+          '<div class="node-id-line">' +
+            (n.locked ? '<span class="locked-badge" title="' + esc(n.locked_by ? 'Locked by ' + n.locked_by : 'Locked by the node owner') + '"><svg class="icon"><use href="#icon-lock"></use></svg><span class="locked-text"> LOCKED</span></span>' : '') +
+            nodeLink(n.node, 'node-number') +
+            callsignLink(n.callsign, 'node-callsign') +
+          '</div>' +
+          (n.location ? '<div class="node-location" title="' + esc(n.location) + '">' + esc(n.location) + '</div>' : '') +
+        '</div>' +
         '<div class="keyed-wrap">' +
           '<div class="keyed-dot ' + (healthy ? 'healthy' : 'down') + '">' +
             '<img class="keyed-dot-logo" src="' + henwenLogoSrc(128) + '" alt="">' +
           '</div>' +
           '<div class="keyed-label ' + (healthy ? 'healthy' : 'down') + '">' + (healthy ? 'ONLINE' : 'OFFLINE') + '</div>' +
-        '</div>' +
-        (n.locked ? '<div class="locked-badge" title="' + esc(n.locked_by ? 'Locked by ' + n.locked_by : 'Locked by the node owner') + '"><svg class="icon"><use href="#icon-lock"></use></svg> LOCKED</div>' : '');
+        '</div>';
     }
 
     /* Update hosted-node star pins */
@@ -9847,8 +9866,7 @@ function dashFindParentSplit(tree, target) {
 
    The buttons are flex:1 1 0 (see .node-controls .btn-icon) so they can
    grow past their own natural width to fill out the row — normally wider
-   than their combined natural width, since #node-info's identity text is
-   usually the widest thing in the card. offsetWidth alone would report that
+   than their combined natural width, since the card's column usually is. offsetWidth alone would report that
    *grown* width, not the true one-line floor, so the row is temporarily
    forced to shrink-wrap (width:max-content) before measuring: a flex
    container's max-content size comes from its items' own preferred sizes,
@@ -9890,8 +9908,8 @@ function dashNodeButtonsMinPx() {
    its grid area, so offsetHeight/scrollHeight would just report back the
    space we're trying to reclaim. Measuring .node-body's topmost/lowest
    *rendered* child's edges (not simply the first/last) matters twice over:
-   a display:none child reports an all-zero rect, and the controls below
-   #node-info can each be hidden by role/permission — the volume row is even
+   a display:none child reports an all-zero rect, and the controls
+   can each be hidden by role/permission — the volume row is even
    the last child while Listen is unavailable to that viewer, so both ends
    need a real min()/max() rather than assuming DOM order survives.
 
