@@ -207,7 +207,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
   display: block; position: relative; z-index: 1; }
 /* The node's health light: a circle a little larger than the logo, sitting
    behind it, so a ring of it and its glow show around the fully opaque logo
-   (green pulse = online, solid red = offline, dark until the first board
+   (green pulse = online, red pulse = offline, dark until the first board
    refresh). .keyed-dot's colors/glow are defined further down; this only
    places it. The margin leaves the ring clear of the header's edge. */
 .header-logo-wrap { position: relative; flex-shrink: 0; margin: 6px; }
@@ -589,15 +589,31 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
 
 .keyed-dot { border-radius: 50%; background: #222;
   border: 3px solid #333; transition: background .4s, border-color .4s, box-shadow .4s; }
-.keyed-dot.healthy { background: var(--green); border-color: #5de073;
-  box-shadow: 0 0 14px rgba(63,185,80,.7), 0 0 30px rgba(63,185,80,.3);
-  animation: pulse-k 2.8s ease-in-out infinite; }
-.keyed-dot.down { background: var(--danger); border-color: var(--danger);
-  box-shadow: 0 0 14px rgba(219,68,55,.7), 0 0 30px rgba(219,68,55,.3);
-  animation: none; }
+/* Both states breathe from almost black up to the full bright color and
+   back, ring and glow together, so the light reads as a slow pulse around
+   the logo rather than a fixed ring. Same period for both; only the color
+   says which state it is. */
+.keyed-dot.healthy { animation: pulse-k 2.8s ease-in-out infinite; }
+.keyed-dot.down    { animation: pulse-d 2.8s ease-in-out infinite; }
 @keyframes pulse-k {
-  0%,100% { box-shadow: 0 0 14px rgba(63,185,80,.7), 0 0 30px rgba(63,185,80,.3); }
-  50%      { box-shadow: 0 0 22px rgba(63,185,80,.95), 0 0 44px rgba(63,185,80,.45);  }
+  0%,100% { background: #061008; border-color: #0a1a0d;
+            box-shadow: 0 0 4px rgba(63,185,80,.15), 0 0 10px rgba(63,185,80,.05); }
+  50%     { background: var(--green); border-color: #5de073;
+            box-shadow: 0 0 22px rgba(63,185,80,.95), 0 0 46px rgba(63,185,80,.5); }
+}
+@keyframes pulse-d {
+  0%,100% { background: #120606; border-color: #1d0a0a;
+            box-shadow: 0 0 4px rgba(219,68,55,.15), 0 0 10px rgba(219,68,55,.05); }
+  50%     { background: var(--danger); border-color: #ff6b5e;
+            box-shadow: 0 0 22px rgba(219,68,55,.95), 0 0 46px rgba(219,68,55,.5); }
+}
+/* Reduced motion: hold the bright state instead of pulsing. */
+@media (prefers-reduced-motion: reduce) {
+  .keyed-dot.healthy { animation: none; background: var(--green); border-color: #5de073;
+    box-shadow: 0 0 14px rgba(63,185,80,.7), 0 0 30px rgba(63,185,80,.3); }
+  .keyed-dot.down { animation: none; background: var(--danger); border-color: #ff6b5e;
+    box-shadow: 0 0 14px rgba(219,68,55,.7), 0 0 30px rgba(219,68,55,.3); }
+}
 }
 .locked-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 0.72rem;
   font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px;
@@ -4874,7 +4890,7 @@ function noteBoardFailure(why) {
 }
 
 /* The health light behind the header logo. state: true = online (green
-   pulse), false = offline (solid red), null = unknown (dark). The words the
+   pulse), false = offline (red pulse), null = unknown (dark). The words the
    old ONLINE/OFFLINE label carried are on the wrap's tooltip/aria-label. */
 function setHeaderStatus(state, why) {
   var dot = document.getElementById('header-status-dot');
@@ -4923,7 +4939,7 @@ async function refreshBoard() {
     } else {
       var n = nodes[0];
       /* Health light (behind the header logo): green pulse only when Asterisk is running, AMI is
-         connected, and this node's AMI data isn't stale. Any one down = solid red. */
+         connected, and this node's AMI data isn't stale. Any one down = red pulse. */
       var healthy = !!data.asterisk_active && !!data.ami_connected && !n.stale;
       nc.innerHTML =
         '<div class="node-id-text">' +
