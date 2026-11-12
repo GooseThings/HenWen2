@@ -617,6 +617,8 @@ input:checked + .slider::before  { transform: translateX(16px); background: var(
 .asl-readonly .val-input, .asl-readonly .switch { opacity: 0.55; }
 .asl-readonly [onclick^="backupRestore"],
 #page-raw-editor.asl-readonly .btn-success { display: none; }
+#node-drift-bar { margin-bottom: 16px; }
+#node-drift-bar:empty { display: none; }
 
 .asl-log { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; font-family: var(--mono); font-size: 0.8rem; line-height: 1.45; height: 380px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
 .asl-log div { padding: 0 2px; }
@@ -789,6 +791,8 @@ pre.codeblock { background: var(--bg3); padding: 12px; border-radius: 4px; font-
   </div>
 
   <div id="asl-web-ui-scope-bar"></div>
+  <!-- Settings that name a node rpt.conf no longer has (filled by checkNodeDrift) -->
+  <div id="node-drift-bar"></div>
 
   <!-- Dashboard -->
   <section class="page active" id="page-dashboard">
@@ -2887,6 +2891,7 @@ sudo bash /opt/HenWen/tx-spike/setup-https.sh --http-only              # frontin
       <div class="card-body">
         <p id="asl-summary" style="margin-bottom:10px;color:var(--text2)">Loading&hellip;</p>
         <div id="asl-refresh-warn" class="muted" style="display:none;margin-bottom:10px;color:var(--warn)"></div>
+        <div id="asl-webui-review" class="alert alert-info" style="display:none;margin-bottom:10px"></div>
         <table class="data-table" id="asl-pkg-table" style="display:none">
           <thead><tr><th>Package</th><th>Installed</th><th>Available</th></tr></thead>
           <tbody id="asl-pkg-body"></tbody>
@@ -3772,6 +3777,33 @@ function resetCustomTheme() {
 
 /* ── State ─────────────────────────────────────────────────────────────── */
 var pendingChanges = {};
+// rpt.conf version each editor loaded, keyed by section ('__raw__' for the
+// raw editor, '__backups__' for restore). Sent back as base_hash so the
+// server refuses a save made against an rpt.conf that changed since -- the
+// ASL Web UI writes it too (docs/ASL-WEB-UI-PLAN.md, hazard 3).
+var _confHash = {};
+function _confHashAdvance(oldHash, newHash) {
+  // A one-stanza save moved the file from oldHash to newHash without
+  // touching any other stanza, so every editor that was current before it
+  // is still current after it. Not for raw saves or restores.
+  if (!newHash) return;
+  // Never the raw editor: its textarea still holds the old text, and
+  // advancing it would let a raw save silently revert this one.
+  Object.keys(_confHash).forEach(function(k) {
+    if (k !== '__raw__' && _confHash[k] === oldHash) _confHash[k] = newHash;
+  });
+}
+// Record the version an editor loaded -- unless it still has unsaved
+// changes. Those were made against the version recorded when they began,
+// and a reload must not make them look current: if the file changed
+// underneath them, saving them has to be refused, not accepted.
+function _confHashLoaded(section, hash) {
+  if (pendingChanges[section] && Object.keys(pendingChanges[section]).length) return;
+  _confHash[section] = hash;
+}
+function _confConflictMsg(r) {
+  return (r.data && r.data.error) || 'rpt.conf changed since this page loaded it. Reload and try again.';
+}
 var currentSection = '';
 var currentPage    = 'dashboard';
 var backupFile     = null;
@@ -4316,12 +4348,16 @@ async function saveChanges() {
   var r = await api('/api/save', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({section: section, changes: changes})
+    body: JSON.stringify({section: section, changes: changes, base_hash: _confHash[section]})
   });
   if (r.ok) {
     log('Saved. ' + (r.data.message || ''), 'OK');
+    _confHashAdvance(_confHash[section], r.data.conf_hash);
     delete pendingChanges[section];
     hideUnsaved();
+  } else if (r.status === 409 && r.data.conflict) {
+    log(_confConflictMsg(r), 'ERROR');
+    showUnsaved('⚠️ Not saved: rpt.conf changed elsewhere. Discard and reload this page.');
   } else {
     log('Save failed: ' + (r.data.error || r.status), 'ERROR');
     (r.data.details || []).forEach(function(d) { log('  ' + d, 'ERROR'); });
@@ -4367,6 +4403,7 @@ async function loadGeneralEditor() {
     el.innerHTML = '<div class="alert alert-danger">Failed to load rpt.conf. Check permissions.</div>';
     return;
   }
+  _confHashLoaded('general', conf.conf_hash);
   // /api/conf now returns general_settings parsed from the [general] stanza only
   var s    = conf.general_settings || {};
   var html = '<div class="card"><div class="card-body">';
@@ -4646,6 +4683,7 @@ async function loadStanzaEditor(sectionName, elId, apiUrl, loadingLabel, fallbac
     }
   }
 
+  _confHashLoaded(sectionName, r.data.conf_hash);
   var s    = r.data.settings || {};
   var html = '';
 
@@ -4741,6 +4779,7 @@ async function loadListEditor(kind, name, contentElId, usedByElId, apiPrefix) {
     if (usedByEl) usedByEl.textContent = '';
     return;
   }
+  _confHashLoaded(name, r.data.conf_hash);
 
   var usedBy = r.data.used_by || [];
   if (usedByEl) {
@@ -4845,6 +4884,7 @@ async function rawLoad() {
     return;
   }
   document.getElementById('raw-ta').value = r.data.content;
+  _confHash.__raw__ = r.data.conf_hash;
   document.getElementById('raw-alert').innerHTML =
     '<div class="alert alert-info">Loaded ' + r.data.content.length + ' bytes from {{ conf_path }}</div>';
   log('Raw editor: ' + r.data.content.length + ' bytes.', 'OK');
@@ -4856,14 +4896,17 @@ async function rawSave() {
   var r = await api('/api/save', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({raw_content: content})
+    body: JSON.stringify({raw_content: content, base_hash: _confHash.__raw__})
   });
   var alertEl = document.getElementById('raw-alert');
   if (r.ok) {
+    // A raw save can change any stanza, so only the raw editor stays current.
+    _confHash.__raw__ = r.data.conf_hash;
     alertEl.innerHTML = '<div class="alert alert-success">Saved. Backup: ' + esc(r.data.backup || '') + '</div>';
     log('Saved. Backup: ' + (r.data.backup || ''), 'OK');
   } else {
-    alertEl.innerHTML = '<div class="alert alert-danger">' + esc(r.data.error || 'Save failed') + '</div>';
+    alertEl.innerHTML = '<div class="alert alert-danger">' + esc(r.data.error || 'Save failed')
+      + (r.data.conflict ? ' <button class="btn btn-sm" onclick="rawLoad()">Reload</button>' : '') + '</div>';
     log('Save failed: ' + (r.data.error || r.status), 'ERROR');
     if (r.data.hint) log(r.data.hint, 'WARN');
   }
@@ -4879,6 +4922,7 @@ function _fmtSize(b) {
 async function loadBackups() {
   var el = document.getElementById('backup-list');
   var r  = await api('/api/backups');
+  if (r.ok) _confHash.__backups__ = r.data.conf_hash;
   if (!r.ok || !r.data.backups || !r.data.backups.length) {
     el.innerHTML = '<span class="muted">No backups found in ' + esc(r.data && r.data.backup_dir || '') + '.</span>';
     return;
@@ -4935,12 +4979,17 @@ function backupDownload(name) {
 async function backupRestore(name) {
   if (!confirm('Restore ' + name + '?\nThe current rpt.conf will be backed up first.')) return;
   log('Restoring backup: ' + name, 'WARN');
-  var r = await api('/api/backups/' + encodeURIComponent(name) + '/restore', {method: 'POST'});
+  var r = await api('/api/backups/' + encodeURIComponent(name) + '/restore', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({base_hash: _confHash.__backups__})
+  });
   if (r.ok) {
     log('Restored. New backup: ' + (r.data.backup || ''), 'OK');
-    loadBackups();
+    loadBackups();   // a restore replaces the whole file; other editors stay stale
   } else {
     log('Restore failed: ' + (r.data.error || r.status), 'ERROR');
+    if (r.data.conflict) loadBackups();
   }
 }
 
@@ -6050,17 +6099,21 @@ async function testAMI() {
   el.innerHTML = '<span class="muted"><span class="spinner"></span> Testing...</span>';
   log('Running AMI test...', 'INFO');
   var r = await api('/api/ami/test');
+  // Shown on success and failure alike: a rotated [admin] secret is exactly
+  // the case where the login fails and this is the explanation.
+  var amiWarn = (r.data && r.data.warning)
+    ? '<div class="alert alert-warn">' + esc(r.data.warning) + '</div>' : '';
   if (r.ok && r.data.connected) {
     el.innerHTML = '<div class="alert alert-success">AMI connected as <strong>'
       + esc(r.data.ami_user) + '</strong> at ' + esc(r.data.ami_host || '')
-      + (r.data.asterisk_info ? '<br>' + esc(r.data.asterisk_info) : '') + '</div>';
+      + (r.data.asterisk_info ? '<br>' + esc(r.data.asterisk_info) : '') + '</div>' + amiWarn;
     log('AMI test PASSED.', 'OK');
   } else {
     var err = r.data.error || 'Unknown error';
     el.innerHTML = '<div class="alert alert-danger"><strong>AMI test failed</strong><br>'
       + esc(err)
       + (!r.data.creds_found ? '<br>Credentials not set. See Configuration Guide below.' : '')
-      + '</div>';
+      + '</div>' + amiWarn;
     log('AMI test FAILED: ' + err, 'ERROR');
   }
 }
@@ -7514,6 +7567,22 @@ function aslRenderStatus(d) {
   } else {
     warn.style.display = 'none';
   }
+  // AllStarLink's web UI moved past the version HenWen's overlap map
+  // (docs/ASL-WEB-UI-PLAN.md) was written against: worth a re-read.
+  var rev = document.getElementById('asl-webui-review');
+  var w = st.asl_web_ui || {};
+  if (rev && w.needs_review) {
+    rev.style.display = '';
+    rev.innerHTML = 'AllStarLink\'s <strong>ASL Web UI ' + esc(w.newest || '') + '</strong> is '
+      + (w.newest === w.installed ? 'installed' : 'available')
+      + '. HenWen\'s map of what it overlaps was written against ' + esc(w.reviewed || '')
+      + '; re-check <span class="mono">docs/ASL-WEB-UI-PLAN.md</span> against the new release.';
+  } else if (rev && w.error) {
+    rev.style.display = '';
+    rev.textContent = 'Could not check for a newer ASL Web UI release: ' + w.error;
+  } else if (rev) {
+    rev.style.display = 'none';
+  }
   var tbl = document.getElementById('asl-pkg-table');
   var body = document.getElementById('asl-pkg-body');
   body.innerHTML = '';
@@ -7956,6 +8025,7 @@ window.addEventListener('DOMContentLoaded', async function() {
   checkNodeDB();
   checkForUpdate();
   aslUpdateBadge();
+  checkNodeDrift();
   aslWebUiDecorate();
 });
 
@@ -8047,6 +8117,69 @@ async function aslWebUiDecorate() {
         + esc(d.apply_script) + '</span>.</div>';
     }
   }
+}
+
+/* ── Node-number drift ──────────────────────────────────────────────────────
+   The ASL Web UI can rename or remove a node; HenWen's own settings keep the
+   old number and silently stop working. /api/node-drift lists them, and
+   Re-point moves them to a node rpt.conf still has. */
+async function checkNodeDrift() {
+  var bar = document.getElementById('node-drift-bar');
+  if (!bar) return;
+  var r = await api('/api/node-drift');
+  if (!r.ok || !r.data || !r.data.stale) { bar.innerHTML = ''; return; }
+  var stale = r.data.stale, local = r.data.local_nodes || [];
+  var nodes = Object.keys(stale);
+  var sipErr = r.data.sip_reload_error
+    ? '<div class="alert alert-danger">After a node re-point, the per-user SIP dialplan was rewritten but Asterisk '
+      + 'did not reload it (' + esc(r.data.sip_reload_error) + '), so SIP calls may still dial the old node. '
+      + '<button class="btn btn-sm" onclick="retrySipReload()">Retry reload</button></div>'
+    : '';
+  if (!nodes.length) { bar.innerHTML = sipErr; return; }
+  var opts = local.map(function(n) { return '<option value="' + esc(n) + '">' + esc(n) + '</option>'; }).join('');
+  bar.innerHTML = nodes.map(function(node) {
+    var uses = stale[node].map(function(u) {
+      return esc(u.label) + (u.count > 1 ? ' (' + u.count + ')' : '')
+        + (u.names && u.names.length ? ': ' + u.names.map(esc).join(', ') : '');
+    }).join('; ');
+    return '<div class="alert alert-warn">'
+      + '<strong>Node ' + esc(node) + ' is not in rpt.conf any more</strong>, but HenWen still uses it for '
+      + uses + '. A node renamed or removed in the ASL Web UI (or by hand) leaves these behind.'
+      + (local.length && stale[node].some(function(u) { return u.repoint !== false; })
+        ? '<div class="btn-row" style="margin-top:8px">Re-point to '
+          + '<select id="drift-to-' + esc(node) + '">' + opts + '</select> '
+          + '<button class="btn btn-sm btn-warn" onclick="repointNode(' + esc(JSON.stringify(node)) + ')">Re-point</button></div>'
+        : '')
+      + '</div>';
+  }).join('') + sipErr;
+}
+
+async function retrySipReload() {
+  var r = await api('/api/node-drift/sip-reload', {method: 'POST'});
+  if (r.ok && r.data.ok) log('SIP dialplan reloaded.', 'OK');
+  else log('SIP reload failed again: ' + ((r.data && r.data.error) || r.status), 'ERROR');
+  checkNodeDrift();
+}
+
+async function repointNode(node) {
+  var sel = document.getElementById('drift-to-' + node);
+  if (!sel) return;
+  if (!confirm('Move every HenWen setting that uses node ' + node + ' to node ' + sel.value + '?')) return;
+  var r = await api('/api/node-drift/repoint', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({from: node, to: sel.value})
+  });
+  if (r.ok) {
+    log('Re-pointed node ' + node + ' to ' + sel.value + '.', 'OK');
+    if ((r.data.skipped || []).length)
+      log('Left for a higher role to re-point: ' + r.data.skipped.join(', '), 'WARN');
+    var sip = r.data.sip;
+    if (sip && sip.node && sip.node !== sel.value)
+      log('Per-user SIP calls dial node ' + sip.node + ' (the first node in rpt.conf), not ' + sel.value + '.', 'WARN');
+    if (sip && !sip.ok) log('SIP dialplan rewritten but Asterisk did not reload: ' + (sip.error || ''), 'ERROR');
+  }
+  else      log('Re-point failed: ' + (r.data.error || r.status), 'ERROR');
+  checkNodeDrift();
 }
 
 async function checkForUpdate(live) {

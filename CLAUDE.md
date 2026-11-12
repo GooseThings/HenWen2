@@ -119,7 +119,7 @@ The update bar's "Launch Updater" button (`/api/update/launch`, superuser only) 
 
 ### AMI connection
 
-`AMIClient` (class in app.py ~line 915) is a raw TCP socket client to Asterisk Manager Interface on port 5038. It is a persistent connection managed by `_poll_loop`. Routes read from the AMI cache (`get_cached_status()`) rather than issuing live AMI commands — this makes most status reads sub-millisecond. Commands that must be sent live (connect/disconnect, restart, etc.) use `ami_send_command()`.
+`AMIClient` (class in app.py ~line 915) is a raw TCP socket client to Asterisk Manager Interface on port 5038. It is a persistent connection managed by `_poll_loop`. It logs in as HenWen's own `[henwen]` manager.conf user (`AMI_DEDICATED_USER`, created by `ami-setup.sh`; `parse_manager_conf()` prefers it over the first stanza), never `[admin]`: the ASL Web UI's AMI Secret page rewrites exactly `[admin]` and updates only Allmon3. A box still on `admin` gets a one-time WARN and a warning on Manager > AMI Diagnostics (`ami_shared_user_warning()`). Routes read from the AMI cache (`get_cached_status()`) rather than issuing live AMI commands — this makes most status reads sub-millisecond. Commands that must be sent live (connect/disconnect, restart, etc.) use `ami_send_command()`.
 
 ### Smart Connector
 
@@ -140,7 +140,7 @@ SQLite at `/etc/asterisk/henwen.db`. Schema is defined inline in `get_db()` (cal
 
 ### rpt.conf parsing
 
-Custom parser (not `configparser`) — `_collect_stanzas()`, `parse_stanza_settings()`, `update_setting_in_content()`. It preserves comments and formatting on save and handles ASL3's multi-stanza structure (node stanzas, templates, macros, schedules).
+Custom parser (not `configparser`) — `_collect_stanzas()`, `parse_stanza_settings()`, `update_setting_in_content()`. It preserves comments and formatting on save and handles ASL3's multi-stanza structure (node stanzas, templates, macros, schedules). Every rpt.conf read route returns a `conf_hash`, and `/api/save` and backup restore refuse with 409 (`_rpt_conf_conflict()`) when the request's `base_hash` no longer matches the file, so a save from a stale Manager page can't silently overwrite an edit made elsewhere, e.g. by the ASL Web UI. A request without `base_hash` is not checked.
 
 ### Audio streaming
 
