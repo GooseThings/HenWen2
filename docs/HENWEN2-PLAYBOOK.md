@@ -1,10 +1,11 @@
 # HenWen 2.0 — audio as native Asterisk VoIP
 
-**Status (2026-11-11):** Phases 0-3 **done**. PRs #1, #2, #3 and #8 are
-merged to `main`, and `/opt/HenWen2` runs `main`. Phase 3's exit criterion was
-met live on 2026-11-10 (three accounts at once, details below). Listeners now
-show as Connected Nodes (PR #8). Next: keyed state for listeners (see "Next
-action"), then Phase 4.
+**Status (2026-11-11):** Phases 0-3 **done**. PRs #1, #2, #3, #8 and #10
+are merged to `main`, and `/opt/HenWen2` runs `main`. Phase 3's exit criterion
+was met live on 2026-11-10 (three accounts at once, details below). Listeners
+show as Connected Nodes (PR #8) with a keyed light, and admins can disconnect
+them (PR #10). Next: classify listeners by live call (see "Next action"), then
+Phase 4.
 **Repo:** `GooseThings/HenWen2`, forked from `GooseThings/HenWen` at `c875598`
 (full history preserved; `henwen1` remote is fetch-only).
 
@@ -81,17 +82,19 @@ with `0`, so nothing else needs it). Verified from source and live:
 
 **Next action, in order:**
 
-1. **Rest of the session-link work (issue #5):** keyed state is done
-   (AMI `DTMFEnd` per session channel, `[SIP-KEY]` journal lines; branch
-   `session-keyed-state`). Left:
+1. **Rest of the session-link work (issue #5).** Done in PR #10: keyed
+   state from AMI `DTMFEnd` (`[SIP-KEY]` journal lines), and the row's X
+   hangs up a listener's call (admin+, 60s redial hold). Left:
    - Classify sessions by their live call (the `henwen-u-<cs>` context)
      instead of by name, which removes the NT0Y-style collision.
-   - The row's Disconnect hangs up the call; Smart Connector's idle-wait
-     handles listener links.
+   - Smart Connector's idle-wait and the kiosk temp-link idle clock with
+     listener links.
+   - Live browser check of the listener disconnect (only unit-tested; the
+     headless test call is a `Local/` channel, which the PJSIP hangup does
+     not match).
 2. **Issue #4** — check stats.allstarlink.org now shows listeners; close it
    if so.
-3. **Issue #6** — Mute button height. Small CSS fix.
-4. **Phase 4** — recording and stream relay onto `outstreamcmd`.
+3. **Phase 4** — recording and stream relay onto `outstreamcmd`.
 
 **Do not** press "Launch Updater": `update.sh`'s `REPO_URL` still points at
 the 1.x repo, so it would reset this checkout onto 1.x. Held for Phase 6 by
