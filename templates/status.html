@@ -423,12 +423,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
    content: dashFitNodeCard() sets the row split between this and Connected
    Nodes to the card's full measured content height, so Connected Nodes gets
    every row the controls don't need, and gives rows back when the PTT bar
-   appears (armed) or its Experimental panel opens. If everything under it is
-   hidden, dashWalk()'s fold takes the card's own non-greedy floor instead of
-   the usual "hidden side's space goes entirely to its sibling" rule (see
-   DASH_NON_GREEDY/dashSubtreeGreedy()), so it still only claims what its
-   content needs. Its width is the column's; the button row's one-line width
-   is only a floor for divider drags (dashUpdateNodeMinWidth()).
+   appears (armed) or its Experimental panel opens. That fit applies to the
+   default layout only. Once the layout is customized the card keeps the
+   size it is given, with its content height as a minimum (dashMinLineFor()).
    The span below is only what's painted until the first board refresh — it
    must stay in step with DASH_DEFAULT_TREE's controls/connected ratio
    (5/24), same invariant as every other default here; a guess far from what
@@ -1825,7 +1822,7 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
   </div>
 
   <!-- Content -->
-  <div class="content-area" id="content-area">
+  <div class="content-area" id="content-area" ondragover="dashAreaDragOver(event)" ondrop="dashAreaDrop(event)">
 
     <!-- Dashboard grid dividers: drag to resize (edit mode only). There are always
          exactly (card count - 1) — one per internal node of the split tree,
@@ -9435,14 +9432,6 @@ window.addEventListener('resize', function() {
 var DASH_COLS = 12, DASH_ROWS = 24;
 var DASH_GAP = 10;             /* must match .content-area's CSS `gap` */
 var DASH_MIN_CS = 2, DASH_MIN_RS = 3;
-/* Leaves that should never grow beyond their own measured minimum (see
-   dashMinLinesForSubtree()) when a sibling folds hidden space onto them —
-   every other card on this dashboard is "greedy" (Map, Favorites, etc. all
-   want whatever extra room they can get), but Node's whole point is to stay
-   exactly as big as its own content, even when the Map beneath it is hidden
-   and would otherwise leave it the entire column to itself. See
-   dashSubtreeGreedy() and dashWalkFolded(). */
-var DASH_NON_GREEDY = {node: true};
 var DASH_CARD_IDS = ['node', 'connected', 'map', 'activity', 'favorites', 'chat', 'meshtastic'];
 var DASH_CARD_TITLES = {node: 'Controls', connected: 'Connected Nodes',
   map: 'Map', activity: 'Global Node Activity', favorites: 'Favorites', chat: 'Chat',
@@ -9511,13 +9500,6 @@ var _dashDragId = null;
 var _dashDividerDrag = null;
 var _dashDividerNodes = [];   /* rebuilt by dashWalk() each render; index matches the DOM .dash-divider els (DASH_CARD_IDS.length - 1 of them) */
 
-/* Measured pixel-size floors dashWalk()'s clamp honors on top of the generic
-   DASH_MIN_CS/DASH_MIN_RS, keyed by axis then card id — today only
-   'node' is ever populated, in both axes (see dashUpdateNodeMinWidth()/
-   dashUpdateNodeMinHeight()), so every other card keeps the plain
-   DASH_MIN_CS/DASH_MIN_RS floor it always had. */
-var _dashMinPx = {col: {}, row: {}};
-
 function dashSupported() { return window.matchMedia('(min-width: 861px)').matches; }
 function dashClamp(n, lo, hi) { n = parseInt(n, 10); if (isNaN(n)) n = lo; return Math.max(lo, Math.min(hi, n)); }
 function dashCardEl(id) { return document.querySelector('.dash-card[data-dash-id="' + id + '"]'); }
@@ -9533,17 +9515,20 @@ function dashCellSize(axis) {
   return ch ? (ch - (DASH_ROWS - 1) * DASH_GAP) / DASH_ROWS : 0;
 }
 /* Minimum line-span (columns for axis 'col', rows for axis 'row') a single
-   leaf must keep: the generic DASH_MIN_CS/DASH_MIN_RS floor, or a bigger one
-   if _dashMinPx has a measured pixel requirement for this id on this axis
-   (converted to lines at the current cell size — the same conversion
-   dashDividerStart() already does for drag deltas). */
+   leaf must keep: the generic floor for every card, with one exception. The
+   Controls card ('node') keeps enough rows for its own content
+   (_dashNodeMinRowPx, measured by dashFitNodeCard() and capped there), in
+   every layout: without it, arming TX in a customized layout would open the
+   PTT button below the fold of a card sized for Listen + volume. It is a
+   minimum on that one card only. The old Node card's other rules (a width
+   floor, and a cap that also limited whatever shared its column) are gone. */
+var _dashNodeMinRowPx = 0;
 function dashMinLineFor(axis, id) {
-  var genericMin = axis === 'col' ? DASH_MIN_CS : DASH_MIN_RS;
-  var px = _dashMinPx[axis][id];
-  if (!px) return genericMin;
-  var cell = dashCellSize(axis);
-  if (!(cell > 0)) return genericMin;
-  return Math.max(genericMin, Math.ceil((px + DASH_GAP) / (cell + DASH_GAP)));
+  if (axis === 'col') return DASH_MIN_CS;
+  if (id !== 'node' || !_dashNodeMinRowPx) return DASH_MIN_RS;
+  var cell = dashCellSize('row');
+  if (!(cell > 0)) return DASH_MIN_RS;
+  return Math.max(DASH_MIN_RS, Math.ceil((_dashNodeMinRowPx + DASH_GAP) / (cell + DASH_GAP)));
 }
 /* Minimum lines (along the given axis) an entire subtree needs, so a leaf's
    own floor (see dashMinLineFor()) propagates correctly through however the
@@ -9634,17 +9619,6 @@ function dashSubtreeHidden(node) {
   return dashSubtreeHidden(node.a) && dashSubtreeHidden(node.b);
 }
 
-/* True if `node` should expand to fill space reclaimed from a hidden
-   sibling (see dashWalkFolded()) — every leaf is greedy except the ones
-   listed in DASH_NON_GREEDY, and a subtree counts as greedy only if both
-   its sides are (one non-greedy leaf anywhere inside caps the whole
-   subtree at its own minimum, rather than letting it stretch on that
-   leaf's behalf). */
-function dashSubtreeGreedy(node) {
-  if (node.type === 'leaf') return !DASH_NON_GREEDY[node.id];
-  return dashSubtreeGreedy(node.a) && dashSubtreeGreedy(node.b);
-}
-
 /* ── Render: walk the tree, assigning each leaf a {col,cs,row,rs} rect in
    the 12x24 grid and collecting one descriptor per internal (split) node
    for the divider overlay — see the module doc comment above for how a
@@ -9663,8 +9637,8 @@ function dashWalk(node, colStart, colEnd, rowStart, rowEnd, rects, dividers) {
      at least one visible card, and every recursive call below only
      descends into a side that isn't fully hidden), so at most one of
      aHidden/bHidden is true. */
-  if (aHidden) { dashWalkFolded(node, node.b, colStart, colEnd, rowStart, rowEnd, rects, dividers); return; }
-  if (bHidden) { dashWalkFolded(node, node.a, colStart, colEnd, rowStart, rowEnd, rects, dividers); return; }
+  if (aHidden) { dashWalk(node.b, colStart, colEnd, rowStart, rowEnd, rects, dividers); return; }
+  if (bHidden) { dashWalk(node.a, colStart, colEnd, rowStart, rowEnd, rects, dividers); return; }
   if (node.dir === 'col') {
     var c = dashClamp(Math.round(colStart + (colEnd - colStart) * node.ratio),
       colStart + dashMinLinesForSubtree('col', node.a), colEnd - dashMinLinesForSubtree('col', node.b));
@@ -9677,27 +9651,6 @@ function dashWalk(node, colStart, colEnd, rowStart, rowEnd, rects, dividers) {
     dividers.push({node: node, dir: 'h', colStart: colStart, colEnd: colEnd, rowStart: r, rowEnd: r, range: {colStart: colStart, colEnd: colEnd, rowStart: rowStart, rowEnd: rowEnd}});
     dashWalk(node.a, colStart, colEnd, rowStart, r, rects, dividers);
     dashWalk(node.b, colStart, colEnd, r, rowEnd, rects, dividers);
-  }
-}
-
-/* Hands the range freed up by a hidden sibling to `survivor` — the whole
-   range, same as always, unless survivor is non-greedy (see
-   dashSubtreeGreedy()), in which case it only gets its own measured minimum
-   along the split's own axis (node.dir) and the rest of the range is simply
-   never assigned to anything, rendering as empty space rather than
-   stretching the survivor to fill it. This is what keeps the Node card from
-   ballooning to the window's full height when the Map beneath it is
-   hidden — see DASH_NON_GREEDY. */
-function dashWalkFolded(node, survivor, colStart, colEnd, rowStart, rowEnd, rects, dividers) {
-  if (dashSubtreeGreedy(survivor)) {
-    dashWalk(survivor, colStart, colEnd, rowStart, rowEnd, rects, dividers);
-    return;
-  }
-  var need = dashMinLinesForSubtree(node.dir, survivor);
-  if (node.dir === 'col') {
-    dashWalk(survivor, colStart, colStart + need, rowStart, rowEnd, rects, dividers);
-  } else {
-    dashWalk(survivor, colStart, colEnd, rowStart, rowStart + need, rects, dividers);
   }
 }
 
@@ -9741,14 +9694,9 @@ function dashApply() {
   _dashDividerNodes = dividers;
 
   /* Always write the walked rects, even on the still-default (un-customized)
-     layout: DASH_DEFAULT_TREE's ratios are kept in step with the CSS
-     stylesheet defaults (see its own doc comment), so this is a no-op change
-     from those defaults ordinarily — except when dashMinLinesForSubtree()'s
-     floor (e.g. the Node card's button row or its full content height, see
-     dashUpdateNodeMinWidth()/dashUpdateNodeMinHeight()) forces a boundary
-     wider or taller than the ratio alone would give it. That floor needs to
-     hold before anyone has ever dragged a divider, not just after, so this
-     can no longer be skipped while _dashTree is still null. */
+     layout: dashFitNodeCard() rewrites a ratio in DASH_DEFAULT_TREE and the
+     Controls card's row minimum as its content changes, and that has to
+     reach the cards before anyone has ever dragged anything. */
   DASH_CARD_IDS.forEach(function(id) {
     var el = dashCardEl(id); if (!el) return;
     var r = rects[id]; if (!r) return;
@@ -9782,13 +9730,13 @@ function dashApply() {
 
    Default layout only (`_dashTree` still null). Once someone has dragged or
    resized anything, the boundary is their answer, and re-fitting on the next
-   board refresh would pull it back out from under them a second later (the
-   measured height still applies as a floor — see dashUpdateNodeMinHeight()).
+   board refresh would pull it back out from under them a second later. The
+   measured height still holds as a minimum there (see dashMinLineFor()), so
+   the PTT bar is never opened below the card's fold.
    The fitted ratio is written into DASH_DEFAULT_TREE itself, not just onto
    the cards, so when the layout does become custom — dashEnsureCustom()
    clones exactly that tree — the boundary stays where it already is instead
-   of jumping back to the pre-measurement default. (Everything under it being
-   hidden is a separate mechanism — see DASH_NON_GREEDY/dashWalkFolded().) */
+   of jumping back to the pre-measurement default. */
 var _dashFitRows = null;
 
 /* The row split whose top child is the Controls ('node') leaf, wherever it
@@ -9799,63 +9747,11 @@ function dashNodeMapSplit(node) {
   return dashNodeMapSplit(node.a) || dashNodeMapSplit(node.b);
 }
 
-/* The immediate parent split of `target` (a node reference, found by
-   identity) within `tree`; null if `target` is the root or isn't found. */
-function dashFindParentSplit(tree, target) {
-  if (!tree || tree.type !== 'split') return null;
-  if (tree.a === target || tree.b === target) return tree;
-  return dashFindParentSplit(tree.a, target) || dashFindParentSplit(tree.b, target);
-}
-
-/* Total pixel width the Node card's button row (#node-controls) needs on one
-   line. Each button's own offsetWidth is intrinsic to its content regardless
-   of whether flex-wrap has already wrapped the row onto a second line, so
-   summing the currently-*shown* children (role/permission/capability gate
-   several of them via display:none — see the .node-controls doc comment)
-   plus the row's own gaps gives the one-line floor; .node-body's horizontal
-   padding and .node-card's own border add the rest, since the padding and
-   the border live on different elements now (see the .node-card/.node-body
-   split above) — independent of how narrow the column currently is.
-
-   The buttons are flex:1 1 0 (see .node-controls .btn-icon) so they can
-   grow past their own natural width to fill out the row — normally wider
-   than their combined natural width, since the card's column usually is. offsetWidth alone would report that
-   *grown* width, not the true one-line floor, so the row is temporarily
-   forced to shrink-wrap (width:max-content) before measuring: a flex
-   container's max-content size comes from its items' own preferred sizes,
-   ignoring flex-grow, giving back each button's real minimum. Reverted
-   immediately after, and the whole thing happens within one synchronous
-   call — nothing paints in between, so there's no visible flicker. */
-function dashNodeButtonsMinPx() {
-  var row = document.getElementById('node-controls');
-  var card = dashCardEl('node');
-  var body = document.getElementById('node-body');
-  if (!row || !card || !body) return 0;
-  var prevWidth = row.style.width;
-  row.style.width = 'max-content';
-  var total = 0, count = 0;
-  for (var i = 0; i < row.children.length; i++) {
-    var el = row.children[i];
-    if (!el.offsetWidth && !el.offsetHeight) continue;   /* display:none */
-    total += el.offsetWidth;
-    count++;
-  }
-  row.style.width = prevWidth;
-  if (!count) return 0;
-  total += (count - 1) * (parseFloat(getComputedStyle(row).gap) || 0);
-  var bodyCs = getComputedStyle(body), cardCs = getComputedStyle(card);
-  total += (parseFloat(bodyCs.paddingLeft) || 0) + (parseFloat(bodyCs.paddingRight) || 0)
-         + (parseFloat(cardCs.borderLeftWidth) || 0) + (parseFloat(cardCs.borderRightWidth) || 0);
-  return total;
-}
-
 /* Total pixel height the Node card's own content needs — the header's own
    (border-box) height, plus the full span from .node-body's topmost child's
    top edge to its lowest child's bottom edge, plus .node-body's own
-   padding, plus .node-card's own top/bottom border. Shared by
-   dashFitNodeCard()'s exact-fit (default layout only) and
-   dashUpdateNodeMinHeight()'s floor (every layout) below, so there's
-   exactly one place that knows how to measure this.
+   padding, plus .node-card's own top/bottom border. Used by
+   dashFitNodeCard() for both the exact fit and the minimum.
 
    Content height, not the card's own height: the card is stretched to fill
    its grid area, so offsetHeight/scrollHeight would just report back the
@@ -9898,67 +9794,30 @@ function dashNodeContentMinPx() {
        + (parseFloat(cardCs.borderTopWidth) || 0) + (parseFloat(cardCs.borderBottomWidth) || 0);
 }
 
-/* Re-measures the Node card's floors — button-row width and full-content
-   height — and, if either changed, re-walks the tree so dashWalk()'s column/
-   row clamps pick it up. Unlike the exact-fit sizing below, both of these run
-   regardless of whether the layout is still the default or has been dragged/
-   customized: a divider drag narrower than the buttons need, or a saved
-   layout that predates content the card now shows (e.g. a role grant that
-   revealed a button, or this app's own past button-height/label changes), are
-   exactly the cases this guards against — cell-rounding at some window sizes
-   landing a hair short of dashFitNodeCard()'s own exact-fit rows is another,
-   for the height floor specifically (see its issue: the volume slider's
-   bottom edge clipped by the card's border at certain resolutions). */
-function dashUpdateNodeMinWidth() {
-  if (!dashSupported()) return;
-  var px = dashNodeButtonsMinPx();
-  if (px === _dashMinPx.col.node) return;
-  _dashMinPx.col.node = px;
-  dashApply();
-}
-function dashUpdateNodeMinHeight() {
-  if (!dashSupported()) return;
-  var px = dashNodeContentMinPx();
-  /* Capped: with the PTT bar up and its Experimental panel open the content
-     can be taller than the whole dashboard, and an uncapped floor would
-     leave Connected Nodes no rows at all. Past the cap the card scrolls
-     (.node-body is overflow-y:auto). */
-  var area = document.getElementById('content-area');
-  if (area && area.clientHeight) px = Math.min(px, Math.floor(area.clientHeight * 0.6));
-  if (px === _dashMinPx.row.node) return;
-  _dashMinPx.row.node = px;
-  dashApply();
-}
-
 function dashFitNodeCard() {
-  dashUpdateNodeMinWidth();
-  dashUpdateNodeMinHeight();
-  if (!dashSupported() || _dashTree) return;
-  /* Can't actually be hidden while _dashTree is null (hiding calls
-     dashEnsureCustom() first), but the math below assumes it is on screen. */
-  if (_dashHidden['node']) return;
-  var rowSplit = dashNodeMapSplit(DASH_DEFAULT_TREE);
-  if (!rowSplit) return;
-  var changed = false;
+  if (!dashSupported()) return;
+  /* Capped at 60% of the dashboard: with the PTT bar up and its Experimental
+     panel open the content can be taller than the whole dashboard, and
+     whatever shares the column must keep some rows. Past the cap the card
+     scrolls (.node-body is overflow-y:auto). */
+  var area = document.getElementById('content-area');
+  var needH = dashNodeContentMinPx();
+  if (area && area.clientHeight) needH = Math.min(needH, Math.floor(area.clientHeight * 0.6));
+  var floorChanged = needH !== _dashNodeMinRowPx;
+  _dashNodeMinRowPx = needH;   /* the every-layout floor, see dashMinLineFor() */
 
-  var needH = _dashMinPx.row.node;
-  if (needH) {
-    var cellH = dashCellSize('row');
-    if (cellH > 0) {
-      /* n rows are n cells plus the n-1 gaps between them. */
-      var rows = Math.ceil((needH + DASH_GAP) / (cellH + DASH_GAP));
-      rows = Math.max(DASH_MIN_RS, Math.min(DASH_ROWS - DASH_MIN_RS, rows));
-      if (rows !== _dashFitRows) { _dashFitRows = rows; rowSplit.ratio = rows / DASH_ROWS; changed = true; }
-    }
+  /* Exact fit: default layout only (see the comment above). */
+  var fitChanged = false;
+  var rowSplit = (!_dashTree && !_dashHidden['node']) ? dashNodeMapSplit(DASH_DEFAULT_TREE) : null;
+  var cellH = dashCellSize('row');
+  if (rowSplit && needH && cellH > 0) {
+    /* n rows are n cells plus the n-1 gaps between them. */
+    var rows = Math.ceil((needH + DASH_GAP) / (cellH + DASH_GAP));
+    rows = Math.max(DASH_MIN_RS, Math.min(DASH_ROWS - DASH_MIN_RS, rows));
+    if (rows !== _dashFitRows) { _dashFitRows = rows; rowSplit.ratio = rows / DASH_ROWS; fitChanged = true; }
   }
-
-  /* Height only. The card shares its column with Connected Nodes, so the
-     column is not narrowed to the button row's width (that was right when
-     the column held just this card and the Map); the width floor above still
-     stops a divider drag from clipping the buttons. */
-
-  if (!changed) return;   /* nothing moved — skip the reflow and Leaflet's resize */
-  dashApply();   /* re-walk so both dividers follow whichever boundary just moved */
+  if (!floorChanged && !fitChanged) return;   /* nothing moved — skip the reflow and Leaflet's resize */
+  dashApply();   /* re-walk so the dividers follow whichever boundary just moved */
   setTimeout(function() { if (_map) _map.invalidateSize(); }, 50);
 }
 
@@ -10123,6 +9982,7 @@ function dashDragStart(ev, id) {
   if (!_dashEditOn) { ev.preventDefault(); return; }
   dashEnsureCustom();
   _dashDragId = id;
+  _dashDragStart = {x: ev.clientX, y: ev.clientY};
   ev.dataTransfer.effectAllowed = 'move';
   try { ev.dataTransfer.setData('text/plain', id); } catch(e) {}
   var el = dashCardEl(id); if (el) el.classList.add('dash-dragging');
@@ -10140,6 +10000,89 @@ function dashDropZone(ev, el) {
   if (x < EDGE) return 'left';
   if (x > 1 - EDGE) return 'right';
   return 'center';
+}
+
+/* Dashboard-edge zones. Dropping on a card's edge only ever splits that one
+   card, so a column that holds two stacked cards could not get a new
+   full-height neighbor, and there was no way to start a column where no
+   card sits yet. The outer DASH_AREA_EDGE_PX strip of the whole dashboard
+   is its own target instead: left/right makes a new full-height column
+   there, top/bottom a new full-width row. Takes priority over whichever
+   card happens to be under the pointer (see dashDragOver()/dashDrop()). */
+var DASH_AREA_EDGE_PX = 36;
+/* Top/bottom strips are thinner: a short top-row card (Controls is ~140px
+   tall) has an own "top" drop zone of only ~40px, which a 36px strip would
+   swallow. */
+var DASH_AREA_EDGE_PX_TB = 14;
+/* The strips stay inactive until the pointer has travelled this far from
+   where the drag began: a top-row card's grip is itself inside the top
+   strip, and picking a card up and letting go must not restructure anything. */
+var DASH_AREA_ARM_PX = 30;
+var _dashDragStart = null;   /* {x, y} of the current drag's first event */
+function dashAreaZone(ev) {
+  var area = document.getElementById('content-area');
+  if (!area) return null;
+  if (!_dashDragStart) _dashDragStart = {x: ev.clientX, y: ev.clientY};
+  if (Math.abs(ev.clientX - _dashDragStart.x) < DASH_AREA_ARM_PX &&
+      Math.abs(ev.clientY - _dashDragStart.y) < DASH_AREA_ARM_PX) return null;
+  var r = area.getBoundingClientRect();
+  if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) return null;
+  if (ev.clientX - r.left < DASH_AREA_EDGE_PX) return 'left';
+  if (r.right - ev.clientX < DASH_AREA_EDGE_PX) return 'right';
+  if (ev.clientY - r.top < DASH_AREA_EDGE_PX_TB) return 'top';
+  if (r.bottom - ev.clientY < DASH_AREA_EDGE_PX_TB) return 'bottom';
+  return null;
+}
+/* Share of the dashboard a new edge column/row starts with (its divider can
+   be dragged from there). */
+var DASH_AREA_NEW_SHARE = 0.25;
+
+/* New tree with `id` pulled out of wherever it was and re-inserted as one
+   whole side of a new root split. */
+function dashMoveToEdge(tree, id, zone) {
+  var rest = dashRemoveLeaf(tree, id);
+  if (!rest) return tree;
+  var leaf = {type: 'leaf', id: id};
+  var first = (zone === 'left' || zone === 'top');
+  return {type: 'split', dir: (zone === 'left' || zone === 'right') ? 'col' : 'row',
+    ratio: first ? DASH_AREA_NEW_SHARE : 1 - DASH_AREA_NEW_SHARE,
+    a: first ? leaf : rest, b: first ? rest : leaf};
+}
+
+function dashAreaDragOver(ev) {
+  if (!_dashDragId) return;
+  var zone = dashAreaZone(ev);
+  if (!zone) {
+    /* In a gap between cards: nothing to drop on, so nothing highlighted. */
+    if (!ev.target.closest || !ev.target.closest('.dash-card')) dashHideDropIndicator();
+    return;
+  }
+  ev.preventDefault();
+  var ind = document.getElementById('dash-drop-indicator');
+  var r = document.getElementById('content-area').getBoundingClientRect();
+  var rect = {left: r.left, top: r.top, width: r.width, height: r.height};
+  if (zone === 'left') rect.width = r.width * DASH_AREA_NEW_SHARE;
+  else if (zone === 'right') { rect.left = r.right - r.width * DASH_AREA_NEW_SHARE; rect.width = r.width * DASH_AREA_NEW_SHARE; }
+  else if (zone === 'top') rect.height = r.height * DASH_AREA_NEW_SHARE;
+  else { rect.top = r.bottom - r.height * DASH_AREA_NEW_SHARE; rect.height = r.height * DASH_AREA_NEW_SHARE; }
+  ind.style.left = rect.left + 'px'; ind.style.top = rect.top + 'px';
+  ind.style.width = rect.width + 'px'; ind.style.height = rect.height + 'px';
+  ind.style.display = 'block';
+}
+
+function dashAreaDrop(ev) {
+  var sourceId = _dashDragId;
+  if (!sourceId) return;
+  var zone = dashAreaZone(ev);
+  if (!zone) return;
+  ev.preventDefault();
+  dashHideDropIndicator();
+  _dashDragId = null;
+  dashEnsureCustom();
+  _dashTree = dashMoveToEdge(_dashTree, sourceId, zone);
+  dashApply();
+  dashSave();
+  setTimeout(function() { if (_map) _map.invalidateSize(); }, 50);
 }
 
 function dashUpdateDropIndicator(ev, targetEl) {
@@ -10166,6 +10109,7 @@ function dashHideDropIndicator() {
 function dashDragOver(ev) {
   if (!_dashDragId) return;
   ev.preventDefault();
+  if (dashAreaZone(ev)) return;   /* dashboard edge: dashAreaDragOver() (bubbles to #content-area) owns it */
   var targetId = ev.currentTarget.getAttribute('data-dash-id');
   if (targetId === _dashDragId) { dashHideDropIndicator(); return; }
   dashUpdateDropIndicator(ev, ev.currentTarget);
@@ -10180,10 +10124,12 @@ function dashDragEnd() {
   document.querySelectorAll('.dash-card').forEach(function(el) { el.classList.remove('dash-dragging'); });
   dashHideDropIndicator();
   _dashDragId = null;
+  _dashDragStart = null;
 }
 
 function dashDrop(ev, targetId) {
   ev.preventDefault();
+  if (dashAreaZone(ev)) return;   /* dashboard edge: left for dashAreaDrop() on #content-area */
   var zone = dashDropZone(ev, ev.currentTarget);
   dashHideDropIndicator();
   var sourceId = _dashDragId;
