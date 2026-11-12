@@ -40,15 +40,40 @@ def test_not_installed(paths):
     assert s["installed"] is False and s["url"] is None and s["overlap"] == {}
 
 
-def test_global_conf_is_reachable_and_suggests_scoping(paths):
+def test_global_conf_alone_is_not_reachable_and_suggests_scoping(paths):
+    """Review of PR #17: HenWen's catch-all ProxyPass beats the package's
+    server-level Alias, so with only the global conf on, /asl-web-ui/ on
+    HenWen's vhost lands on Flask. No link until apply.sh has run."""
     _install(paths)
     (paths / "conf-enabled.conf").write_text("Alias ...")
     (paths / "apply.sh").write_text("#!/bin/bash\n")
     _vhost(paths)
     s = app.asl_web_ui_status()
-    assert s["reachable"] and s["url"] == "/asl-web-ui/"
+    assert s["reachable"] is False and s["url"] is None and s["global_conf"] is True
     assert s["apply_script"] == str(paths / "apply.sh")
     assert set(s["overlap"]) == {"asl-update", "node-access"} and s["running"] is False
+
+
+def test_global_conf_plus_scoped_vhost_is_reachable_and_still_suggests_scoping(paths):
+    _install(paths)
+    (paths / "conf-enabled.conf").write_text("Alias ...")
+    (paths / "apply.sh").write_text("")
+    _vhost(paths, scoped=True)
+    s = app.asl_web_ui_status()
+    assert s["reachable"] and s["url"] == "/asl-web-ui/"
+    assert s["apply_script"] == str(paths / "apply.sh")   # the global conf is still on
+
+
+def test_one_unscoped_block_in_a_file_is_not_scoped(paths):
+    """Review of PR #17: the marker check is per <VirtualHost> block."""
+    _install(paths)
+    _vhost(paths, scoped=True)
+    f = paths / "sites" / "henwen.conf"
+    f.write_text(f.read_text() + "<virtualhost *:80>\n"
+                 f"    ProxyPass / http://127.0.0.1:{app.PORT}/\n</VirtualHost>\n"
+                 "<VirtualHost *:8080>\n    DocumentRoot /var/www\n</VirtualHost>\n")
+    s = app.asl_web_ui_status()
+    assert s["reachable"] is False and len(s["vhosts_missing"]) == 1
 
 
 def test_scoped_everywhere_needs_no_fix(paths):
@@ -102,13 +127,17 @@ def test_overlap_routes_are_hash_routes():
         assert o["route"].startswith("#/"), page
 
 
-def test_direct_visit_gets_no_link(client, create_user, paths):
-    """Same issue the PR #18 review raised: /asl-web-ui/ exists only behind
-    Apache, so a direct visit to HenWen's port must not be sent there."""
+def test_only_a_visit_through_apache_gets_the_link(client, create_user, paths):
+    """/asl-web-ui/ exists only behind Apache. A direct visit to HenWen's
+    port, or a tunnel pointed straight at it (X-Forwarded-Host but no
+    X-Forwarded-Server), must not be sent there."""
     _install(paths)
-    (paths / "conf-enabled.conf").write_text("")
+    _vhost(paths, scoped=True)
     _login(client, create_user, "admin")
     d = client.get("/api/asl-web-ui/status").get_json()
     assert d["url"] is None and d["direct_visit"] is True
-    d = client.get("/api/asl-web-ui/status", headers={"X-Forwarded-Host": "h.example"}).get_json()
+    d = client.get("/api/asl-web-ui/status", headers={"X-Forwarded-Host": "h.ts.net"}).get_json()
+    assert d["url"] is None and d["direct_visit"] is True
+    d = client.get("/api/asl-web-ui/status", headers={"X-Forwarded-Host": "h.example",
+                                                      "X-Forwarded-Server": "h.example"}).get_json()
     assert d["url"] == "/asl-web-ui/" and "direct_visit" not in d

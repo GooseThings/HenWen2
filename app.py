@@ -19626,16 +19626,42 @@ ASL_WEB_UI_OVERLAP = {
 }
 
 
+_VHOST_OPEN_RE = re.compile(r'<virtualhost\b', re.I)
+
+
+def _asl_web_ui_vhost_scoped(path):
+    """True when every <VirtualHost> block in `path` that proxies HenWen's
+    port also carries apply.sh's marker. Per block, not per file: one file
+    can hold several HenWen blocks (:80 and :443, two hostnames), and a
+    block without the include sends /asl-web-ui/ to Flask. Mirrors
+    henwen_insert_before_proxypass_each_block() in apache-common.sh."""
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        return False
+    starts = [m.start() for m in _VHOST_OPEN_RE.finditer(text)]
+    blocks = ([text[a:b] for a, b in zip(starts, starts[1:] + [len(text)])]
+              if starts else [text])
+    henwen = [b for b in blocks
+              if any(m.group(1) == str(PORT) for m in _APACHE_PROXYPASS_RE.finditer(b))]
+    return bool(henwen) and all(ASL_WEB_UI_VHOST_MARKER in b for b in henwen)
+
+
 @_ttl_cached(30)
 def asl_web_ui_status():
     installed = os.path.isfile(os.path.join(ASL_WEB_UI_WWW, "index.html"))
     running   = installed and os.path.exists(ASL_WEB_UI_SOCKET)
     global_on = os.path.exists(ASL_WEB_UI_GLOBAL_CONF)
-    vhosts, applied, missing = _apache_marker_status(ASL_WEB_UI_VHOST_MARKER)
-    # Reachable at /asl-web-ui/ on the host this Manager is served from:
-    # either the global conf serves it everywhere, or apply.sh included it
-    # in every HenWen vhost.
-    reachable = installed and (global_on or (bool(vhosts) and not missing))
+    vhosts    = _find_henwen_apache_vhosts()
+    applied   = [v for v in vhosts if _asl_web_ui_vhost_scoped(v)]
+    missing   = [v for v in vhosts if v not in applied]
+    # Reachable at /asl-web-ui/ on the host this Manager is served from only
+    # when apply.sh has put its include in every HenWen vhost block. The
+    # package's global conf does NOT make it reachable here: HenWen's
+    # catch-all "ProxyPass /" beats a server-level Alias, so an unpatched
+    # HenWen vhost sends /asl-web-ui/ to Flask (verified on Apache 2.4).
+    reachable = installed and bool(vhosts) and not missing
     return {
         "installed":     installed,
         "running":       running,
@@ -19655,10 +19681,13 @@ def asl_web_ui_status():
 
 def _request_via_apache():
     """True when this request reached Flask through Apache's proxy, the only
-    path on which /asl-web-ui/ exists. A direct visit to HenWen's own port
-    has no such header. A client forging the header on a direct visit can
-    only take editing away from itself."""
-    return bool(request.headers.get("X-Forwarded-Host"))
+    path on which /asl-web-ui/ exists. mod_proxy adds X-Forwarded-Server;
+    a direct visit to HenWen's own port has no such header, and neither does
+    a Tailscale Serve or Cloudflare Tunnel pointed straight at that port
+    (those send X-Forwarded-Host/-For/-Proto only, so X-Forwarded-Host is
+    not the test). A client forging the header can only take the link, and
+    editing, away from itself."""
+    return bool(request.headers.get("X-Forwarded-Server"))
 
 
 def asl_web_ui_status_for_request():

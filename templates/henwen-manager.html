@@ -6931,7 +6931,8 @@ async function aslWebUiDecorate() {
     if (bar) {
       bar.innerHTML = '<div class="alert alert-warn">'
         + (d.global_conf
-          ? 'The ASL Web UI is served at <span class="mono">/asl-web-ui/</span> on <strong>every</strong> website on this server.'
+          ? 'The ASL Web UI is served at <span class="mono">/asl-web-ui/</span> on <strong>every other</strong> website on this server'
+            + ((d.vhosts_missing || []).length ? ', and not on HenWen\'s own site, where HenWen answers that address instead.' : '.')
           : 'The ASL Web UI isn\'t reachable on every HenWen site yet.')
         + ' To serve it on HenWen\'s site(s) only, run <span class="mono">sudo bash '
         + esc(d.apply_script) + '</span>.</div>';
