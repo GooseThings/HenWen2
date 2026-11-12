@@ -18,9 +18,10 @@ Restart=on-failure
 RestartSec=5
 
 # ── AMI Credentials ─────────────────────────────────────────────────────
-# Set these to match the [username] stanza in /etc/asterisk/manager.conf
-# The user must have: write = system,call,log,verbose,command,agent,user,config,dtmf,reporting,cdr,dialplan
-Environment="AMI_USER=admin"
+# HenWen's own [henwen] stanza in /etc/asterisk/manager.conf, which
+# ami-setup.sh creates and writes here. Not [admin]: the ASL Web UI and
+# Allmon3 manage that user's secret.
+Environment="AMI_USER=henwen"
 Environment="AMI_SECRET=yourpassword"
 
 # ── Paths ────────────────────────────────────────────────────────────────
