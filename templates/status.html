@@ -204,7 +204,14 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
   font-size: 1.2rem; letter-spacing: 0.06em; }
 .header-brand strong { color: var(--accent); font-size: 1.33rem; }
 .header-logo { height: 64px; width: 64px; object-fit: contain; flex-shrink: 0;
-  filter: drop-shadow(0 0 6px rgba(63,185,80,.35)); }
+  display: block; position: relative; z-index: 1; }
+/* The node's health light: a circle a little larger than the logo, sitting
+   behind it, so a ring of it and its glow show around the fully opaque logo
+   (green pulse = online, solid red = offline, dark until the first board
+   refresh). .keyed-dot's colors/glow are defined further down; this only
+   places it. The margin leaves the ring clear of the header's edge. */
+.header-logo-wrap { position: relative; flex-shrink: 0; margin: 6px; }
+.header-logo-wrap .keyed-dot { position: absolute; inset: -6px; width: auto; height: auto; z-index: 0; }
 /* Owner-uploaded club/callsign branding, centered independent of the two
    flex siblings either side (their widths differ, so plain flex centering
    can't put this dead-center against the whole header — absolute+transform
@@ -580,25 +587,18 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
   .node-callsign { font-size: 1.1rem; }
 }
 
-.keyed-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 0; flex-shrink: 0; }
-.keyed-dot { width: 32px; height: 32px; border-radius: 50%; background: #222;
-  border: 3px solid #333; transition: background .4s, border-color .4s, box-shadow .4s;
-  display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.keyed-dot-logo { width: 100%; height: 100%; object-fit: contain; opacity: 0.3; }
+.keyed-dot { border-radius: 50%; background: #222;
+  border: 3px solid #333; transition: background .4s, border-color .4s, box-shadow .4s; }
 .keyed-dot.healthy { background: var(--green); border-color: #5de073;
-  box-shadow: 0 0 12px rgba(63,185,80,.65), 0 0 26px rgba(63,185,80,.25);
+  box-shadow: 0 0 14px rgba(63,185,80,.7), 0 0 30px rgba(63,185,80,.3);
   animation: pulse-k 2.8s ease-in-out infinite; }
 .keyed-dot.down { background: var(--danger); border-color: var(--danger);
-  box-shadow: 0 0 12px rgba(219,68,55,.65), 0 0 26px rgba(219,68,55,.25);
+  box-shadow: 0 0 14px rgba(219,68,55,.7), 0 0 30px rgba(219,68,55,.3);
   animation: none; }
 @keyframes pulse-k {
-  0%,100% { box-shadow: 0 0 12px rgba(63,185,80,.65), 0 0 26px rgba(63,185,80,.25); }
-  50%      { box-shadow: 0 0 18px rgba(63,185,80,.9),  0 0 36px rgba(63,185,80,.4);  }
+  0%,100% { box-shadow: 0 0 14px rgba(63,185,80,.7), 0 0 30px rgba(63,185,80,.3); }
+  50%      { box-shadow: 0 0 22px rgba(63,185,80,.95), 0 0 44px rgba(63,185,80,.45);  }
 }
-.keyed-label { font-size: 0.62rem; line-height: 1; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--text2); }
-.keyed-label.healthy { color: var(--green); }
-.keyed-label.down { color: var(--danger); }
 .locked-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 0.72rem;
   font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px;
   border-radius: 3px; background: rgba(219,68,55,.15); color: var(--danger); align-self: center; }
@@ -1243,6 +1243,8 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
     padding: 13px 17px;
   }
   .header-logo { height: 37px; width: 37px; }
+  .header-logo-wrap { margin: 4px; }
+  .header-logo-wrap .keyed-dot { inset: -4px; border-width: 2px; }
   .header-brand { font-size: 0.96rem; flex-shrink: 0; gap: 9px; }
   .header-brand strong { font-size: 1.1rem; }
   /* "KIOSK" dropped on mobile — the visitor already knows they're on their
@@ -1394,8 +1396,7 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
   /* Node identity in the header: one row with the logo, wordmark and
      hamburger, so everything is sized off the viewport width (vw, clamped)
      to fit down to a 320px-wide phone. The header no longer wraps; the
-     block takes whatever width is left and its location line truncates.
-     ONLINE/OFFLINE text is dropped (the dot's color carries it). */
+     block takes whatever width is left and its location line truncates. */
   #node-info { flex: 1 1 0; justify-content: flex-end; gap: clamp(6px, 2vw, 10px); margin: 0 clamp(6px, 2vw, 12px) 0 clamp(6px, 2vw, 12px); }
   .node-id-text { max-width: none; }
   .node-id-line { gap: clamp(4px, 1.6vw, 8px); }
@@ -1403,8 +1404,6 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
   .node-callsign { font-size: clamp(0.78rem, 3.6vw, 1.1rem); letter-spacing: 0.02em; }
   .node-location { font-size: clamp(0.62rem, 2.8vw, 0.8rem); margin-top: 2px; }
   .node-info-msg { font-size: clamp(0.7rem, 3.2vw, 0.9rem); }
-  .keyed-dot { width: clamp(20px, 6.5vw, 28px); height: clamp(20px, 6.5vw, 28px); border-width: 2px; }
-  .keyed-label { display: none; }
   .locked-badge { padding: 2px 4px; }
 
   /* .node-row's stats line already wraps instead of truncating (see base
@@ -1724,11 +1723,15 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
            Lighthouse's original 2x-headroom reasoning (issue #104) rather
            than upscaling logo-96.png. It's also the one fetched on the
            critical rendering path (visible immediately at boot, unlike the
-           favicon badge/keyed-dot below which only draw in later once board
-           data or a connection exists) — .keyed-dot-logo and
-           _drawFavicon()'s own 64px canvas draw already share this same
-           asset, so nothing new is being fetched. -->
-      <img class="header-logo" src="{{ request.script_root }}/static/logo-128{{ '-classic' if app_logo_classic else '' }}.png" alt="HenWen">
+           favicon badge, which only draws in later once board data or a
+           connection exists) — _drawFavicon()'s own 64px canvas draw
+           already shares this same asset, so nothing new is being fetched.
+           The .keyed-dot behind it is the node's health light, see
+           setHeaderStatus(). -->
+      <span class="header-logo-wrap" id="header-status" role="img" aria-label="HenWen">
+        <span class="keyed-dot" id="header-status-dot"></span>
+        <img class="header-logo" src="{{ request.script_root }}/static/logo-128{{ '-classic' if app_logo_classic else '' }}.png" alt="">
+      </span>
       <strong>HenWen</strong> <span class="header-brand-kiosk-label">KIOSK</span>
     </div>
     <img class="header-club-logo" id="club-logo-img" alt="" style="display:none">
@@ -4870,14 +4873,22 @@ function noteBoardFailure(why) {
                      BOARD_FAIL_TOLERANCE + ', not flagging yet):', why);
 }
 
+/* The health light behind the header logo. state: true = online (green
+   pulse), false = offline (solid red), null = unknown (dark). The words the
+   old ONLINE/OFFLINE label carried are on the wrap's tooltip/aria-label. */
+function setHeaderStatus(state, why) {
+  var dot = document.getElementById('header-status-dot');
+  var wrap = document.getElementById('header-status');
+  if (!dot || !wrap) return;
+  dot.classList.toggle('healthy', state === true);
+  dot.classList.toggle('down', state === false);
+  var text = state === true ? 'Node online' : state === false ? (why || 'Node offline') : '';
+  wrap.title = text;
+  wrap.setAttribute('aria-label', text ? 'HenWen — ' + text : 'HenWen');
+}
+
 function markServerUnreachable() {
-  var dot = document.querySelector('.keyed-dot');
-  var label = document.querySelector('.keyed-label');
-  if (dot) { dot.classList.remove('healthy'); dot.classList.add('down'); }
-  if (label) {
-    label.classList.remove('healthy'); label.classList.add('down');
-    label.textContent = 'OFFLINE'; label.title = 'Lost contact with the HenWen server';
-  }
+  setHeaderStatus(false, 'Offline — lost contact with the HenWen server');
 }
 
 function boardWatchdog() {
@@ -4908,9 +4919,10 @@ async function refreshBoard() {
     var nc = document.getElementById('node-info');
     if (!nodes.length) {
       nc.innerHTML = '<div class="node-info-msg">No nodes configured</div>';
+      setHeaderStatus(null);
     } else {
       var n = nodes[0];
-      /* Health circle: green pulse only when Asterisk is running, AMI is
+      /* Health light (behind the header logo): green pulse only when Asterisk is running, AMI is
          connected, and this node's AMI data isn't stale. Any one down = solid red. */
       var healthy = !!data.asterisk_active && !!data.ami_connected && !n.stale;
       nc.innerHTML =
@@ -4921,13 +4933,8 @@ async function refreshBoard() {
             callsignLink(n.callsign, 'node-callsign') +
           '</div>' +
           (n.location ? '<div class="node-location" title="' + esc(n.location) + '">' + esc(n.location) + '</div>' : '') +
-        '</div>' +
-        '<div class="keyed-wrap">' +
-          '<div class="keyed-dot ' + (healthy ? 'healthy' : 'down') + '">' +
-            '<img class="keyed-dot-logo" src="' + henwenLogoSrc(128) + '" alt="">' +
-          '</div>' +
-          '<div class="keyed-label ' + (healthy ? 'healthy' : 'down') + '">' + (healthy ? 'ONLINE' : 'OFFLINE') + '</div>' +
         '</div>';
+      setHeaderStatus(healthy);
     }
 
     /* Update hosted-node star pins */
