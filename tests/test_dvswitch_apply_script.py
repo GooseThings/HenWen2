@@ -82,3 +82,48 @@ def test_script_refuses_without_location(tmp_path):
     assert r.returncode == 1 and "latitude/longitude missing" in r.stdout
     ok = _bash(f'CONFIG_JSON=/x/c.json\n{guard}\necho proceeded', DVS_LATITUDE="43", DVS_LONGITUDE="-86")
     assert ok.returncode == 0 and "proceeded" in ok.stdout
+
+
+LOGROTATE_RULE = """/var/log/mmdvm/MMDVM_Bridge.log
+{
+        daily
+        postrotate
+                systemctl reload mmdvm_bridge
+        endscript
+}
+"""
+
+
+def _guard(tmp_path, name, unit):
+    return _bash(f'LOGROTATE_DIR="{tmp_path}"\n{_func_body("guard_logrotate_reload")}\n'
+                 f'guard_logrotate_reload {name} {unit}')
+
+
+def test_logrotate_guard_only_reloads_an_active_unit(tmp_path):
+    rule = tmp_path / "MMDVM_Bridge"
+    rule.write_text(LOGROTATE_RULE)
+    assert _guard(tmp_path, "MMDVM_Bridge", "mmdvm_bridge").returncode == 0
+    out = rule.read_text()
+    assert ("                systemctl is-active --quiet mmdvm_bridge && "
+            "systemctl reload mmdvm_bridge || true\n") in out
+    assert "\n                systemctl reload mmdvm_bridge\n" not in out
+
+
+def test_logrotate_guard_is_idempotent_and_scoped(tmp_path):
+    rule = tmp_path / "MMDVM_Bridge"
+    rule.write_text(LOGROTATE_RULE)
+    _guard(tmp_path, "MMDVM_Bridge", "mmdvm_bridge")
+    once = rule.read_text()
+    _guard(tmp_path, "MMDVM_Bridge", "mmdvm_bridge")
+    assert rule.read_text() == once
+    # A different unit's reload line is not touched.
+    other = tmp_path / "Analog_Bridge"
+    other.write_text(LOGROTATE_RULE.replace("mmdvm_bridge", "analog_bridge"))
+    before = other.read_text()
+    _guard(tmp_path, "Analog_Bridge", "mmdvm_bridge")
+    assert other.read_text() == before
+
+
+def test_logrotate_guard_skips_a_missing_rule(tmp_path):
+    assert _guard(tmp_path, "Analog_Reflector", "analog_reflector").returncode == 0
+    assert not (tmp_path / "Analog_Reflector").exists()

@@ -123,6 +123,17 @@ drop-in, logrotate has no drop-in directory concept, so this overwrites the
 package-shipped file directly; a `stfu` package upgrade could revert it,
 but re-running `apply.sh` (idempotent) reinstates it.
 
+### Logrotate reload hooks for stopped units
+
+The `mmdvm-bridge` and Analog_Reflector packages each ship a logrotate rule
+whose postrotate runs a bare `systemctl reload <unit>`. Reloading a unit
+that isn't running exits non-zero, so the nightly `logrotate.service` run
+was marked failed on a BrandMeister install, where `mmdvm_bridge.service`
+is deliberately disabled (confirmed live). `apply.sh` rewrites those two
+hooks to reload only when the unit is active. Like the STFU override above,
+this edits package-shipped files in place, so a package upgrade could
+revert it; re-running `apply.sh` reinstates it.
+
 ## What `apply.sh` does
 
 - Adds the DVSwitch apt repository for this box's Debian codename

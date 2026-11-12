@@ -424,6 +424,29 @@ for unit in ircddbgateway p25gateway nxdngateway ysfgateway quantar_bridge; do
   fi
 done
 
+# The mmdvm-bridge and Analog_Reflector packages each ship a logrotate rule
+# whose postrotate runs a bare `systemctl reload <unit>`. A reload of a unit
+# that isn't running exits non-zero, logrotate reports the postrotate script
+# as failed, and the whole nightly logrotate.service run is marked failed.
+# Confirmed live on a BrandMeister install, where mmdvm_bridge.service is
+# deliberately disabled above: logrotate.service failed every night. Guard
+# the reload so it only runs when the unit is active. This edits the
+# package-shipped file in place (logrotate has no drop-in directory), so a
+# package upgrade could revert it; re-running apply.sh reinstates it. Applied
+# for every network, since which unit is stopped depends on the network and
+# can change. Analog_Bridge's rule is left alone: that unit is always running.
+LOGROTATE_DIR="${LOGROTATE_DIR:-/etc/logrotate.d}"
+guard_logrotate_reload() {
+  # $1 = rule file name under $LOGROTATE_DIR, $2 = systemd unit it reloads
+  local file="$LOGROTATE_DIR/$1" unit="$2"
+  [ -f "$file" ] || return 0
+  sed -i -E "s/^([[:space:]]*)systemctl reload ${unit}[[:space:]]*\$/\1systemctl is-active --quiet ${unit} \&\& systemctl reload ${unit} || true/" "$file"
+}
+
+echo "== Guarding logrotate reload hooks for units that may be stopped"
+guard_logrotate_reload MMDVM_Bridge mmdvm_bridge
+guard_logrotate_reload Analog_Reflector analog_reflector
+
 echo "== Restarting bridge units to pick up the new config"
 systemctl restart analog_bridge.service
 if [ "$DVS_DMR_NETWORK" = "brandmeister" ]; then
