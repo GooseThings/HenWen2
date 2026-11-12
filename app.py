@@ -20497,6 +20497,124 @@ def api_id_morse():
 
 
 # ---------------------------------------------------------------------------
+# AllStarLink's ASL Web UI (docs/ASL-WEB-UI-PLAN.md, phase W1)
+#
+# Detected from the filesystem only -- no subprocess, no AMI -- so the check
+# is cheap enough to run on every Manager page load. Installed = the
+# package's static files exist; running = its socket-activated API socket
+# exists (systemd removes it on stop); scoped = asl-web-ui/apply.sh has put
+# its include into HenWen's vhost(s); global = the package's own conf still
+# serves /asl-web-ui/ on every virtual host.
+# ---------------------------------------------------------------------------
+
+ASL_WEB_UI_WWW         = os.environ.get("ASL_WEB_UI_WWW", "/usr/share/asl-web-ui/www")
+ASL_WEB_UI_SOCKET      = os.environ.get("ASL_WEB_UI_SOCKET", "/run/asl-web-ui/web.sock")
+ASL_WEB_UI_GLOBAL_CONF = os.environ.get("ASL_WEB_UI_GLOBAL_CONF",
+                                        "/etc/apache2/conf-enabled/asl-web-ui.conf")
+ASL_WEB_UI_VHOST_MARKER = "HenWen: ASL Web UI"
+ASL_WEB_UI_APPLY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "asl-web-ui", "apply.sh")
+ASL_WEB_UI_PATH = "/asl-web-ui/"
+
+# Manager page -> where the same job lives in the ASL Web UI. Routes are the
+# UI's own hash routes (read from its 1.0-1 app.js). "{node}" is filled in by
+# the page for per-node pages.
+ASL_WEB_UI_OVERLAP = {
+    "raw-editor":  {"what": "Manual Config Edit", "route": "#/config/rpt.conf"},
+    "backups":     {"what": "Backups, and the change history Manual Config Edit keeps",
+                    "route": "#/backups"},
+    "general":     {"what": "Nodes (call sign, duplex, radio interface)", "route": "#/nodes"},
+    "node":        {"what": "Nodes > General and Radio interface", "route": "#/nodes/{node}"},
+    "ast-console": {"what": "Asterisk > Console, and Diagnostics > Asterisk log",
+                    "route": "#/asterisk"},
+    "asl-update":  {"what": "Diagnostics > Software updates (it checks; Cockpit installs)",
+                    "route": "#/diagnostics"},
+    "node-access": {"what": "Nodes > Access control (the same AstDB lists)",
+                    "route": "#/nodes/{node}"},
+}
+
+
+_VHOST_OPEN_RE = re.compile(r'<virtualhost\b', re.I)
+
+
+def _asl_web_ui_vhost_scoped(path):
+    """True when every <VirtualHost> block in `path` that proxies HenWen's
+    port also carries apply.sh's marker. Per block, not per file: one file
+    can hold several HenWen blocks (:80 and :443, two hostnames), and a
+    block without the include sends /asl-web-ui/ to Flask. Mirrors
+    henwen_insert_before_proxypass_each_block() in apache-common.sh."""
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        return False
+    starts = [m.start() for m in _VHOST_OPEN_RE.finditer(text)]
+    blocks = ([text[a:b] for a, b in zip(starts, starts[1:] + [len(text)])]
+              if starts else [text])
+    henwen = [b for b in blocks
+              if any(m.group(1) == str(PORT) for m in _APACHE_PROXYPASS_RE.finditer(b))]
+    return bool(henwen) and all(ASL_WEB_UI_VHOST_MARKER in b for b in henwen)
+
+
+@_ttl_cached(30)
+def asl_web_ui_status():
+    installed = os.path.isfile(os.path.join(ASL_WEB_UI_WWW, "index.html"))
+    running   = installed and os.path.exists(ASL_WEB_UI_SOCKET)
+    global_on = os.path.exists(ASL_WEB_UI_GLOBAL_CONF)
+    vhosts    = _find_henwen_apache_vhosts()
+    applied   = [v for v in vhosts if _asl_web_ui_vhost_scoped(v)]
+    missing   = [v for v in vhosts if v not in applied]
+    # Reachable at /asl-web-ui/ on the host this Manager is served from only
+    # when apply.sh has put its include in every HenWen vhost block. The
+    # package's global conf does NOT make it reachable here: HenWen's
+    # catch-all "ProxyPass /" beats a server-level Alias, so an unpatched
+    # HenWen vhost sends /asl-web-ui/ to Flask (verified on Apache 2.4).
+    reachable = installed and bool(vhosts) and not missing
+    return {
+        "installed":     installed,
+        "running":       running,
+        "global_conf":   global_on,
+        "vhosts_scoped": applied,
+        "vhosts_missing": missing,
+        "reachable":     reachable,
+        "url":           ASL_WEB_UI_PATH if reachable else None,
+        # The fix for a global conf or an unpatched vhost, when the script
+        # that applies it is present in this install.
+        "apply_script":  ASL_WEB_UI_APPLY_SCRIPT
+                         if (installed and (global_on or missing)
+                             and os.path.isfile(ASL_WEB_UI_APPLY_SCRIPT)) else None,
+        "overlap":       ASL_WEB_UI_OVERLAP if installed else {},
+    }
+
+
+def _request_via_apache():
+    """True when this request reached Flask through Apache's proxy, the only
+    path on which /asl-web-ui/ exists. mod_proxy adds X-Forwarded-Server;
+    a direct visit to HenWen's own port has no such header, and neither does
+    a Tailscale Serve or Cloudflare Tunnel pointed straight at that port
+    (those send X-Forwarded-Host/-For/-Proto only, so X-Forwarded-Host is
+    not the test). A client forging the header can only take the link, and
+    editing, away from itself."""
+    return bool(request.headers.get("X-Forwarded-Server"))
+
+
+def asl_web_ui_status_for_request():
+    """asl_web_ui_status(), adjusted for how this request arrived: on a
+    direct visit the link would 404, so there is no URL."""
+    st = dict(asl_web_ui_status())
+    if not _request_via_apache():
+        st["url"] = None
+        st["direct_visit"] = True
+    return st
+
+
+@app.route("/api/asl-web-ui/status")
+def api_asl_web_ui_status():
+    """Admin+ (default gate): Manager is admin+, and it is the only caller."""
+    return jsonify(asl_web_ui_status_for_request())
+
+
+# ---------------------------------------------------------------------------
 # Node-number drift (docs/ASL-WEB-UI-PLAN.md, hazard 4)
 #
 # The ASL Web UI can rename or remove a node: it rewrites rpt.conf, AstDB and
