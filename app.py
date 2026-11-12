@@ -9120,10 +9120,18 @@ def api_audio_session():
     listen_only = bool(session.get('role') == 'user' and urow and urow["listen_only"])
     locked = session.get('role') != 'owner' and is_any_node_locked()
     kick = _sip_kick_remaining(urow["callsign"] if urow else None)
+    by_self = bool(kick) and _sip_kicked_by(urow["callsign"]).lower() == \
+        str(session.get('username', '')).lower()
+    if kick and by_self and request.args.get('manual') == '1':
+        # The account pressed the X on its own listener row (say, to move
+        # from the computer at home to this one) and is now pressing Listen
+        # on purpose. The hold is left in place: the other browser's
+        # automatic redial sends no `manual` and must still be told to stop.
+        kick = 0
     if kick:
         # An admin just hung this listener up; tell the kiosk to stop rather
         # than fall back to the 1.x stream or redial.
-        body.update(reason="kicked", kicked=True, retry_after=kick)
+        body.update(reason="kicked", kicked=True, retry_after=kick, by_self=by_self)
     elif listen_only:
         body["reason"] = "listen_only"
     elif locked:
@@ -15986,6 +15994,13 @@ def _sip_kick_remaining(callsign, now=None):
             _sip_kicked.pop(str(callsign).upper(), None)
             e = None
     return max(1, int(-(-(e["until"] - now) // 1))) if e else 0   # whole seconds, rounded up
+
+
+def _sip_kicked_by(callsign):
+    """Username that placed the current hold on this callsign, else ''."""
+    with _sip_kicked_lock:
+        e = _sip_kicked.get(str(callsign or '').upper())
+    return str(e["by"]) if e else ''
 
 
 _sip_keyed_lock = threading.Lock()
