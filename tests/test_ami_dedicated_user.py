@@ -128,3 +128,15 @@ class TestAmiSetupScript:
         """On a HenWen2 box the closing hint said `journalctl -u HenWen`."""
         assert "journalctl -u HenWen " not in SRC
         assert 'journalctl -u $SERVICE_NAME -f' in SRC
+
+    def test_secrets_are_not_printed(self, tmp_path):
+        """The script echoed manager.conf verbatim and the new secret in its
+        closing summary; both end up in terminals and install logs."""
+        assert 'cat "$MANAGER_CONF"' not in SRC
+        assert not re.search(r'echo[^\n]*\$\{?SECRET\}?[^:+]', SRC)
+        sed = re.search(r"sed -E '([^']+)' \"\$MANAGER_CONF\"", SRC).group(1)
+        conf = tmp_path / "manager.conf"
+        conf.write_text("[admin]\nsecret = hunter2 ; note\n Secret=abc123\n;secret = old\nread = all\n")
+        out = subprocess.run(["sed", "-E", sed, str(conf)], capture_output=True, text=True, check=True).stdout
+        assert "hunter2" not in out and "abc123" not in out
+        assert "secret = (hidden) ; note" in out and "read = all" in out
