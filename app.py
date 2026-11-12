@@ -140,6 +140,11 @@ HOST            = os.environ.get("HOST",             "0.0.0.0")
 DB_PATH         = os.environ.get("DB_PATH",          "/etc/asterisk/henwen.db")
 AMI_HOST        = os.environ.get("AMI_HOST",         "127.0.0.1")
 AMI_PORT        = int(os.environ.get("AMI_PORT",     5038))
+# HenWen's own manager.conf user, created by ami-setup.sh. Not [admin]: the
+# ASL Web UI's Asterisk > Settings > AMI Secret rewrites exactly [admin] and
+# updates only Allmon3, which would lock HenWen out (docs/ASL-WEB-UI-PLAN.md,
+# hazard 1).
+AMI_DEDICATED_USER = "henwen"
 SERVICE_NAME    = os.environ.get("SERVICE_NAME",     "HenWen")
 # Subdirectory name under Asterisk's sounds dir — single source of truth,
 # used both for SOUNDS_DIR's default and for the "henwen/<slug>" prefix
@@ -2536,6 +2541,47 @@ def api_session():
 # ---------------------------------------------------------------------------
 # AMI credential resolution
 # ---------------------------------------------------------------------------
+def _manager_conf_user(raw: str, name: str):
+    """The secret of manager.conf user [name] (case-insensitive), or None if
+    the stanza is missing, has no secret, or is disabled."""
+    section, secret, enabled = None, None, True
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(";"):
+            continue
+        hdr = re.match(r'^\[([^\]]+)\]', line)
+        if hdr:
+            if section is not None:
+                break
+            if hdr.group(1).strip().lower() == name.lower():
+                section = name
+            continue
+        if section is None or "=" not in line:
+            continue
+        kv = line.split(";", 1)[0]
+        key, val = kv.split("=", 1)[0].strip().lower(), kv.split("=", 1)[1].strip()
+        if key == "secret":
+            secret = val
+        elif key == "enabled":
+            enabled = val.lower() not in ("no", "false", "0")
+    return secret if (secret and enabled) else None
+
+
+def ami_shared_user_warning(user):
+    """A warning when HenWen logs into AMI as the shared [admin] user, else
+    None. The ASL Web UI's AMI Secret page and Allmon3 both own [admin]."""
+    if (user or "").strip().lower() != "admin":
+        return None
+    return ("HenWen logs into AMI as the shared 'admin' user. The ASL Web UI's "
+            "Asterisk > Settings > AMI Secret changes that user's secret and "
+            "only updates Allmon3, which would disconnect HenWen. Run "
+            "ami-setup.sh to give HenWen its own '" + AMI_DEDICATED_USER +
+            "' AMI user.")
+
+
+_ami_shared_user_warned = False
+
+
 def parse_manager_conf():
     """
     Return dict: {user, secret, host, port}.
@@ -2592,7 +2638,14 @@ def parse_manager_conf():
         result["port"] = int(m.group(1))
         log("INFO", f"[AMI-CREDS] AMI port from manager.conf: {result['port']}")
 
-    # Walk stanzas — take the FIRST non-[general] stanza that has a secret
+    # HenWen's own user wins when it exists; it's the one ami-setup.sh writes.
+    dedicated = _manager_conf_user(raw, AMI_DEDICATED_USER)
+    if dedicated:
+        log("INFO", f"[AMI-CREDS] Using manager.conf user: '{AMI_DEDICATED_USER}'")
+        result["user"], result["secret"] = AMI_DEDICATED_USER, dedicated
+        return result
+
+    # Otherwise take the FIRST non-[general] stanza that has a secret
     # and is not explicitly disabled. Do NOT require a write= line.
     current_header  = None
     current_secret  = None
@@ -3096,6 +3149,11 @@ def _ami_ensure_connected() -> AMIClient:
     creds = parse_manager_conf()
     if not creds.get("user") or not creds.get("secret"):
         raise Exception("AMI credentials not configured")
+    global _ami_shared_user_warned
+    warning = ami_shared_user_warning(creds["user"])
+    if warning and not _ami_shared_user_warned:
+        _ami_shared_user_warned = True
+        log("WARN", f"[AMI-CREDS] {warning}")
     client = AMIClient(creds["host"], creds["port"], creds["user"], creds["secret"])
     try:
         client.connect()
@@ -5471,6 +5529,52 @@ _conf_file_cache      = {}   # {path: (mtime, content)}
 _conf_file_cache_lock = threading.Lock()
 
 
+def conf_hash(content):
+    """Version token for rpt.conf as a page loaded it. Sent back with a save
+    so a save made from a stale page is refused (docs/ASL-WEB-UI-PLAN.md,
+    hazard 3: the ASL Web UI also writes rpt.conf)."""
+    if content is None:
+        return None
+    return hashlib.sha256(content.encode("utf-8", "surrogateescape")).hexdigest()[:16]
+
+
+def _current_rpt_conf_hash():
+    """Hash of rpt.conf read straight from disk, not read_conf_file()'s
+    mtime cache, so a write in the same mtime tick can't hide. None when
+    unreadable."""
+    try:
+        with open(RPT_CONF_PATH) as f:
+            return conf_hash(f.read())
+    except OSError:
+        return None
+
+
+# Serializes HenWen's own rpt.conf check-then-write so two saves in this
+# process can't both pass the stale check against the same version.
+_rpt_conf_write_lock = threading.Lock()
+
+
+def _rpt_conf_conflict(data):
+    """A 409 response when the request names the rpt.conf version it was
+    based on (`base_hash`) and the file has changed since, else None.
+    Requests without `base_hash` are not checked. Call with
+    _rpt_conf_write_lock held."""
+    base = (data or {}).get("base_hash")
+    if not base:
+        return None
+    current = _current_rpt_conf_hash()
+    if current is None or current == base:
+        return None
+    log("WARN", "[CONF] Refused a save from a stale page: rpt.conf changed since it was loaded")
+    return jsonify({
+        "error": ("rpt.conf changed since this page loaded it (another HenWen page, "
+                  "the ASL Web UI, or a manual edit). Nothing was saved. Reload, "
+                  "then make the change again."),
+        "conflict": True,
+        "conf_hash": current,
+    }), 409
+
+
 def read_conf_file(path):
     try:
         mtime = os.path.getmtime(path)
@@ -6849,6 +6953,7 @@ def api_get_conf():
         "content":          content,
         "nodes":            nodes,
         "general_settings": parse_stanza_settings(content, "general"),
+        "conf_hash":        conf_hash(content),
     })
 
 
@@ -6875,6 +6980,7 @@ def api_get_node_conf(node):
     usage     = get_node_template_usage(content)
     templates = [t for t, nodes in usage.items() if node in nodes]
     return jsonify({"node": node, "settings": settings, "templates": templates,
+                    "conf_hash": conf_hash(content),
                     "key_typo_warnings": find_key_typos(settings)})
 
 
@@ -6909,6 +7015,7 @@ def api_get_template_conf(name):
     settings = parse_stanza_settings(content, name)
     usage    = get_node_template_usage(content)
     return jsonify({"template": name, "settings": settings, "used_by": usage.get(name, []),
+                    "conf_hash": conf_hash(content),
                     "key_typo_warnings": find_key_typos(settings)})
 
 
@@ -6934,7 +7041,8 @@ def api_get_macro_conf(name):
     # syntax but aren't real macro entries.
     entries = {k: v for k, v in parse_stanza_settings(content, name).items() if MACRO_KEY_RE.match(k)}
     usage   = get_macro_stanza_usage(content)
-    return jsonify({"name": name, "entries": entries, "used_by": usage.get(name, [])})
+    return jsonify({"name": name, "entries": entries, "used_by": usage.get(name, []),
+                    "conf_hash": conf_hash(content)})
 
 
 @app.route("/api/conf/schedules")
@@ -6957,12 +7065,20 @@ def api_get_schedule_conf(name):
     # the same filtering note in api_get_macro_conf.
     entries = {k: v for k, v in parse_stanza_settings(content, name).items() if MACRO_KEY_RE.match(k)}
     usage   = get_schedule_stanza_usage(content)
-    return jsonify({"name": name, "entries": entries, "used_by": usage.get(name, [])})
+    return jsonify({"name": name, "entries": entries, "used_by": usage.get(name, []),
+                    "conf_hash": conf_hash(content)})
 
 
 @app.route("/api/save", methods=["POST"])
 def api_save():
-    data    = request.json or {}
+    with _rpt_conf_write_lock:
+        return _api_save_locked(request.json or {})
+
+
+def _api_save_locked(data):
+    conflict = _rpt_conf_conflict(data)
+    if conflict:
+        return conflict
     content = read_conf_file(RPT_CONF_PATH) or ""
     raw     = data.get("raw_content")
 
@@ -6973,7 +7089,8 @@ def api_save():
         try:
             backup = write_conf_file(RPT_CONF_PATH, raw)
             return jsonify({"success": True, "backup": backup,
-                            "message": f"Saved. Backup: {backup}"})
+                            "message": f"Saved. Backup: {backup}",
+                            "conf_hash": conf_hash(raw)})
         except PermissionError as e:
             return jsonify({"error": str(e),
                             "hint": "Ensure rpt.conf and backups are owned by the service user (chown asterisk:asterisk /etc/asterisk/rpt.conf)"}), 403
@@ -7027,7 +7144,8 @@ def api_save():
     try:
         backup = write_conf_file(RPT_CONF_PATH, content)
         return jsonify({"success": True, "backup": backup,
-                        "message": f"Saved {len(changes)} setting(s). Backup: {backup}"})
+                        "message": f"Saved {len(changes)} setting(s). Backup: {backup}",
+                        "conf_hash": conf_hash(content)})
     except PermissionError as e:
         return jsonify({"error": str(e),
                         "hint": "Ensure rpt.conf and backups are owned by the service user (chown asterisk:asterisk /etc/asterisk/rpt.conf)"}), 403
@@ -7101,7 +7219,8 @@ def api_reload():
 @app.route("/api/backups")
 def api_backups():
     if not os.path.exists(BACKUP_DIR):
-        return jsonify({"backups": [], "backup_dir": BACKUP_DIR})
+        return jsonify({"backups": [], "backup_dir": BACKUP_DIR,
+                        "conf_hash": _current_rpt_conf_hash()})
     names = sorted(
         [f for f in os.listdir(BACKUP_DIR) if f.endswith(".bak")],
         reverse=True
@@ -7114,7 +7233,8 @@ def api_backups():
         except Exception:
             size = 0
         result.append({"name": name, "size": size})
-    return jsonify({"backups": result, "backup_dir": BACKUP_DIR})
+    return jsonify({"backups": result, "backup_dir": BACKUP_DIR,
+                    "conf_hash": _current_rpt_conf_hash()})
 
 
 _BACKUP_NAME_RE = re.compile(r'^rpt\.conf\.(\d{8})_(\d{6})\.bak$')
@@ -7195,9 +7315,13 @@ def api_backup_restore(name):
     try:
         with open(path) as f:
             content = f.read()
-        backup = write_conf_file(RPT_CONF_PATH, content)
+        with _rpt_conf_write_lock:
+            conflict = _rpt_conf_conflict(request.get_json(silent=True))
+            if conflict:
+                return conflict
+            backup = write_conf_file(RPT_CONF_PATH, content)
         log("INFO", f"[API] Restored backup: {name}")
-        return jsonify({"ok": True, "backup": backup})
+        return jsonify({"ok": True, "backup": backup, "conf_hash": conf_hash(content)})
     except PermissionError as e:
         return jsonify({"error": str(e),
                         "hint": "Ensure rpt.conf is writable by the service user (chown asterisk:asterisk)"}), 403
@@ -13306,6 +13430,13 @@ ASL_UPDATE_UNIT           = "henwen-asl-upgrade"
 ASL_UPDATE_PKG_GLOB       = "asl3-asterisk*"
 ASL_UPDATE_LOG_CHUNK      = 65536
 
+# AllStarLink's web UI overlaps part of HenWen Manager; docs/ASL-WEB-UI-PLAN.md
+# maps the overlap page by page against this exact version. The weekly check
+# also reports when a newer one is installed or offered, so the map gets
+# re-read against it -- bump this constant once that review is done.
+ASL_WEB_UI_PKG             = "asl-web-ui"
+ASL_WEB_UI_REVIEWED_VERSION = "1.0-1.deb13"
+
 _asl_check_lock = threading.Lock()   # held for the whole of a check
 _asl_checking   = False              # True while one is in flight (for the UI)
 
@@ -13416,6 +13547,40 @@ def _asl_collect_update_info():
             "available": bool(will_upgrade), "error": ""}
 
 
+def _deb_version_gt(a, b):
+    """dpkg's own ordering (epochs, ~, -revisions). Raises if dpkg can't
+    compare them: `--compare-versions` exits 0 (true) or 1 (false), and
+    anything else -- or a timeout -- is a failure, not an answer."""
+    r = _asl_run(["dpkg", "--compare-versions", a, "gt", b], 10)
+    if r.returncode not in (0, 1):
+        raise RuntimeError(f"dpkg --compare-versions failed: {(r.stderr or '').strip()[-200:]}")
+    return r.returncode == 0
+
+
+def _asl_web_ui_versions():
+    """{installed, candidate, reviewed, needs_review} for asl-web-ui, from
+    the package lists apt already has. needs_review is True when either the
+    installed or the offered version is newer than the one the overlap map
+    in docs/ASL-WEB-UI-PLAN.md was written against."""
+    r = _asl_run(["apt-cache", "policy", ASL_WEB_UI_PKG], 20)
+    if r.returncode != 0:
+        # Raised so _asl_check_for_updates() records it as an error rather
+        # than reporting "nothing to review".
+        raise RuntimeError(f"apt-cache policy failed: {(r.stderr or '').strip()[-200:]}")
+    installed, candidate = parse_apt_policy(r.stdout).get(ASL_WEB_UI_PKG, (None, None))
+    newer = [v for v in dict.fromkeys((installed, candidate))
+             if v and v != ASL_WEB_UI_REVIEWED_VERSION
+             and _deb_version_gt(v, ASL_WEB_UI_REVIEWED_VERSION)]
+    newest = None
+    for v in newer:
+        # An apt pin can make the candidate older than what's installed.
+        if newest is None or _deb_version_gt(v, newest):
+            newest = v
+    return {"installed": installed, "candidate": candidate,
+            "reviewed": ASL_WEB_UI_REVIEWED_VERSION, "needs_review": bool(newer),
+            "newest": newest}
+
+
 def _asl_load_state():
     try:
         return json.loads(get_setting(ASL_UPDATE_STATE_KEY, "") or "{}")
@@ -13454,6 +13619,14 @@ def _asl_check_for_updates(refresh=True):
             log("WARN", f"[ASL-UPDATE] couldn't read package state: {e}")
             state.update({"packages": [], "will_upgrade": [], "available": False,
                           "error": str(e)})
+        try:
+            state["asl_web_ui"] = _asl_web_ui_versions()
+        except Exception as e:
+            state["asl_web_ui"] = {"error": str(e)}
+        if state["asl_web_ui"].get("needs_review"):
+            log("INFO", f"[ASL-UPDATE] {ASL_WEB_UI_PKG} {state['asl_web_ui']['newest']} is newer than "
+                        f"{ASL_WEB_UI_REVIEWED_VERSION}, the version docs/ASL-WEB-UI-PLAN.md maps; "
+                        "re-check what it now overlaps")
         prev = _asl_load_state()
         set_setting(ASL_UPDATE_STATE_KEY, json.dumps(state))
         if state["available"]:
@@ -14360,6 +14533,7 @@ def api_ami_test():
         "creds_found": bool(creds.get("user") and creds.get("secret")),
         "connected":   False,
         "error":       None,
+        "warning":     ami_shared_user_warning(creds.get("user")),
     }
     if not result["creds_found"]:
         result["error"] = (
@@ -20438,6 +20612,198 @@ def asl_web_ui_status_for_request():
 def api_asl_web_ui_status():
     """Admin+ (default gate): Manager is admin+, and it is the only caller."""
     return jsonify(asl_web_ui_status_for_request())
+
+
+# ---------------------------------------------------------------------------
+# Node-number drift (docs/ASL-WEB-UI-PLAN.md, hazard 4)
+#
+# The ASL Web UI can rename or remove a node: it rewrites rpt.conf, AstDB and
+# Allmon3, but not HenWen's own rows, which name local nodes by number. After
+# a rename those rows point at a node Asterisk no longer runs, and every one
+# of them fails quietly (a connector that never fires, an ID that never
+# plays). This finds them, and re-points them on request.
+# ---------------------------------------------------------------------------
+
+# (table, column, label, name column or None, extra WHERE, minimum role).
+# Local-node references only: favorites, connection history and recordings
+# name remote nodes or past events, and a rename doesn't make them wrong.
+# The minimum role mirrors the gate on the route that edits that setting
+# (/api/id is superuser+, stream relay config and node lockout are owner-
+# only, the rest admin+), so re-pointing can't be a way around it.
+NODE_DRIFT_REFS = (
+    ("connectors",          "local_node",  "Smart Connector",       "name", "", "admin"),
+    ("id_configs",          "node",        "Node ID",               "name", "", "superuser"),
+    ("announcements",       "node",        "Announcements",         "name", "", "admin"),
+    ("permanent_links",     "local_node",  "Permanent links",       "peer_node", "", "admin"),
+    ("kiosk_temp_conns",    "local_node",  "Kiosk temporary links", "peer_node", "", "admin"),
+    ("node_lockouts",       "node",        "Node lockout",          None, "", "owner"),
+    ("nws_alert_config",    "node",        "NWS alerts",            None, "node != ''", "admin"),
+    ("stream_relay_config", "target_node", "Stream relay",          None, "target_node != ''", "owner"),
+)
+
+_SIP_DIALPLAN_NODE_RE = re.compile(r'^\s*same\s*=>\s*n,Rpt\((\d+),', re.M)
+
+
+def _sip_dialplan_nodes():
+    """Node numbers the generated per-user dialplan currently dials, or an
+    empty set when the file doesn't exist yet."""
+    try:
+        with open(SIP_USERS_DIALPLAN) as f:
+            return set(_SIP_DIALPLAN_NODE_RE.findall(f.read()))
+    except OSError:
+        return set()
+
+
+def node_drift_report(db, local_nodes):
+    """Every HenWen reference to a local node number that is not in
+    `local_nodes` (rpt.conf's node stanzas). Returns {node: [{label, table,
+    count, names}]}, ordered by node; empty when nothing is stale.
+
+    An empty `local_nodes` (rpt.conf unreadable) reports nothing rather than
+    calling every reference stale."""
+    local = {str(n) for n in local_nodes}
+    if not local:
+        return {}
+    stale = {}
+    for table, col, label, name_col, where, min_role in NODE_DRIFT_REFS:
+        cond = f"WHERE {where}" if where else ""
+        try:
+            rows = db.execute(
+                f"SELECT {col} AS node, {name_col or 'NULL'} AS name FROM {table} {cond}"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            continue   # table/column absent on an older schema
+        per_node = {}
+        for r in rows:
+            node = str(r["node"] or "").strip()
+            if not node or node in local:
+                continue
+            per_node.setdefault(node, []).append(r["name"])
+        for node, names in per_node.items():
+            stale.setdefault(node, []).append({
+                "label": label, "table": table, "count": len(names),
+                "min_role": min_role,
+                "names": sorted({str(n) for n in names if n is not None})[:10],
+            })
+    for node in sorted(_sip_dialplan_nodes() - local):
+        stale.setdefault(node, []).append({
+            "label": "Per-user SIP dialplan", "table": None, "count": 1, "names": [],
+            "min_role": "admin"})
+    # The DVSwitch bridge is a node stanza DVSwitch apply writes, and its
+    # number is also in Analog_Bridge's and MMDVM_Bridge's own config, so
+    # moving the row alone would not fix it: reported, never re-pointed.
+    try:
+        row = db.execute("SELECT bridge_node FROM dvswitch_config WHERE enabled=1").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    bridge = str(row["bridge_node"] or "").strip() if row else ""
+    if bridge and bridge not in local:
+        stale.setdefault(bridge, []).append({
+            "label": "DVSwitch bridge node (change it in Manager > DVSwitch and apply; "
+                     "Re-point leaves it alone)",
+            "table": "dvswitch_config", "count": 1, "names": [], "min_role": "owner",
+            "repoint": False})
+    return dict(sorted(stale.items()))
+
+
+def node_drift_repoint(db, old, new, role):
+    """Move every NODE_DRIFT_REFS row from local node `old` to `new`. Rows
+    whose key already exists under `new` (permanent/temp links, lockouts) keep
+    the `new` row and drop the `old` one. A setting whose minimum role `role`
+    doesn't meet is left alone. Returns ({table: rows moved}, [labels
+    skipped])."""
+    moved, skipped = {}, []
+    rank = ROLE_RANK.get(role, -1)
+    for table, col, label, _name, _where, min_role in NODE_DRIFT_REFS:
+        if rank < ROLE_RANK[min_role]:
+            try:
+                if db.execute(f"SELECT 1 FROM {table} WHERE {col}=? LIMIT 1", (old,)).fetchone():
+                    skipped.append(label)
+            except sqlite3.OperationalError:
+                pass
+            continue
+        try:
+            cur = db.execute(f"UPDATE OR IGNORE {table} SET {col}=? WHERE {col}=?", (new, old))
+            moved[table] = cur.rowcount
+            db.execute(f"DELETE FROM {table} WHERE {col}=?", (old,))
+        except sqlite3.OperationalError:
+            continue
+    db.commit()
+    # The running server tracks links in memory too (_kiosk_temp_conns, read
+    # from the table only at startup): permanent-link status, temp-link
+    # timeouts and Smart Connector's skip-permanent all key on it. Move the
+    # old node's entries, keeping any the new node already has.
+    if rank >= ROLE_RANK["admin"]:
+        with _kiosk_temp_lock:
+            for key in [k for k in _kiosk_temp_conns if k[0] == old]:
+                entry = _kiosk_temp_conns.pop(key)
+                _kiosk_temp_conns.setdefault((new, key[1]), entry)
+    return {t: n for t, n in moved.items() if n}, skipped
+
+
+@app.route("/api/node-drift")
+def api_node_drift():
+    """Admin+ (default gate). Which HenWen settings name a local node that
+    rpt.conf no longer has, plus the nodes it does have to re-point them to."""
+    content = read_conf_file(RPT_CONF_PATH)
+    local = get_node_numbers(content) if content else []
+    return jsonify({"local_nodes": local,
+                    "stale": node_drift_report(get_db(), local),
+                    "conf_readable": content is not None,
+                    "sip_reload_error": _node_drift_sip_error})
+
+
+# A re-point that rewrote the SIP dialplan but couldn't reload Asterisk: the
+# file no longer names the old node, so the report goes quiet, while
+# Asterisk may still dial it. Kept until a reload succeeds.
+_node_drift_sip_error = None
+
+
+def _node_drift_provision_sip(reason):
+    """Re-render and reload the per-user SIP files. Returns what the caller
+    shows: which node SIP calls now dial (always rpt.conf's first node, not
+    the re-point target), whether Asterisk reloaded, and any error."""
+    global _node_drift_sip_error
+    prov = sip_provision_accounts(reason, force_reload=True)
+    ok = bool(prov.get("ok")) and (bool(prov.get("reloaded")) or not prov.get("included"))
+    if not ok:
+        # The detail can carry exception text; it goes to the journal, and
+        # the client gets a fixed message (CodeQL py/stack-trace-exposure).
+        log("WARN", f"[NODE-DRIFT] SIP re-provisioning after a re-point did not finish: "
+                    f"{prov.get('error') or prov.get('detail')}")
+    _node_drift_sip_error = None if ok else (
+        "Asterisk did not reload the per-user SIP files; see the HenWen journal for why")
+    return {"node": prov.get("node"), "ok": ok, "reloaded": bool(prov.get("reloaded")),
+            "error": _node_drift_sip_error}
+
+
+@app.route("/api/node-drift/sip-reload", methods=["POST"])
+def api_node_drift_sip_reload():
+    """Retry the SIP reload a re-point couldn't finish."""
+    return jsonify(_node_drift_provision_sip("retry after node re-point"))
+
+
+@app.route("/api/node-drift/repoint", methods=["POST"])
+def api_node_drift_repoint():
+    data = request.get_json(silent=True) or {}
+    old = str(data.get("from") or "").strip()
+    new = str(data.get("to") or "").strip()
+    content = read_conf_file(RPT_CONF_PATH)
+    local = get_node_numbers(content) if content else []
+    if not re.fullmatch(r"\d{4,7}", old) or new not in local:
+        return jsonify({"error": "'to' must be one of this box's nodes and 'from' a node number"}), 400
+    if old in local:
+        return jsonify({"error": f"Node {old} still exists in rpt.conf; nothing to re-point"}), 400
+    db = get_db()
+    moved, skipped = node_drift_repoint(db, old, new, session.get('role'))
+    log("INFO", f"[NODE-DRIFT] {session.get('username')} re-pointed node {old} -> {new}: {moved}")
+    sip = None
+    if old in _sip_dialplan_nodes():
+        sip = _node_drift_provision_sip(f"node {old} re-pointed to {new}")
+    return jsonify({"ok": True, "moved": moved,
+                    "skipped": skipped,
+                    "sip": sip,
+                    "stale": node_drift_report(db, local)})
 
 
 # ---------------------------------------------------------------------------
