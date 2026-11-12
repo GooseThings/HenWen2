@@ -232,50 +232,53 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
    states actually fit, so the row reflows (if anything) instead. */
 #tx-btn, #listen-btn, #mute-btn, #record-btn { padding: 8px 13px; font-size: 0.88rem; }
 
-/* Header's utility row (search/net-schedule/login/layout-edit/fullscreen/
-   manager) — lives in .header-actions, on the right of .header-brand via
-   .header's justify-content:space-between. nowrap + tightened per-button
-   padding (icon-only buttons don't need the wider 10px horizontal padding
-   .btn-icon uses elsewhere for icon+text combos like Listen/TX) so the
-   whole row reliably fits on one line even at phone widths; overflow-x:auto
-   is just a safety net for the narrowest devices rather than something
-   expected to trigger. */
-.header-actions { display: flex; gap: 7px; align-items: center; flex-wrap: nowrap; overflow-x: auto; }
+/* Header's right side: just the hamburger trigger (#header-menu-btn). Every
+   header action is a text item in the dropdown it opens (.header-menu-items),
+   at every screen width. */
+.header-actions { display: flex; gap: 7px; align-items: center; flex-wrap: nowrap; }
 /* font-size/border-radius/gap here are .btn-icon's own base values × 1.33,
    overridden just for header buttons (see the .header comment above) rather
    than changed on .btn-icon itself, which is also used outside the header
    (TX/Listen/Rec, Node Search tabs, dashboard hidden-panel buttons) and
    isn't meant to grow with it. */
 .header-actions .btn-icon { padding: 7px 9px; font-size: 1.09rem; border-radius: 8px; gap: 5px; flex-shrink: 0; }
-.header-actions #kiosk-login-btn { padding: 7px 13px; }
-/* Icon shown only on mobile (see the media query below) — desktop keeps
-   the plain text-only button unchanged. */
-svg.kiosk-login-icon { display: none; }
+#header-menu-btn { position: relative; }
 
-/* Chat header notification (issue #159) — a small count/dot pinned to the
-   button's own top-right corner. #header-chat-btn carries position:relative
-   inline (it's otherwise a plain .btn-icon) so this positions against the
-   button itself, not some ancestor further up. The ring uses --bg2 (the
-   button's own resting background per .btn-icon) so the badge reads as
-   sitting on top of the button rather than overlapping it. */
+/* The dropdown itself: position:fixed, opened and placed under the trigger
+   by toggleHeaderMenu() (same pattern as the map options menu, see
+   .map-ctl-dropdown). max-height + overflow-y keep a long menu usable on a
+   short screen. */
+.header-menu-items {
+  display: none; position: fixed; flex-direction: column; gap: 6px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px; min-width: 210px; max-height: calc(100vh - 90px); overflow-y: auto;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4); z-index: 2000;
+}
+/* Child selectors (>), not descendant: #dash-hidden-menu sits inside this
+   wrapper and renders small .btn-icon buttons of its own that must not pick
+   up the full-width menu-item styling. */
+.header-menu-items > .btn-icon,
+.header-menu-items > #dash-hidden-wrap > .btn-icon,
+.header-menu-items > #kiosk-user-bar > .btn-icon {
+  width: 100%; justify-content: flex-start; padding: 10px 14px; font-size: 0.98rem;
+}
+.header-menu-items #kiosk-user-bar {
+  flex-direction: column; align-items: stretch; width: 100%; gap: 6px;
+  border-top: 1px solid var(--border); padding-top: 6px;
+}
+
+/* Chat unread badge (issue #159). Two copies, kept in sync by
+   updateHeaderChatBtn(): one pinned to the hamburger trigger's top-right
+   corner (so unread chat is visible with the menu closed), and one at the
+   right end of the Chat menu item. The ring uses --bg2 so the trigger's copy
+   reads as sitting on top of the button rather than overlapping it. */
 .header-chat-badge {
   position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px;
   padding: 0 3px; border-radius: 999px; background: var(--danger); color: #fff;
   font-size: 0.62rem; font-weight: 700; line-height: 16px; text-align: center;
   box-shadow: 0 0 0 2px var(--bg2); pointer-events: none;
 }
-
-/* display:contents on desktop: this wrapper is invisible to layout, so its
-   children sit directly in .header-actions' flex row exactly as if it
-   didn't exist — zero visual change from before it was introduced. The
-   mobile media query below replaces this with the actual dropdown
-   presentation (see .header-menu-items there and #header-menu-btn). */
-.header-menu-items { display: contents; }
-/* Icon-only header buttons rely on their title= tooltip on desktop (mouse
-   hover) — that's not available on a touch device, so the mobile dropdown
-   below shows this text alongside each icon instead. Hidden here so
-   desktop's icon-only row is unchanged. */
-.header-menu-label { display: none; }
+.header-menu-items .header-chat-badge { position: static; margin-left: auto; box-shadow: none; }
 /* Collapse-state chevron for the mobile-only card accordion (issue #35) —
    hidden here so desktop, which has no collapse behavior at all, never
    shows it; the mobile media query turns it back on. */
@@ -624,7 +627,7 @@ svg.kiosk-login-icon { display: none; }
 /* ── Dashboard grid: resizable/movable/hideable cards (desktop only — see
    dashSupported() in JS; mobile keeps the fixed stacked layout untouched).
    Move and resize controls are hidden until .content-area gets .dash-edit
-   (toggled by the layout-dashboard header button) so the kiosk stays clean
+   (toggled by the header menu's Edit Layout item) so the kiosk stays clean
    for passive viewing. */
 .dash-card { position: relative; }
 .dash-header-grip { cursor: grab; color: var(--text2); opacity: 0; width: 0; margin-right: 0;
@@ -1268,52 +1271,17 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
      KIOSK MOBILE" before the "MOBILE" suffix was dropped too). */
   .header-brand-kiosk-label { display: none; }
   .header-actions { gap: 11px; }
-  /* Login is icon-only here (text hidden, icon shown — the reverse of
-     desktop) rather than the plain text button desktop uses: with the
-     logo/wordmark already sized up 20% above, the wider text button was
-     enough extra width in .header-actions to push .header past one line
-     and wrap into two whenever a visitor wasn't logged in (logged-in state
-     never showed this since #kiosk-login-btn is display:none then).
-     Padding matches every other icon-only header button instead of the
-     wider text-button padding .header-actions #kiosk-login-btn normally
-     gets. */
-  svg.kiosk-login-icon { display: inline-block; }
-  .kiosk-login-label { display: none; }
-  .header-actions #kiosk-login-btn { padding: 7px 9px; }
   .header-club-logo { display: none; }
 
   /* No physical keyboard on mobile, so the Space-bar PTT shortcut hint is
      just noise on a touch device (the button itself is still the PTT). */
   .tx-ptt-space-hint { display: none; }
 
-  /* Header hamburger (issue #35): everything except Login folds into one
-     menu instead of a scrollable icon strip. #header-menu-items keeps
-     display:contents' desktop flow above; here it becomes the actual
-     dropdown, opened/positioned by toggleHeaderMenu() the same way the map
-     options menu works (see .map-ctl-dropdown). */
-  #header-menu-btn { display: flex !important; }
-  /* Fullscreen (issue #123): shown directly in the header instead of buried
-     a tap deeper inside the hamburger — see the HTML comment by
-     #header-fs-btn. Its in-menu twin (#header-fs-menu-btn) is hidden here
-     so mobile only ever offers the one copy. */
-  #header-fs-btn { display: flex !important; }
-  #header-fs-menu-btn { display: none !important; }
-  .header-menu-items {
-    display: none; position: fixed; flex-direction: column; gap: 11px;
-    background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
-    padding: 13px; min-width: 220px; box-shadow: 0 4px 16px rgba(0,0,0,.4); z-index: 2000;
-  }
-  /* Bigger touch targets than the same buttons get elsewhere (e.g. the
-     Connected Nodes header) — this is a vertical list of one-shot taps with
-     nothing else competing for the row's width, so there's no reason to
-     keep them icon-strip-sized here. ~44px tall meets the usual minimum
-     touch-target guidance. Padding/font-size are the button's own pre-scale
-     values × 1.1 (same "buttons 10% larger" pass as .sb-btn below). */
-  .header-menu-items .btn-icon {
-    width: 100%; justify-content: flex-start; padding: 13px 15px; font-size: 1.1rem;
-  }
-  .header-menu-items #kiosk-user-bar { flex-direction: column; align-items: stretch; width: 100%; gap: 6px; }
-  .header-menu-label { display: inline; margin-left: 10px; }
+  /* Header menu items: bigger touch targets than desktop's (~44px tall meets
+     the usual minimum touch-target guidance). */
+  .header-menu-items { gap: 11px; padding: 13px; min-width: 220px; }
+  .header-menu-items > .btn-icon,
+  .header-menu-items > #kiosk-user-bar > .btn-icon { padding: 13px 15px; font-size: 1.1rem; }
 
   /* Weather bar hidden entirely on mobile (issue #35) — not just collapsed,
      since there's no header affordance to tap here the way cards have.
@@ -1663,19 +1631,6 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
     <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
     <circle cx="12" cy="7" r="4" />
   </symbol>
-  <symbol id="icon-door-open" viewBox="0 0 24 24">
-    <path d="M11 20H2" />
-    <path d="M11 4.562v16.157a1 1 0 0 0 1.242.97L19 20V5.562a2 2 0 0 0-1.515-1.94l-4-1A2 2 0 0 0 11 4.561z" />
-    <path d="M11 4H8a2 2 0 0 0-2 2v14" />
-    <path d="M14 12h.01" />
-    <path d="M22 20h-3" />
-  </symbol>
-  <symbol id="icon-maximize" viewBox="0 0 24 24">
-    <path d="M8 3H5a2 2 0 0 0-2 2v3" />
-    <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
-    <path d="M3 16v3a2 2 0 0 0 2 2h3" />
-    <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
-  </symbol>
   <symbol id="icon-book-open" viewBox="0 0 24 24">
     <path d="M12 7v14" />
     <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
@@ -1767,12 +1722,6 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
     <circle cx="15" cy="5" r="1" />
     <circle cx="15" cy="19" r="1" />
   </symbol>
-  <symbol id="icon-layout-dashboard" viewBox="0 0 24 24">
-    <rect width="7" height="9" x="3" y="3" rx="1" />
-    <rect width="7" height="5" x="14" y="3" rx="1" />
-    <rect width="7" height="9" x="14" y="12" rx="1" />
-    <rect width="7" height="5" x="3" y="16" rx="1" />
-  </symbol>
   <symbol id="icon-eye-off" viewBox="0 0 24 24">
     <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" />
     <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" />
@@ -1799,23 +1748,6 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
     <path d="m7 10 5 5 5-5" />
   </symbol>
-  <symbol id="icon-sun" viewBox="0 0 24 24">
-    <circle cx="12" cy="12" r="4" />
-    <path d="M12 2v2" />
-    <path d="M12 20v2" />
-    <path d="m4.93 4.93 1.41 1.41" />
-    <path d="m17.66 17.66 1.41 1.41" />
-    <path d="M2 12h2" />
-    <path d="M20 12h2" />
-    <path d="m6.34 17.66-1.41 1.41" />
-    <path d="m19.07 4.93-1.41 1.41" />
-  </symbol>
-  <symbol id="icon-moon" viewBox="0 0 24 24">
-    <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />
-  </symbol>
-  <symbol id="icon-message-circle" viewBox="0 0 24 24">
-    <path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719" />
-  </symbol>
 </svg>
 
 <div class="board">
@@ -1841,84 +1773,52 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
       <audio id="node-audio" preload="none">
         <source type="audio/webm; codecs=opus">
       </audio>
-      <button class="btn-icon" id="kiosk-login-btn" onclick="openKioskLogin()" title="Login" style="display:none"><svg class="icon kiosk-login-icon"><use href="#icon-user"></use></svg><span class="kiosk-login-label">Login</span></button>
-      <!-- Fullscreen (issue #123): the copy folded into the hamburger below
-           still covers desktop, but on mobile that means two extra taps
-           (open menu, then Fullscreen) for what's usually the very first
-           thing a kiosk-mounted phone needs. This one lives outside the
-           fold like Login above, hidden on desktop (redundant with the
-           menu copy there) and forced visible by the mobile media query,
-           which also hides #header-fs-menu-btn so it isn't offered twice. -->
-      <button class="btn-icon" id="header-fs-btn" onclick="toggleFS()" title="Fullscreen" style="display:none"><svg class="icon"><use href="#icon-maximize"></use></svg></button>
-      <!-- Light/dark toggle (issue #153): a quick one-tap toggle everywhere
-           (mobile and desktop both) alongside Manager > Settings' full
-           multi-theme picker (admin+ only, and a plain 'user'/kiosk account
-           has no Manager access at all) -- this is the only way most
-           visitors can flip the board's theme themselves. Flips between
-           just 'light' and 'dark' via the same henwen-theme localStorage
-           key Manager's own picker uses, so the two stay in sync -- picking
-           one of Manager's other named skins there still shows as "dark"
-           here until toggled, same simplification status-accessible.html's
-           own binary toggle already makes. Always visible, unlike Login/
-           Fullscreen/Chat just above/below, which each have a real reason
-           to hide sometimes (already logged in, already fullscreen, chat
-           already visible) -- there's no "already toggled" state for this
-           one. -->
-      <button class="btn-icon" id="header-theme-btn" onclick="toggleKioskTheme()" title="Switch to light theme"><svg class="icon"><use href="#icon-moon"></use></svg></button>
-      <!-- Chat notification (issue #159): Chat defaults to hidden even on
-           desktop (see DASH_DEFAULT_HIDDEN) and has no way to be reached at
-           all on mobile (.chat-card's own display:none rule below), so this
-           is the one place a viewer can learn new messages exist without
-           already having the panel open. Lives outside the fold like Login/
-           Fullscreen above so the badge stays visible without opening the
-           hamburger first; JS (updateHeaderChatBtn()) is what actually
-           shows/hides it, not a CSS breakpoint, since "chat is reachable
-           right now" depends on runtime dash-hidden/overlay state, not just
-           viewport width. -->
-      <button class="btn-icon" id="header-chat-btn" onclick="onHeaderChatClick()" title="Chat" style="display:none;position:relative"><svg class="icon"><use href="#icon-message-circle"></use></svg><span id="header-chat-badge" class="header-chat-badge" style="display:none"></span></button>
-      <!-- Everything else folds into a single hamburger menu on mobile (see
-           #header-menu-btn / .header-menu-items below) — desktop keeps them
-           as a plain inline row via display:contents, so this wrapper is
-           purely a mobile-width affordance, not a restructuring of what's
-           actually here. Login stays outside the fold since it's the one
-           action an anonymous mobile viewer is most likely to need. -->
+      <!-- Every header action lives in this one hamburger menu, at every
+           screen width, as a plain text item (no icons). Only the hamburger
+           trigger itself sits in the header. toggleHeaderMenu() opens it as
+           a fixed-position dropdown under the trigger. Which items show
+           depends on login state/role exactly as before: each item's own
+           updater sets its display (updateKioskUserBar(), updateHeaderChatBtn(),
+           _dvswitchBridgeBtnUpdate(), updateDashHiddenBtn(), ...). -->
       <div class="header-menu-items" id="header-menu-items">
-        <!-- Search stays hidden until login (it bridges RF, like every other
-             connect path); the net-schedule calendar is always visible. -->
-        <button class="btn-icon" id="node-search-btn" onclick="openSearchModal()" title="Search the AllStar and EchoLink directories for nodes to connect to" style="display:none"><svg class="icon"><use href="#icon-search"></use></svg><span class="header-menu-label">Search</span></button>
-        <!-- DVSwitch DMR bridge quick-connect: only shown once DVSwitch is
-             enabled/configured with a bridge node (see api_dvswitch_status())
-             AND the viewer is logged in -- same "bridges RF, hidden until
-             login" gate Search above already uses. Saves a user from having
-             to already know the bridge's internal AllStar node number in
-             order to link to it via the plain Node # form. Hidden by
-             default; _dvswitchBridgeBtnUpdate() (called from
-             loadDvswitchStatus(), which already re-runs on login/logout and
-             every 15s) shows it once both conditions are confirmed. -->
-        <button class="btn-icon" id="dvswitch-bridge-btn" onclick="connectDvswitchBridge()" title="Connect to the DVSwitch DMR bridge" style="display:none"><svg class="icon"><use href="#icon-radio-tower"></use></svg><span class="header-menu-label">DMR Bridge</span></button>
-        <button class="btn-icon" id="net-cal-btn" onclick="openNetModal()" title="Net Schedule — scheduled net reminders"><svg class="icon"><use href="#icon-calendar-days"></use></svg><span class="header-menu-label">Net Schedule</span></button>
-        <button class="btn-icon" id="myrec-btn" onclick="openMyRecordingsModal()" style="display:none" title="View, rename, download, or delete your saved recordings"><svg class="icon"><use href="#icon-folder-open"></use></svg><span class="header-menu-label">My Recordings</span></button>
-        <div id="kiosk-user-bar" style="display:none;align-items:center;gap:6px;font-size:0.75rem;flex-shrink:0">
-          <button class="btn-icon" onclick="openAccountModal()" title="Change your password or set up two-factor authentication"><svg class="icon"><use href="#icon-user"></use></svg><span class="header-menu-label">Account</span></button>
-          <button class="btn-icon" onclick="kioskLogout()" title="Logout"><svg class="icon"><use href="#icon-door-open"></use></svg><span class="header-menu-label">Logout</span></button>
-        </div>
-        <div id="dash-hidden-wrap" style="position:relative;display:inline-flex">
-          <button class="btn-icon" id="dash-hidden-btn" onclick="toggleDashHiddenMenu(event)" title="Hidden panels" style="display:none"><svg class="icon"><use href="#icon-eye-off"></use></svg></button>
-          <!-- position:fixed, not absolute: .header-actions has overflow-x:auto as a
-               narrow-screen safety net (see its CSS comment), which implicitly sets
-               overflow-y:auto too — an absolutely-positioned dropdown anchored inside
-               it would get clipped/scrolled instead of floating over the page.
-               toggleDashHiddenMenu() computes top/right from the button's own
-               bounding rect each time it opens since fixed positioning is
-               viewport-relative, not relative to #dash-hidden-wrap. -->
+        <button class="btn-icon" id="kiosk-login-btn" onclick="openKioskLogin()" style="display:none">Login</button>
+        <!-- Chat (issue #159): shown only while the Chat panel is not already
+             on screen. Its unread badge is mirrored onto the hamburger
+             trigger (#header-menu-badge) so new messages are still noticed
+             with the menu closed. -->
+        <button class="btn-icon" id="header-chat-btn" onclick="onHeaderChatClick()" style="display:none">Chat<span id="header-chat-badge" class="header-chat-badge" style="display:none"></span></button>
+        <!-- Search and DMR Bridge stay hidden until login (both bridge RF,
+             like every other connect path); DMR Bridge additionally needs
+             DVSwitch configured with a bridge node (_dvswitchBridgeBtnUpdate()).
+             The net-schedule calendar is always visible. -->
+        <button class="btn-icon" id="node-search-btn" onclick="openSearchModal()" title="Search the AllStar and EchoLink directories for nodes to connect to" style="display:none">Search</button>
+        <button class="btn-icon" id="dvswitch-bridge-btn" onclick="connectDvswitchBridge()" title="Connect to the DVSwitch DMR bridge" style="display:none">DMR Bridge</button>
+        <button class="btn-icon" id="net-cal-btn" onclick="openNetModal()" title="Scheduled net reminders">Net Schedule</button>
+        <button class="btn-icon" id="myrec-btn" onclick="openMyRecordingsModal()" style="display:none" title="View, rename, download, or delete your saved recordings">My Recordings</button>
+        <!-- Hidden Panels / Edit Layout are desktop-only (dashSupported());
+             the mobile media query hides both. The wrap is display:contents
+             so it takes no slot of its own while its button is hidden. -->
+        <div id="dash-hidden-wrap" style="display:contents">
+          <button class="btn-icon" id="dash-hidden-btn" onclick="toggleDashHiddenMenu(event)" title="Show a panel you have hidden" style="display:none" aria-haspopup="true">Hidden Panels</button>
+          <!-- position:fixed, placed by toggleDashHiddenMenu() from the
+               button's own bounding rect each time it opens. -->
           <div id="dash-hidden-menu" style="display:none;position:fixed;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:6px;min-width:170px;box-shadow:0 4px 16px rgba(0,0,0,.4);z-index:50;font-size:0.78rem"></div>
         </div>
-        <button class="btn-icon" id="dash-edit-btn" onclick="toggleDashEditMode()" title="Rearrange, resize, or hide the panels below"><svg class="icon"><use href="#icon-layout-dashboard"></use></svg></button>
-        <button class="btn-icon" id="header-fs-menu-btn" onclick="toggleFS()" title="Fullscreen"><svg class="icon"><use href="#icon-maximize"></use></svg><span class="header-menu-label">Fullscreen</span></button>
-        <a class="btn-icon" href="{{ request.script_root }}/accessible" title="Accessible View — larger text and screen-reader support"><svg class="icon"><use href="#icon-eye"></use></svg><span class="header-menu-label">Accessible</span></a>
-        <a class="btn-icon" id="manager-link-btn" href="{{ request.script_root }}/henwen-manager" target="_blank" rel="noopener" title="Manager"><svg class="icon"><use href="#icon-book-open"></use></svg><span class="header-menu-label">Manager</span></a>
+        <button class="btn-icon" id="dash-edit-btn" onclick="toggleDashEditMode()" title="Rearrange, resize, or hide the panels below">Edit Layout</button>
+        <!-- Light/dark toggle (issue #153): flips between 'light' and 'dark'
+             via the same henwen-theme localStorage key Manager's own picker
+             uses. The label names the theme a click switches TO
+             (updateKioskThemeBtn()). -->
+        <button class="btn-icon" id="header-theme-btn" onclick="toggleKioskTheme()">Light Theme</button>
+        <button class="btn-icon" id="header-fs-btn" onclick="toggleFS()">Fullscreen</button>
+        <a class="btn-icon" href="{{ request.script_root }}/accessible" title="Larger text and screen-reader support">Accessible View</a>
+        <a class="btn-icon" id="manager-link-btn" href="{{ request.script_root }}/henwen-manager" target="_blank" rel="noopener">Manager</a>
+        <div id="kiosk-user-bar" style="display:none">
+          <button class="btn-icon" onclick="openAccountModal()" title="Change your password or set up two-factor authentication">Account</button>
+          <button class="btn-icon" onclick="kioskLogout()">Logout</button>
+        </div>
       </div>
-      <button type="button" class="btn-icon" id="header-menu-btn" onclick="toggleHeaderMenu(event)" title="Menu" aria-haspopup="true" aria-expanded="false" style="display:none"><svg class="icon"><use href="#icon-menu"></use></svg></button>
+      <button type="button" class="btn-icon" id="header-menu-btn" onclick="toggleHeaderMenu(event)" title="Menu" aria-label="Menu" aria-haspopup="true" aria-expanded="false"><svg class="icon"><use href="#icon-menu"></use></svg><span id="header-menu-badge" class="header-chat-badge" style="display:none"></span></button>
     </div>
   </header>
 
@@ -2733,8 +2633,8 @@ function toggleFS() {
   else document.exitFullscreen().catch(function(){});
 }
 
-/* Light/dark toggle (issue #153) — header button, shown everywhere (mobile
-   and desktop). Deliberately a plain binary flip between 'light' and 'dark'
+/* Light/dark toggle (issue #153) — an item in the header menu, at every
+   screen width. Deliberately a plain binary flip between 'light' and 'dark'
    via the same henwen-theme
    localStorage key Manager's own multi-theme picker writes (see THEME_NAMES
    there), same simplification status-accessible.html's own toggle already
@@ -2759,9 +2659,8 @@ function updateKioskThemeBtn() {
   var btn = document.getElementById('header-theme-btn');
   if (!btn) return;
   var isLight = document.documentElement.getAttribute('data-theme') === 'light';
-  btn.title = isLight ? 'Switch to dark theme' : 'Switch to light theme';
-  var use = btn.querySelector('use');
-  if (use) use.setAttribute('href', isLight ? '#icon-sun' : '#icon-moon');
+  /* The label names the theme a click switches to. */
+  btn.textContent = isLight ? 'Dark Theme' : 'Light Theme';
 }
 
 /* Screen Wake Lock: tied to fullscreenchange (not toggleFS itself) so it
@@ -2786,6 +2685,8 @@ function _releaseWakeLock() {
 document.addEventListener('fullscreenchange', function() {
   if (document.fullscreenElement) _acquireWakeLock();
   else _releaseWakeLock();
+  var fsBtn = document.getElementById('header-fs-btn');
+  if (fsBtn) fsBtn.textContent = document.fullscreenElement ? 'Exit Fullscreen' : 'Fullscreen';
 });
 document.addEventListener('visibilitychange', function() {
   if (document.visibilityState === 'visible' && document.fullscreenElement && !_wakeLock) _acquireWakeLock();
@@ -2836,10 +2737,10 @@ var _mapDirty           = false;  /* data changed while a popup was open */
    both gated to actually do anything only below the 860px breakpoint the
    rest of the mobile CSS already uses):
 
-   1. Header hamburger — collapses everything except Login into one menu,
+   1. Header hamburger — began here as a mobile-only fold; it is now the
+      header's one menu at every width (see #header-menu-items), with the
       same open/outside-click/fixed-position pattern as the map options
-      dropdown just below (#header-menu-items is display:contents on
-      desktop, so this is purely additive there).
+      dropdown just below.
    2. Collapsible Favorites card — starts collapsed to just its header on a
       phone; Node and Connected Nodes (what a visitor checks first) always
       stay expanded. Its open/closed state persists per-browser in
@@ -2898,6 +2799,15 @@ function closeHeaderMenu() {
   if (btn) btn.setAttribute('aria-expanded', 'false');
   _headerMenuOpen = false;
   document.removeEventListener('click', _headerMenuOutsideClick);
+  document.removeEventListener('keydown', _headerMenuKeydown);
+  /* The Hidden Panels submenu lives inside this menu, so it goes with it;
+     without this its own open flag would be left set and the next click on
+     Hidden Panels would do nothing. */
+  if (typeof hideDashHiddenMenu === 'function') hideDashHiddenMenu();
+}
+
+function _headerMenuKeydown(e) {
+  if (e.key === 'Escape') closeHeaderMenu();
 }
 
 function toggleHeaderMenu(e) {
@@ -2917,6 +2827,7 @@ function toggleHeaderMenu(e) {
   btn.setAttribute('aria-expanded', 'true');
   _headerMenuOpen = true;
   document.addEventListener('click', _headerMenuOutsideClick);
+  document.addEventListener('keydown', _headerMenuKeydown);
 }
 
 /* Close the menu once an item inside it is actually picked (Net Schedule,
@@ -5878,9 +5789,11 @@ function _chatUpdateVisibility() {
 /* ── Header chat notification + mobile chat overlay (issue #159) ──
    Chat defaults to hidden even on desktop (DASH_DEFAULT_HIDDEN) and has no
    way to be reached at all on mobile (.chat-card's own display:none rule —
-   see openMobileChat() below), so #header-chat-btn is the one place a
-   viewer can learn new messages exist without the panel already being
-   open, and (on mobile specifically) the only way to reach it at all. */
+   see openMobileChat() below), so the header menu's Chat item
+   (#header-chat-btn) is the one way to reach it on mobile, and its unread
+   badge, mirrored onto the hamburger trigger (#header-menu-badge), is the
+   one place a viewer can learn new messages exist without the panel
+   already being open. */
 var _chatUnreadCount = 0;
 
 /* True exactly when the chat log is already on-screen and doesn't need
@@ -5900,12 +5813,15 @@ function updateHeaderChatBtn() {
   if (!btn || !badge) return;
   if (_chatIsBeingViewed()) _chatUnreadCount = 0;
   btn.style.display = (window._kioskRole && !_chatIsBeingViewed()) ? '' : 'none';
-  if (_chatUnreadCount > 0) {
-    badge.textContent = _chatUnreadCount > 9 ? '9+' : String(_chatUnreadCount);
-    badge.style.display = '';
-  } else {
-    badge.style.display = 'none';
-  }
+  /* Same count on the Chat menu item and on the hamburger trigger, which is
+     the only one visible while the menu is closed. */
+  var menuBadge = document.getElementById('header-menu-badge');
+  var show = _chatUnreadCount > 0 && btn.style.display !== 'none';
+  [badge, menuBadge].forEach(function(b) {
+    if (!b) return;
+    b.textContent = show ? (_chatUnreadCount > 9 ? '9+' : String(_chatUnreadCount)) : '';
+    b.style.display = show ? '' : 'none';
+  });
 }
 
 /* Called on every genuinely-new poll batch (never the first poll after
@@ -10122,7 +10038,10 @@ function toggleDashEditMode() {
   var area = document.getElementById('content-area');
   if (area) area.classList.toggle('dash-edit', _dashEditOn);
   var btn = document.getElementById('dash-edit-btn');
-  if (btn) btn.classList.toggle('active', _dashEditOn);
+  if (btn) {
+    btn.classList.toggle('active', _dashEditOn);
+    btn.textContent = _dashEditOn ? 'Done Editing' : 'Edit Layout';
+  }
 }
 
 /* ── Hide/unhide: hide has no toggle left on the card itself once it's
@@ -10357,7 +10276,7 @@ function dashDividerEnd() {
    container size actually matching reality. */
 initDashLayout();
 initMap();
-updateKioskThemeBtn();   /* issue #153: sync the mobile theme button's icon/title with whatever the <head> inline script already applied */
+updateKioskThemeBtn();   /* issue #153: sync the header menu's theme item label with whatever the <head> inline script already applied */
 refreshBoard();
 refreshWeather();
 refreshNwsAlerts();
