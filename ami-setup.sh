@@ -386,5 +386,5 @@ fi
 echo "    -> AMI Diagnostics -> Run Test"
 echo ""
 echo "  To check logs:"
-echo "    journalctl -u HenWen -f"
+echo "    journalctl -u $SERVICE_NAME -f"
 echo "============================================"

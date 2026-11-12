@@ -123,3 +123,8 @@ class TestAmiSetupScript:
         rewrite = SRC.index('sed -i "s|^Environment=\\"AMI_USER=')
         assert SRC.index("Testing AMI login") < guard < rewrite
         assert "exit 1" in SRC[guard:rewrite]
+
+    def test_hints_name_the_unit_the_script_set_up(self):
+        """On a HenWen2 box the closing hint said `journalctl -u HenWen`."""
+        assert "journalctl -u HenWen " not in SRC
+        assert 'journalctl -u $SERVICE_NAME -f' in SRC
