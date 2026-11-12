@@ -612,6 +612,11 @@ input:checked + .slider::before  { transform: translateX(16px); background: var(
 #update-bar.show { display: flex; }
 #asl-web-ui-scope-bar:empty { display: none; }
 .asl-overlap { margin: 4px 0 14px; }
+/* W2 handover: the editors stay visible for reference but can't be changed
+   (_aslMakeReadOnly disables the controls; this only dims them). */
+.asl-readonly .val-input, .asl-readonly .switch { opacity: 0.55; }
+.asl-readonly [onclick^="backupRestore"],
+#page-raw-editor.asl-readonly .btn-success { display: none; }
 #node-drift-bar { margin-bottom: 16px; }
 #node-drift-bar:empty { display: none; }
 
@@ -4237,6 +4242,7 @@ function _applyFieldError(inputEl, err) {
 }
 
 function markChange(key, inputEl) {
+  if (_aslActivePageReadOnly()) return;   // W2 handover; the server refuses it too
   var val     = inputEl.value;
   var row     = inputEl.closest('.toggle-row');
   var cb      = row ? row.querySelector('input[type=checkbox]') : null;
@@ -4251,6 +4257,7 @@ function markChange(key, inputEl) {
 }
 
 function markToggle(key, cb) {
+  if (_aslActivePageReadOnly()) return;   // W2 handover; the server refuses it too
   var row     = cb.closest('.toggle-row');
   var input   = row ? row.querySelector('input[type=text], input[type=number], select') : null;
   var enabled = cb.checked;
@@ -8032,7 +8039,32 @@ function _aslPageKey(pageId) {
   // 'page-node-643930' -> 'node' (but not page-node-id / page-node-control).
   var m = pageId.match(/^page-(node)-(\d+)$/);
   if (m) return {key: 'node', node: m[2]};
+  if (/^page-template-/.test(pageId)) return {key: 'template', node: null};
   return {key: pageId.replace(/^page-/, ''), node: null};
+}
+
+// Pages HenWen stops writing once the UI is reachable (W2); the server
+// refuses the same writes (asl_web_ui_handover_gate). Macro and schedule
+// pages stay editable.
+var ASL_HANDOVER_PAGES = ['general', 'node', 'template', 'raw-editor', 'backups'];
+function _aslActivePageReadOnly() {
+  return !!document.querySelector('section.page.active.asl-readonly');
+}
+function _aslDisableControls(sec) {
+  sec.querySelectorAll('input, select, textarea').forEach(function(el) {
+    if (el.tagName === 'TEXTAREA') el.readOnly = true;   // still scrollable/copyable
+    else el.disabled = true;
+  });
+}
+function _aslMakeReadOnly(sec) {
+  sec.classList.add('asl-readonly');
+  _aslDisableControls(sec);
+  // The editors re-render whenever the page is opened or reloaded, so keep
+  // disabling whatever they draw, not just what exists right now.
+  if (window.MutationObserver && !sec._aslObserver) {
+    sec._aslObserver = new MutationObserver(function() { _aslDisableControls(sec); });
+    sec._aslObserver.observe(sec, {childList: true, subtree: true});
+  }
 }
 
 async function aslWebUiDecorate() {
@@ -8054,15 +8086,20 @@ async function aslWebUiDecorate() {
     var o = (d.overlap || {})[k.key];
     if (!o || sec.querySelector('.asl-overlap')) return;
     var route = o.route.replace('{node}', k.node || firstNode || '');
+    var readOnly = d.handover && ASL_HANDOVER_PAGES.indexOf(k.key) >= 0;
     var div = document.createElement('div');
-    div.className = 'alert alert-info asl-overlap';
-    div.innerHTML = 'AllStarLink\'s ASL Web UI also does this: <strong>' + esc(o.what) + '</strong>. '
+    div.className = 'alert ' + (readOnly ? 'alert-warn' : 'alert-info') + ' asl-overlap';
+    div.innerHTML = (readOnly
+        ? '<strong>Read-only here.</strong> On this node these settings are managed in AllStarLink\'s ASL Web UI: '
+        : 'AllStarLink\'s ASL Web UI also does this: ')
+      + '<strong>' + esc(o.what) + '</strong>. '
       + (d.url
         ? '<a href="' + esc(d.url + route) + '" target="_blank" rel="noopener">Open it there &#8599;</a>'
         : (d.direct_visit
           ? 'Open it through this node\'s web address (not HenWen\'s own port) at <span class="mono">/asl-web-ui/</span>.'
           : 'It isn\'t reachable from this address yet.'))
-      + ' HenWen is handing these pages over to it.';
+      + (readOnly ? '' : ' HenWen is handing these pages over to it.');
+    if (readOnly) _aslMakeReadOnly(sec);
     var title = sec.querySelector('.page-sub') || sec.querySelector('.page-title');
     if (title && title.nextSibling) sec.insertBefore(div, title.nextSibling);
     else sec.insertBefore(div, sec.firstChild);
