@@ -132,6 +132,25 @@ def test_setup_https_lan_rewrite_carries_the_rules(tmp_path):
         stripped.index("ProxyPass /asl-web-ui !")
 
 
+def test_setup_https_full_flow_carries_the_rules(tmp_path):
+    """Review of PR #14: the full flow rewrites the port-80 vhost from
+    scratch too. Run its own carry grep and re-insert on a scratch vhost."""
+    src = open(os.path.join(ROOT, "tx-spike", "setup-https.sh")).read()
+    pattern = re.search(r"ASL_CARRY=\$\(grep -E '([^']+)' \"\$HTTP_AVAIL\"", src).group(1)
+    assert ('henwen_insert_before_proxypass_each_block "$HTTP_AVAIL" "$FLASK_PORT" '
+            '"HenWen: ASL Web UI" "$ASL_CARRY"') in src
+    _, patched = _patch(tmp_path)
+    old = tmp_path / "old.conf"; old.write_text(patched)
+    fresh = tmp_path / "fresh.conf"; fresh.write_text(VHOST)
+    script = (f'. "{COMMON}"\nC=$(grep -E \'{pattern}\' "{old}")\n'
+              f'henwen_insert_before_proxypass_each_block "{fresh}" {PORT} "HenWen: ASL Web UI" "$C"\n')
+    assert subprocess.run(["bash", "-c", script]).returncode == 0
+    lines = [l.strip() for l in fresh.read_text().splitlines()]
+    assert lines.index("IncludeOptional /etc/apache2/conf-available/asl-web-ui.conf") \
+        < lines.index("ProxyPass /asl-web-ui !") \
+        < next(i for i, l in enumerate(lines) if l.startswith("ProxyPass        /"))
+
+
 def test_rollback_reenables_only_what_apply_disabled():
     assert 'touch "$BACKUP_DIR/global-conf-was-enabled"' in SRC
     assert 'if [ -e "$BACKUP_DIR/global-conf-was-enabled" ]' in open(ROLLBACK).read()
