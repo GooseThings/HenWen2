@@ -204,7 +204,14 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
   font-size: 1.2rem; letter-spacing: 0.06em; }
 .header-brand strong { color: var(--accent); font-size: 1.33rem; }
 .header-logo { height: 64px; width: 64px; object-fit: contain; flex-shrink: 0;
-  filter: drop-shadow(0 0 6px rgba(63,185,80,.35)); }
+  display: block; position: relative; z-index: 1; }
+/* The node's health light: a circle a little larger than the logo, sitting
+   behind it, so a ring of it and its glow show around the fully opaque logo
+   (green pulse = online, solid red = offline, dark until the first board
+   refresh). .keyed-dot's colors/glow are defined further down; this only
+   places it. The margin leaves the ring clear of the header's edge. */
+.header-logo-wrap { position: relative; flex-shrink: 0; margin: 6px; }
+.header-logo-wrap .keyed-dot { position: absolute; inset: -6px; width: auto; height: auto; z-index: 0; }
 /* Owner-uploaded club/callsign branding, centered independent of the two
    flex siblings either side (their widths differ, so plain flex centering
    can't put this dead-center against the whole header — absolute+transform
@@ -216,6 +223,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
   max-height: 59px; max-width: 293px; object-fit: contain; pointer-events: none;
 }
+/* Narrower desktop windows: shrink it so it stays clear of #node-info on its
+   right (which is capped at 24vw of text for the same reason). */
+@media (max-width: 1100px) { .header-club-logo { max-width: 150px; } }
 .btn-icon { background: var(--bg3); border: 1px solid var(--border); color: var(--text2);
   border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 0.82rem;
   text-decoration: none; display: inline-flex; align-items: center; gap: 4px;
@@ -232,50 +242,53 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
    states actually fit, so the row reflows (if anything) instead. */
 #tx-btn, #listen-btn, #mute-btn, #record-btn { padding: 8px 13px; font-size: 0.88rem; }
 
-/* Header's utility row (search/net-schedule/login/layout-edit/fullscreen/
-   manager) — lives in .header-actions, on the right of .header-brand via
-   .header's justify-content:space-between. nowrap + tightened per-button
-   padding (icon-only buttons don't need the wider 10px horizontal padding
-   .btn-icon uses elsewhere for icon+text combos like Listen/TX) so the
-   whole row reliably fits on one line even at phone widths; overflow-x:auto
-   is just a safety net for the narrowest devices rather than something
-   expected to trigger. */
-.header-actions { display: flex; gap: 7px; align-items: center; flex-wrap: nowrap; overflow-x: auto; }
+/* Header's right side: just the hamburger trigger (#header-menu-btn). Every
+   header action is a text item in the dropdown it opens (.header-menu-items),
+   at every screen width. */
+.header-actions { display: flex; gap: 7px; align-items: center; flex-wrap: nowrap; }
 /* font-size/border-radius/gap here are .btn-icon's own base values × 1.33,
    overridden just for header buttons (see the .header comment above) rather
    than changed on .btn-icon itself, which is also used outside the header
    (TX/Listen/Rec, Node Search tabs, dashboard hidden-panel buttons) and
    isn't meant to grow with it. */
 .header-actions .btn-icon { padding: 7px 9px; font-size: 1.09rem; border-radius: 8px; gap: 5px; flex-shrink: 0; }
-.header-actions #kiosk-login-btn { padding: 7px 13px; }
-/* Icon shown only on mobile (see the media query below) — desktop keeps
-   the plain text-only button unchanged. */
-svg.kiosk-login-icon { display: none; }
+#header-menu-btn { position: relative; }
 
-/* Chat header notification (issue #159) — a small count/dot pinned to the
-   button's own top-right corner. #header-chat-btn carries position:relative
-   inline (it's otherwise a plain .btn-icon) so this positions against the
-   button itself, not some ancestor further up. The ring uses --bg2 (the
-   button's own resting background per .btn-icon) so the badge reads as
-   sitting on top of the button rather than overlapping it. */
+/* The dropdown itself: position:fixed, opened and placed under the trigger
+   by toggleHeaderMenu() (same pattern as the map options menu, see
+   .map-ctl-dropdown). max-height + overflow-y keep a long menu usable on a
+   short screen. */
+.header-menu-items {
+  display: none; position: fixed; flex-direction: column; gap: 6px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px; min-width: 210px; max-height: calc(100vh - 90px); overflow-y: auto;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4); z-index: 2000;
+}
+/* Child selectors (>), not descendant: #dash-hidden-menu sits inside this
+   wrapper and renders small .btn-icon buttons of its own that must not pick
+   up the full-width menu-item styling. */
+.header-menu-items > .btn-icon,
+.header-menu-items > #dash-hidden-wrap > .btn-icon,
+.header-menu-items > #kiosk-user-bar > .btn-icon {
+  width: 100%; justify-content: flex-start; padding: 10px 14px; font-size: 0.98rem;
+}
+.header-menu-items #kiosk-user-bar {
+  flex-direction: column; align-items: stretch; width: 100%; gap: 6px;
+  border-top: 1px solid var(--border); padding-top: 6px;
+}
+
+/* Chat unread badge (issue #159). Two copies, kept in sync by
+   updateHeaderChatBtn(): one pinned to the hamburger trigger's top-right
+   corner (so unread chat is visible with the menu closed), and one at the
+   right end of the Chat menu item. The ring uses --bg2 so the trigger's copy
+   reads as sitting on top of the button rather than overlapping it. */
 .header-chat-badge {
   position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px;
   padding: 0 3px; border-radius: 999px; background: var(--danger); color: #fff;
   font-size: 0.62rem; font-weight: 700; line-height: 16px; text-align: center;
   box-shadow: 0 0 0 2px var(--bg2); pointer-events: none;
 }
-
-/* display:contents on desktop: this wrapper is invisible to layout, so its
-   children sit directly in .header-actions' flex row exactly as if it
-   didn't exist — zero visual change from before it was introduced. The
-   mobile media query below replaces this with the actual dropdown
-   presentation (see .header-menu-items there and #header-menu-btn). */
-.header-menu-items { display: contents; }
-/* Icon-only header buttons rely on their title= tooltip on desktop (mouse
-   hover) — that's not available on a touch device, so the mobile dropdown
-   below shows this text alongside each icon instead. Hidden here so
-   desktop's icon-only row is unchanged. */
-.header-menu-label { display: none; }
+.header-menu-items .header-chat-badge { position: static; margin-left: auto; box-shadow: none; }
 /* Collapse-state chevron for the mobile-only card accordion (issue #35) —
    hidden here so desktop, which has no collapse behavior at all, never
    shows it; the mobile media query turns it back on. */
@@ -407,91 +420,56 @@ svg.kiosk-login-icon { display: none; }
   gap: 10px; flex: 1; min-height: 0; position: relative;
 }
 
-.connected-card { grid-column: 5 / span 5; grid-row: 1 / span 24; }
+.connected-card { grid-column: 5 / span 5; grid-row: 6 / span 19; }
 
-/* ── Node status card: top of the left column, with the map below it.
+/* ── Controls card (.node-card / dash id "node": it was the Node card until
+   the node's identity moved into the header). Top of the middle column,
+   directly above Connected Nodes.
    The card's own frame always fills its grid cell exactly (same as every
-   other card here) — it's the *cell itself* that's kept fit to the card's
-   content, on both axes, rather than the card being sized independently of
-   it. Column width: dashFitNodeCard() shrinks the node/map column to the
-   button row's width (handing the reclaimed columns to the rest of the
-   dashboard), floored so a divider drag can never pull it in narrower than
-   that row needs (see dashMinLinesForSubtree()/dashUpdateNodeMinWidth() in
-   the JS). Row height: dashFitNodeCard() shrinks the row split to the card's
-   full measured content height, giving the leftover rows to the Map below —
-   and if the Map is hidden (or Node ends up with no sibling under it at
-   all), dashWalk()'s fold takes the card's own non-greedy floor instead of
-   the usual "hidden side's space goes entirely to its sibling" rule (see
-   DASH_NON_GREEDY/dashSubtreeGreedy()), so Node still only claims what its
-   content needs rather than stretching to the bottom of the window. The
-   span below is only what's painted until the first board refresh — it must
-   stay in step with DASH_DEFAULT_TREE's node/map ratio (10/24), same
-   invariant as every other default here.
-   That ratio was tuned to the actual measured height of a typical
-   populated card (header + identity block + controls + volume row),
-   not picked arbitrarily -- a static guess far from what
-   dashFitNodeCard() computes on the first real refresh is itself a
-   layout-shift source (issue #101: a 6/24 guess against real content
-   came out closer to 10/24, a jump big enough to register as the
-   single largest contributor to a 0.774 Lighthouse CLS score). This
-   still won't be exact for every install (callsign/location length,
-   which buttons a viewer's role shows, etc. all vary), but it should
-   land close enough that the one guaranteed first-refresh reflow is
-   barely visible instead of a full card resizing under the viewer.
-
-   The card itself carries no padding of its own — .card-header uses its
-   ordinary shared style (padding/border-bottom) exactly like every other
-   card's header (Connected Nodes, Favorites, Map, ...), so Node's header
-   inset matches theirs instead of compounding with a second, card-level
-   padding on top of it (a mismatch this app used to have: the header's own
-   padding was zeroed out here and the card's uniform 16px padding stood in
-   for it, making Node's top inset consistently bigger than every other
-   card's). All of the actual "pad the content, absorb the auto-fit
-   leftover" work happens one level down, in .node-body, below. ── */
+   other card here) — it's the *cell's height* that's kept fit to the card's
+   content: dashFitNodeCard() sets the row split between this and Connected
+   Nodes to the card's full measured content height, so Connected Nodes gets
+   every row the controls don't need, and gives rows back when the PTT bar
+   appears (armed) or its Experimental panel opens. That fit applies to the
+   default layout only. Once the layout is customized the card keeps the
+   size it is given, with its content height as a minimum (dashMinLineFor()).
+   The span below is only what's painted until the first board refresh — it
+   must stay in step with DASH_DEFAULT_TREE's controls/connected ratio
+   (5/24), same invariant as every other default here; a guess far from what
+   dashFitNodeCard() computes is itself a layout-shift source (issue #101).
+   The header is an ordinary .card-header, same inset as every other card's;
+   the padding and slack-absorbing happen one level down, in .node-body. ── */
 .node-card {
-  grid-column: 1 / span 4; grid-row: 1 / span 10;
+  grid-column: 5 / span 5; grid-row: 1 / span 5;
   background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
   display: flex; flex-direction: column; overflow: hidden; min-height: 0;
 }
-/* Everything below the header: the identity block, audio controls, and
-   volume slider. This is the flex child that actually gets padded and
-   centered — kept separate from .node-card/.card-header specifically so
-   the header's inset can stay identical to every other card's (see the
-   comment on .node-card above) while this part still absorbs the auto-fit
-   system's leftover slack on its own.
-   margin-top:auto is deliberately NOT used on the controls row: the card is
-   sized to its content by dashFitNodeCard(), so there's normally no slack
-   to push against. There's still a little left over — the row-span it
-   lands on has to be a whole number of the grid's row lines, so the fitted
-   height rounds up to the next line and leaves some slack, and how much
-   scales with the viewport (a taller content area means a taller row, so
-   the same 1-row-line overshoot is a bigger number of px). Concentrating
-   100% of that at either end reads badly at some screen size — pinned to
-   the bottom, it reads as an oversized gap between the volume slider and
-   the Map card's own header inset below; pinned to the top, it reads as an
-   oversized gap above the identity block on a tall enough viewport.
-   justify-content:center is the option that's never *egregiously* wrong at
-   any one size: worst case is half the slack on each side, rather than all
-   of it landing in one visibly oversized spot. */
+/* Everything below the header: the audio buttons, the volume slider and
+   (while armed) the PTT bar. This is the flex child that gets padded — kept
+   separate from .node-card/.card-header so the header's inset stays
+   identical to every other card's. The card's cell is sized to this content
+   by dashFitNodeCard(), so there is at most one grid row of slack, left at
+   the bottom. Top-aligned and overflow-y:auto rather than centered: once
+   the content outgrows the capped height (PTT bar with the Experimental
+   panel open) it has to scroll, and centered overflow would put the top
+   buttons out of reach. */
 .node-body {
   padding: 16px 12px; display: flex; flex-direction: column;
-  gap: 8px; overflow: hidden; min-height: 0; flex: 1;
-  justify-content: center;
+  gap: 8px; overflow-x: hidden; overflow-y: auto; min-height: 0; flex: 1;
+  justify-content: flex-start;
 }
-/* Node-wide audio controls (Arm TX / Listen / Rec), sitting under the node's
-   identity block. flex-wrap because every one of them is conditional — role,
+/* Node-wide audio controls (Arm TX / Listen / Mute / Rec), first row of the
+   Controls card. flex-wrap because every one of them is conditional — role,
    TX support, the can_record flag — so the row's width varies, and a
    narrowed column should drop a button to a second line rather than have
-   the card clip it (.node-body is overflow:hidden). My Recordings used to
-   live here too but moved up to the header's button row — it's
+   the card clip it. My Recordings used to
+   live here too but moved up to the header menu — it's
    account-scoped self-service, not really a control over *this* node's
    audio. */
 .node-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex-shrink: 0; }
-/* The row's own width comes from #node-info next to it (.node-body's
-   widest child, since the identity block's node number/callsign text is
-   normally wider than three small buttons) — without this, the buttons sat
-   left-aligned at their own natural width and left a blank strip on the
-   right up to that width. flex:1 1 0 divides whatever width the row
+/* The row's own width comes from the card's column, normally wider than
+   three small buttons — without this, the buttons sat left-aligned at their
+   own natural width and left a blank strip on the right. flex:1 1 0 divides whatever width the row
    actually has evenly across however many buttons are currently visible
    (role/permission/capability can hide any of them), and justify-content
    here (.btn-icon has none of its own, since it's used all over the app for
@@ -567,64 +545,79 @@ svg.kiosk-login-icon { display: none; }
   display: flex; align-items: center; }
 .chime-pause-btn:hover { opacity: 1; }
 .chime-pause-btn.active { color: var(--warn); opacity: 1; }
-/* Info-left / status-right grid, used on every width (see the mobile media
-   query below for the phone-tuned size overrides layered on top of this same
-   structure). Was originally mobile-only: the desktop card used a single
-   centered vertical stack, which wasted the column's width for what's really
-   just 3 lines of text plus a status badge and left most of node-card's
-   full-height column empty below it. #node-info's children are flat siblings
-   (see refreshBoard()'s nc.innerHTML), so a 2-column grid can place the
-   number/callsign/location column and the status badge independently
-   without any markup change — .keyed-wrap is explicitly given both axes
-   (col 2, spanning the other three's rows) so the grid's auto-placement
-   slots node-number/callsign/location into column 1 in DOM order around it. */
+/* Node identity block, in the header between the brand and the hamburger
+   (it was the top of the Node card before). Text on the left, right-aligned
+   against the health dot: line 1 is node number + callsign, line 2 the
+   location. min-width:0 + the ellipsis rules below let a long location
+   truncate instead of pushing the header wider; the max-width keeps it clear
+   of the absolutely-centered club logo. Phone sizes are in the mobile media
+   query. */
 #node-info {
-  display: grid; grid-template-columns: 1fr auto; align-items: center;
-  column-gap: 12px; row-gap: 2px; flex-shrink: 0; text-align: left;
+  display: flex; align-items: center; gap: 14px; margin-left: auto; margin-right: 16px;
+  min-width: 0; flex: 0 1 auto;
+}
+.node-info-msg { color: var(--text2); font-size: 0.9rem; white-space: nowrap; }
+.node-id-text { min-width: 0; max-width: 24vw; text-align: right; }
+.node-id-line { display: flex; align-items: baseline; justify-content: flex-end; gap: 10px; white-space: nowrap; }
+/* Only the callsign gives way when the line is too wide for its space (a
+   7-digit node, an -R suffix and the lock badge together on a 320px phone):
+   it truncates with an ellipsis; the number and the badge never shrink. */
+.node-id-line > * { flex-shrink: 0; }
+.node-id-line > .node-callsign { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* LOCKED shrinks to its padlock icon where the header is tight. */
+@media (max-width: 1100px) {
+  .locked-text { display: none; }
+  .node-id-text { max-width: 26vw; }
 }
 
 /* .hist-num is also reused by the node search results list (renderAslResults()) */
 .hist-num { font-size: 0.85rem; font-weight: 700; font-family: var(--mono); color: var(--accent); text-decoration: none; }
-.node-number, .node-callsign, .node-location { grid-column: 1; text-align: left; }
-.node-number { font-size: 2.4rem; font-weight: 700; line-height: 1; color: var(--accent); text-decoration: none; font-variant-numeric: tabular-nums; }
+.node-number { font-size: 1.8rem; font-weight: 700; line-height: 1; color: var(--accent); text-decoration: none; font-variant-numeric: tabular-nums; }
 .el-badge { display: inline-block; font-size: 0.6rem; font-weight: 700; letter-spacing: .02em;
   padding: 1px 4px; border-radius: 3px; background: rgba(88,166,255,.15); color: var(--accent);
   vertical-align: middle; margin-left: 3px; }
 .node-callsign { font-size: 1.25rem; font-weight: 600; color: var(--text); letter-spacing: 0.04em; text-decoration: none; }
 .node-callsign:hover { text-decoration: underline; }
-.node-location { font-size: 0.78rem; color: var(--text2); }
-
-.keyed-wrap { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 0;
-  grid-column: 2; grid-row: 1 / span 3; }
-.keyed-dot { width: 39px; height: 39px; border-radius: 50%; background: #222;
-  border: 3px solid #333; transition: background .4s, border-color .4s, box-shadow .4s;
-  display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.keyed-dot-logo { width: 100%; height: 100%; object-fit: contain; opacity: 0.3; }
-.keyed-dot.healthy { background: var(--green); border-color: #5de073;
-  box-shadow: 0 0 24px rgba(63,185,80,.65), 0 0 56px rgba(63,185,80,.25);
-  animation: pulse-k 2.8s ease-in-out infinite; }
-.keyed-dot.down { background: var(--danger); border-color: var(--danger);
-  box-shadow: 0 0 24px rgba(219,68,55,.65), 0 0 56px rgba(219,68,55,.25);
-  animation: none; }
-@keyframes pulse-k {
-  0%,100% { box-shadow: 0 0 24px rgba(63,185,80,.65), 0 0 56px rgba(63,185,80,.25); }
-  50%      { box-shadow: 0 0 38px rgba(63,185,80,.9),  0 0 75px rgba(63,185,80,.4);  }
+.node-location { font-size: 0.82rem; color: var(--text2); margin-top: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Narrower desktop windows: a step down so number + callsign + padlock fit
+   beside the club logo without the callsign truncating. */
+@media (max-width: 1100px) {
+  .node-number { font-size: 1.5rem; }
+  .node-callsign { font-size: 1.1rem; }
 }
-.keyed-label { font-size: 0.8rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
-  color: var(--text2); }
-.keyed-label.healthy { color: var(--green); }
-.keyed-label.down { color: var(--danger); }
+
+.keyed-dot { border-radius: 50%; background: #222;
+  border: 3px solid #333; transition: background .4s, border-color .4s, box-shadow .4s; }
+/* Online breathes from almost black up to full bright green and back, ring
+   and glow together, so the light reads as a slow pulse around the logo.
+   Offline does not move: a solid red ring with a fixed halo, so the two
+   states differ by motion as well as by color. */
+.keyed-dot.healthy { animation: pulse-k 3.8s ease-in-out infinite; }
+.keyed-dot.down { animation: none; background: var(--danger); border-color: var(--danger);
+  box-shadow: 0 0 14px rgba(219,68,55,.7), 0 0 30px rgba(219,68,55,.3); }
+@keyframes pulse-k {
+  0%,100% { background: #061008; border-color: #0a1a0d;
+            box-shadow: 0 0 4px rgba(63,185,80,.15), 0 0 10px rgba(63,185,80,.05); }
+  50%     { background: var(--green); border-color: #5de073;
+            box-shadow: 0 0 22px rgba(63,185,80,.95), 0 0 46px rgba(63,185,80,.5); }
+}
+/* Reduced motion: hold the bright green instead of pulsing. */
+@media (prefers-reduced-motion: reduce) {
+  .keyed-dot.healthy { animation: none; background: var(--green); border-color: #5de073;
+    box-shadow: 0 0 14px rgba(63,185,80,.7), 0 0 30px rgba(63,185,80,.3); }
+}
+}
 .locked-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 0.72rem;
   font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px;
-  border-radius: 3px; margin-top: 4px; background: rgba(219,68,55,.15); color: var(--danger);
-  grid-column: 1 / span 2; justify-self: start; }
+  border-radius: 3px; background: rgba(219,68,55,.15); color: var(--danger); align-self: center; }
 .link-count { font-size: 0.82rem; color: var(--text2); }
 .link-count span { color: var(--text); font-weight: 600; }
 
 /* ── Dashboard grid: resizable/movable/hideable cards (desktop only — see
    dashSupported() in JS; mobile keeps the fixed stacked layout untouched).
    Move and resize controls are hidden until .content-area gets .dash-edit
-   (toggled by the layout-dashboard header button) so the kiosk stays clean
+   (toggled by the header menu's Edit Layout item) so the kiosk stays clean
    for passive viewing. */
 .dash-card { position: relative; }
 .dash-header-grip { cursor: grab; color: var(--text2); opacity: 0; width: 0; margin-right: 0;
@@ -702,8 +695,8 @@ svg.kiosk-login-icon { display: none; }
 }
 /* min-height:0 overrides the flex default of min-height:auto (content-sized),
    which otherwise refuses to let this shrink below its content height — so
-   e.g. arming TX (which adds #tx-bar above this in the same flex column)
-   would grow the whole column past .connected-card's fixed height instead of
+   anything shown above this in the same flex column (the connect form, a
+   warning bar) would grow the whole column past .connected-card's fixed height instead of
    this scrolling within the space left over, clipping node entries via the
    card's own overflow:hidden. */
 .node-list { flex: 1; overflow-y: auto; min-height: 0; scrollbar-color: var(--border) transparent; }
@@ -900,7 +893,7 @@ svg.kiosk-login-icon { display: none; }
 .mesh-text { font-size: 0.78rem; color: var(--text); word-wrap: break-word; margin-top: 1px; }
 
 /* ── Map ── */
-.map-card { grid-column: 1 / span 4; grid-row: 11 / span 14; min-height: 0;
+.map-card { grid-column: 1 / span 4; grid-row: 1 / span 24; min-height: 0;
   background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
   display: flex; flex-direction: column; overflow: hidden; }
 #map { flex: 1; background: #0d1117; }
@@ -1093,8 +1086,8 @@ svg.kiosk-login-icon { display: none; }
 .sb-btn.btmic.on    { background: rgba(88,166,255,.08); border-color: rgba(88,166,255,.3); color: var(--accent); }
 .sb-btn.btmic.on:hover { background: rgba(88,166,255,.2); }
 
-/* always-visible connect bar */
-.conn-form-bar { padding: 7px 18px; border-bottom: 1px solid var(--border);
+/* always-visible connect bar: last row of the Controls card */
+.conn-form-bar { padding: 8px 0 0; border-top: 1px solid var(--border);
   display: flex; gap: 6px; align-items: center; flex-shrink: 0; flex-wrap: wrap; }
 .conn-form-bar input { width: 100px; font-family: var(--mono); font-size: 0.82rem;
   padding: 3px 7px; border: 1px solid var(--border); border-radius: 4px;
@@ -1167,9 +1160,9 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
    button above — see refreshBoard()'s own comment on this). */
 .idle-badge.off { opacity: 0.45; }
 
-/* Browser-transmit PTT bar (inline in the Connected Nodes card while armed) */
-#tx-bar { padding: 8px 18px; border-bottom: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 5px; }
+/* Browser-transmit PTT bar (last thing in the Controls card, while armed) */
+#tx-bar { padding: 8px 0 0; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 5px; flex-shrink: 0; }
 #tx-ptt { width: 100%; padding: 18px 14px; font-size: 1rem; font-weight: 700;
   background: rgba(63,185,80,.08); border: 2px solid rgba(63,185,80,.4);
   border-radius: 8px; color: var(--green); cursor: pointer;
@@ -1247,73 +1240,42 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
      every other card gets — NOT fused with the Node card below it (an
      earlier iteration of this mobile layout fused them; also since dropped
      is the Node card's own "NODE" title bar that fused box used to rest
-     on — see #node-info further down, now a complete box with no header
-     above it). .board's gap above is what puts normal card-to-card spacing
+     on). The node's identity block (#node-info) sits in this header now. .board's gap above is what puts normal card-to-card spacing
      between this and whatever comes next — normally the net-schedule
      reminder bar, weather-alert ticker, and/or Owner kiosk banner (#net-bar/
      #nws-alert-bar/#kiosk-banner-bar, each independently shown only when
      relevant), then the Node card — since those already sit in that DOM
      order between <header> and .content-area. */
   .header {
-    flex-wrap: wrap; row-gap: 13px;
+    flex-wrap: nowrap;
     background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
     padding: 13px 17px;
   }
   .header-logo { height: 37px; width: 37px; }
-  .header-brand { font-size: 0.96rem; }
+  .header-logo-wrap { margin: 4px; }
+  .header-logo-wrap .keyed-dot { inset: -4px; border-width: 2px; }
+  .header-brand { font-size: 0.96rem; flex-shrink: 0; gap: 9px; }
   .header-brand strong { font-size: 1.1rem; }
   /* "KIOSK" dropped on mobile — the visitor already knows they're on their
      own phone, so the label was just redundant noise crowding the header;
      this leaves the brand line as plain "HenWen" (issue: was "HenWen
      KIOSK MOBILE" before the "MOBILE" suffix was dropped too). */
   .header-brand-kiosk-label { display: none; }
+  /* Narrowest phones: the wordmark gives its width to the node identity
+     block; the logo still carries the brand. */
+  @media (max-width: 400px) { .header-brand strong { display: none; } }
   .header-actions { gap: 11px; }
-  /* Login is icon-only here (text hidden, icon shown — the reverse of
-     desktop) rather than the plain text button desktop uses: with the
-     logo/wordmark already sized up 20% above, the wider text button was
-     enough extra width in .header-actions to push .header past one line
-     and wrap into two whenever a visitor wasn't logged in (logged-in state
-     never showed this since #kiosk-login-btn is display:none then).
-     Padding matches every other icon-only header button instead of the
-     wider text-button padding .header-actions #kiosk-login-btn normally
-     gets. */
-  svg.kiosk-login-icon { display: inline-block; }
-  .kiosk-login-label { display: none; }
-  .header-actions #kiosk-login-btn { padding: 7px 9px; }
   .header-club-logo { display: none; }
 
   /* No physical keyboard on mobile, so the Space-bar PTT shortcut hint is
      just noise on a touch device (the button itself is still the PTT). */
   .tx-ptt-space-hint { display: none; }
 
-  /* Header hamburger (issue #35): everything except Login folds into one
-     menu instead of a scrollable icon strip. #header-menu-items keeps
-     display:contents' desktop flow above; here it becomes the actual
-     dropdown, opened/positioned by toggleHeaderMenu() the same way the map
-     options menu works (see .map-ctl-dropdown). */
-  #header-menu-btn { display: flex !important; }
-  /* Fullscreen (issue #123): shown directly in the header instead of buried
-     a tap deeper inside the hamburger — see the HTML comment by
-     #header-fs-btn. Its in-menu twin (#header-fs-menu-btn) is hidden here
-     so mobile only ever offers the one copy. */
-  #header-fs-btn { display: flex !important; }
-  #header-fs-menu-btn { display: none !important; }
-  .header-menu-items {
-    display: none; position: fixed; flex-direction: column; gap: 11px;
-    background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
-    padding: 13px; min-width: 220px; box-shadow: 0 4px 16px rgba(0,0,0,.4); z-index: 2000;
-  }
-  /* Bigger touch targets than the same buttons get elsewhere (e.g. the
-     Connected Nodes header) — this is a vertical list of one-shot taps with
-     nothing else competing for the row's width, so there's no reason to
-     keep them icon-strip-sized here. ~44px tall meets the usual minimum
-     touch-target guidance. Padding/font-size are the button's own pre-scale
-     values × 1.1 (same "buttons 10% larger" pass as .sb-btn below). */
-  .header-menu-items .btn-icon {
-    width: 100%; justify-content: flex-start; padding: 13px 15px; font-size: 1.1rem;
-  }
-  .header-menu-items #kiosk-user-bar { flex-direction: column; align-items: stretch; width: 100%; gap: 6px; }
-  .header-menu-label { display: inline; margin-left: 10px; }
+  /* Header menu items: bigger touch targets than desktop's (~44px tall meets
+     the usual minimum touch-target guidance). */
+  .header-menu-items { gap: 11px; padding: 13px; min-width: 220px; }
+  .header-menu-items > .btn-icon,
+  .header-menu-items > #kiosk-user-bar > .btn-icon { padding: 13px 15px; font-size: 1.1rem; }
 
   /* Weather bar hidden entirely on mobile (issue #35) — not just collapsed,
      since there's no header affordance to tap here the way cards have.
@@ -1411,33 +1373,10 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
 
   /* Cards no longer share an implicit grid-row height, so each gets its own
      cap with an internally-scrolling list instead of flexing to fill a row. */
-  /* .node-card itself carries no visible chrome at all on mobile — it's
-     split into two independent-looking boxes instead, both drawn on its
-     actual children rather than on a wrapper: #node-info (a complete box of
-     its own — no "NODE" title bar above it; the big node number/callsign
-     already identify this card without one, so the label was dead weight)
-     and #node-controls + #listen-vol-row together (the Arm TX/Listen/Rec
-     buttons + volume slider) broken out into what reads as its own separate
-     card below that. .node-body's padding/gap move onto those pieces
-     directly so each can carry its own border/background independently. */
-  .node-card {
-    min-height: 0; max-height: none;
-    background: none; border: none; border-radius: 0; padding: 0;
-  }
-  .node-card > .card-header { display: none; }
-  .node-body { padding: 0; gap: 0; }
-  #node-info {
-    background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
-    padding: 13px 19px 17px; row-gap: 1px;
-  }
-  #node-controls {
-    margin-top: 13px; background: var(--bg2); border: 1px solid var(--border);
-    border-bottom: none; border-radius: 10px 10px 0 0; padding: 17px 19px 10px;
-  }
-  #listen-vol-row {
-    background: var(--bg2); border: 1px solid var(--border); border-top: none;
-    border-radius: 0 0 10px 10px; padding: 10px 19px 17px;
-  }
+  /* Controls is an ordinary card here too (title bar, one box), sized to
+     its content. */
+  .node-card { min-height: 0; max-height: none; flex: none; }
+  .node-body { overflow: visible; padding: 15px 17px; }
   .activity-card, .chat-card, .meshtastic-card { max-height: 320px; }
   /* Expanded, Favorites grows to fill whatever's left of the screen below
      Node + Connected Nodes instead of stopping at a fixed height — min-height:0
@@ -1451,9 +1390,7 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
      with a fixed max-height, .node-list's own overflow-y:auto (needed for
      the desktop fixed-grid-row layout) kicks in on mobile too, forcing an
      awkward internally-scrolling list on top of the page's own scroll once
-     more than a couple of nodes are connected, or the PTT bar (#tx-bar,
-     inline above the list in this same card while armed) eats into the
-     capped height. Letting the card grow to its content's natural height
+     more than a couple of nodes are connected. Letting the card grow to its content's natural height
      means every connected node is visible via the one ordinary page
      scroll instead. */
   .connected-card { max-height: none; }
@@ -1465,16 +1402,18 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
      below. */
   .card-title { font-size: 0.82rem; }
 
-  /* Node panel: same info-left/status-right grid as desktop now (see
-     #node-info above) — just tightened for phone width, since a single
-     column has less room to spare than the desktop card's full-height
-     column. Text sizes here and in .nr-*/.fav-* below are the pre-scale
-     mobile values × 1.2 ("cards text 20% larger"). */
-  .node-number { font-size: 1.92rem; }
-  .node-callsign { font-size: 1.14rem; }
-  .node-location { font-size: 0.86rem; }
-  .keyed-dot { width: 34px; height: 34px; }
-  .keyed-label { font-size: 0.74rem; }
+  /* Node identity in the header: one row with the logo, wordmark and
+     hamburger, so everything is sized off the viewport width (vw, clamped)
+     to fit down to a 320px-wide phone. The header no longer wraps; the
+     block takes whatever width is left and its location line truncates. */
+  #node-info { flex: 1 1 0; justify-content: flex-end; gap: clamp(6px, 2vw, 10px); margin: 0 clamp(6px, 2vw, 12px) 0 clamp(6px, 2vw, 12px); }
+  .node-id-text { max-width: none; }
+  .node-id-line { gap: clamp(4px, 1.6vw, 8px); }
+  .node-number { font-size: clamp(0.95rem, 4.6vw, 1.45rem); }
+  .node-callsign { font-size: clamp(0.78rem, 3.6vw, 1.1rem); letter-spacing: 0.02em; }
+  .node-location { font-size: clamp(0.62rem, 2.8vw, 0.8rem); margin-top: 2px; }
+  .node-info-msg { font-size: clamp(0.7rem, 3.2vw, 0.9rem); }
+  .locked-badge { padding: 2px 4px; }
 
   /* .node-row's stats line already wraps instead of truncating (see base
      styles) — just tighten sizes/gaps so more fits per line before wrapping
@@ -1663,19 +1602,6 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
     <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
     <circle cx="12" cy="7" r="4" />
   </symbol>
-  <symbol id="icon-door-open" viewBox="0 0 24 24">
-    <path d="M11 20H2" />
-    <path d="M11 4.562v16.157a1 1 0 0 0 1.242.97L19 20V5.562a2 2 0 0 0-1.515-1.94l-4-1A2 2 0 0 0 11 4.561z" />
-    <path d="M11 4H8a2 2 0 0 0-2 2v14" />
-    <path d="M14 12h.01" />
-    <path d="M22 20h-3" />
-  </symbol>
-  <symbol id="icon-maximize" viewBox="0 0 24 24">
-    <path d="M8 3H5a2 2 0 0 0-2 2v3" />
-    <path d="M21 8V5a2 2 0 0 0-2-2h-3" />
-    <path d="M3 16v3a2 2 0 0 0 2 2h3" />
-    <path d="M16 21h3a2 2 0 0 0 2-2v-3" />
-  </symbol>
   <symbol id="icon-book-open" viewBox="0 0 24 24">
     <path d="M12 7v14" />
     <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
@@ -1767,12 +1693,6 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
     <circle cx="15" cy="5" r="1" />
     <circle cx="15" cy="19" r="1" />
   </symbol>
-  <symbol id="icon-layout-dashboard" viewBox="0 0 24 24">
-    <rect width="7" height="9" x="3" y="3" rx="1" />
-    <rect width="7" height="5" x="14" y="3" rx="1" />
-    <rect width="7" height="9" x="14" y="12" rx="1" />
-    <rect width="7" height="5" x="3" y="16" rx="1" />
-  </symbol>
   <symbol id="icon-eye-off" viewBox="0 0 24 24">
     <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" />
     <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" />
@@ -1799,23 +1719,6 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
     <path d="m7 10 5 5 5-5" />
   </symbol>
-  <symbol id="icon-sun" viewBox="0 0 24 24">
-    <circle cx="12" cy="12" r="4" />
-    <path d="M12 2v2" />
-    <path d="M12 20v2" />
-    <path d="m4.93 4.93 1.41 1.41" />
-    <path d="m17.66 17.66 1.41 1.41" />
-    <path d="M2 12h2" />
-    <path d="M20 12h2" />
-    <path d="m6.34 17.66-1.41 1.41" />
-    <path d="m19.07 4.93-1.41 1.41" />
-  </symbol>
-  <symbol id="icon-moon" viewBox="0 0 24 24">
-    <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />
-  </symbol>
-  <symbol id="icon-message-circle" viewBox="0 0 24 24">
-    <path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719" />
-  </symbol>
 </svg>
 
 <div class="board">
@@ -1829,96 +1732,74 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
            Lighthouse's original 2x-headroom reasoning (issue #104) rather
            than upscaling logo-96.png. It's also the one fetched on the
            critical rendering path (visible immediately at boot, unlike the
-           favicon badge/keyed-dot below which only draw in later once board
-           data or a connection exists) — .keyed-dot-logo and
-           _drawFavicon()'s own 64px canvas draw already share this same
-           asset, so nothing new is being fetched. -->
-      <img class="header-logo" src="{{ request.script_root }}/static/logo-128{{ '-classic' if app_logo_classic else '' }}.png" alt="HenWen">
+           favicon badge, which only draws in later once board data or a
+           connection exists) — _drawFavicon()'s own 64px canvas draw
+           already shares this same asset, so nothing new is being fetched.
+           The .keyed-dot behind it is the node's health light, see
+           setHeaderStatus(). -->
+      <span class="header-logo-wrap" id="header-status" role="img" aria-label="HenWen">
+        <span class="keyed-dot" id="header-status-dot"></span>
+        <img class="header-logo" src="{{ request.script_root }}/static/logo-128{{ '-classic' if app_logo_classic else '' }}.png" alt="">
+      </span>
       <strong>HenWen</strong> <span class="header-brand-kiosk-label">KIOSK</span>
     </div>
     <img class="header-club-logo" id="club-logo-img" alt="" style="display:none">
+    <!-- Node identity (number, callsign, location) and the ONLINE/OFFLINE
+         health dot. Lived in the Node card until it moved up here; the Node
+         card below keeps only the audio controls. Filled by refreshBoard(). -->
+    <div id="node-info">
+      <div class="node-info-msg">Loading&hellip;</div>
+    </div>
     <div class="header-actions">
       <audio id="node-audio" preload="none">
         <source type="audio/webm; codecs=opus">
       </audio>
-      <button class="btn-icon" id="kiosk-login-btn" onclick="openKioskLogin()" title="Login" style="display:none"><svg class="icon kiosk-login-icon"><use href="#icon-user"></use></svg><span class="kiosk-login-label">Login</span></button>
-      <!-- Fullscreen (issue #123): the copy folded into the hamburger below
-           still covers desktop, but on mobile that means two extra taps
-           (open menu, then Fullscreen) for what's usually the very first
-           thing a kiosk-mounted phone needs. This one lives outside the
-           fold like Login above, hidden on desktop (redundant with the
-           menu copy there) and forced visible by the mobile media query,
-           which also hides #header-fs-menu-btn so it isn't offered twice. -->
-      <button class="btn-icon" id="header-fs-btn" onclick="toggleFS()" title="Fullscreen" style="display:none"><svg class="icon"><use href="#icon-maximize"></use></svg></button>
-      <!-- Light/dark toggle (issue #153): a quick one-tap toggle everywhere
-           (mobile and desktop both) alongside Manager > Settings' full
-           multi-theme picker (admin+ only, and a plain 'user'/kiosk account
-           has no Manager access at all) -- this is the only way most
-           visitors can flip the board's theme themselves. Flips between
-           just 'light' and 'dark' via the same henwen-theme localStorage
-           key Manager's own picker uses, so the two stay in sync -- picking
-           one of Manager's other named skins there still shows as "dark"
-           here until toggled, same simplification status-accessible.html's
-           own binary toggle already makes. Always visible, unlike Login/
-           Fullscreen/Chat just above/below, which each have a real reason
-           to hide sometimes (already logged in, already fullscreen, chat
-           already visible) -- there's no "already toggled" state for this
-           one. -->
-      <button class="btn-icon" id="header-theme-btn" onclick="toggleKioskTheme()" title="Switch to light theme"><svg class="icon"><use href="#icon-moon"></use></svg></button>
-      <!-- Chat notification (issue #159): Chat defaults to hidden even on
-           desktop (see DASH_DEFAULT_HIDDEN) and has no way to be reached at
-           all on mobile (.chat-card's own display:none rule below), so this
-           is the one place a viewer can learn new messages exist without
-           already having the panel open. Lives outside the fold like Login/
-           Fullscreen above so the badge stays visible without opening the
-           hamburger first; JS (updateHeaderChatBtn()) is what actually
-           shows/hides it, not a CSS breakpoint, since "chat is reachable
-           right now" depends on runtime dash-hidden/overlay state, not just
-           viewport width. -->
-      <button class="btn-icon" id="header-chat-btn" onclick="onHeaderChatClick()" title="Chat" style="display:none;position:relative"><svg class="icon"><use href="#icon-message-circle"></use></svg><span id="header-chat-badge" class="header-chat-badge" style="display:none"></span></button>
-      <!-- Everything else folds into a single hamburger menu on mobile (see
-           #header-menu-btn / .header-menu-items below) — desktop keeps them
-           as a plain inline row via display:contents, so this wrapper is
-           purely a mobile-width affordance, not a restructuring of what's
-           actually here. Login stays outside the fold since it's the one
-           action an anonymous mobile viewer is most likely to need. -->
+      <!-- Every header action lives in this one hamburger menu, at every
+           screen width, as a plain text item (no icons). Only the hamburger
+           trigger itself sits in the header. toggleHeaderMenu() opens it as
+           a fixed-position dropdown under the trigger. Which items show
+           depends on login state/role exactly as before: each item's own
+           updater sets its display (updateKioskUserBar(), updateHeaderChatBtn(),
+           _dvswitchBridgeBtnUpdate(), updateDashHiddenBtn(), ...). -->
       <div class="header-menu-items" id="header-menu-items">
-        <!-- Search stays hidden until login (it bridges RF, like every other
-             connect path); the net-schedule calendar is always visible. -->
-        <button class="btn-icon" id="node-search-btn" onclick="openSearchModal()" title="Search the AllStar and EchoLink directories for nodes to connect to" style="display:none"><svg class="icon"><use href="#icon-search"></use></svg><span class="header-menu-label">Search</span></button>
-        <!-- DVSwitch DMR bridge quick-connect: only shown once DVSwitch is
-             enabled/configured with a bridge node (see api_dvswitch_status())
-             AND the viewer is logged in -- same "bridges RF, hidden until
-             login" gate Search above already uses. Saves a user from having
-             to already know the bridge's internal AllStar node number in
-             order to link to it via the plain Node # form. Hidden by
-             default; _dvswitchBridgeBtnUpdate() (called from
-             loadDvswitchStatus(), which already re-runs on login/logout and
-             every 15s) shows it once both conditions are confirmed. -->
-        <button class="btn-icon" id="dvswitch-bridge-btn" onclick="connectDvswitchBridge()" title="Connect to the DVSwitch DMR bridge" style="display:none"><svg class="icon"><use href="#icon-radio-tower"></use></svg><span class="header-menu-label">DMR Bridge</span></button>
-        <button class="btn-icon" id="net-cal-btn" onclick="openNetModal()" title="Net Schedule — scheduled net reminders"><svg class="icon"><use href="#icon-calendar-days"></use></svg><span class="header-menu-label">Net Schedule</span></button>
-        <button class="btn-icon" id="myrec-btn" onclick="openMyRecordingsModal()" style="display:none" title="View, rename, download, or delete your saved recordings"><svg class="icon"><use href="#icon-folder-open"></use></svg><span class="header-menu-label">My Recordings</span></button>
-        <div id="kiosk-user-bar" style="display:none;align-items:center;gap:6px;font-size:0.75rem;flex-shrink:0">
-          <button class="btn-icon" onclick="openAccountModal()" title="Change your password or set up two-factor authentication"><svg class="icon"><use href="#icon-user"></use></svg><span class="header-menu-label">Account</span></button>
-          <button class="btn-icon" onclick="kioskLogout()" title="Logout"><svg class="icon"><use href="#icon-door-open"></use></svg><span class="header-menu-label">Logout</span></button>
-        </div>
-        <div id="dash-hidden-wrap" style="position:relative;display:inline-flex">
-          <button class="btn-icon" id="dash-hidden-btn" onclick="toggleDashHiddenMenu(event)" title="Hidden panels" style="display:none"><svg class="icon"><use href="#icon-eye-off"></use></svg></button>
-          <!-- position:fixed, not absolute: .header-actions has overflow-x:auto as a
-               narrow-screen safety net (see its CSS comment), which implicitly sets
-               overflow-y:auto too — an absolutely-positioned dropdown anchored inside
-               it would get clipped/scrolled instead of floating over the page.
-               toggleDashHiddenMenu() computes top/right from the button's own
-               bounding rect each time it opens since fixed positioning is
-               viewport-relative, not relative to #dash-hidden-wrap. -->
+        <button class="btn-icon" id="kiosk-login-btn" onclick="openKioskLogin()" style="display:none">Login</button>
+        <!-- Chat (issue #159): shown only while the Chat panel is not already
+             on screen. Its unread badge is mirrored onto the hamburger
+             trigger (#header-menu-badge) so new messages are still noticed
+             with the menu closed. -->
+        <button class="btn-icon" id="header-chat-btn" onclick="onHeaderChatClick()" style="display:none">Chat<span id="header-chat-badge" class="header-chat-badge" style="display:none"></span></button>
+        <!-- Search and DMR Bridge stay hidden until login (both bridge RF,
+             like every other connect path); DMR Bridge additionally needs
+             DVSwitch configured with a bridge node (_dvswitchBridgeBtnUpdate()).
+             The net-schedule calendar is always visible. -->
+        <button class="btn-icon" id="node-search-btn" onclick="openSearchModal()" title="Search the AllStar and EchoLink directories for nodes to connect to" style="display:none">Search</button>
+        <button class="btn-icon" id="dvswitch-bridge-btn" onclick="connectDvswitchBridge()" title="Connect to the DVSwitch DMR bridge" style="display:none">DMR Bridge</button>
+        <button class="btn-icon" id="net-cal-btn" onclick="openNetModal()" title="Scheduled net reminders">Net Schedule</button>
+        <button class="btn-icon" id="myrec-btn" onclick="openMyRecordingsModal()" style="display:none" title="View, rename, download, or delete your saved recordings">My Recordings</button>
+        <!-- Hidden Panels / Edit Layout are desktop-only (dashSupported());
+             the mobile media query hides both. The wrap is display:contents
+             so it takes no slot of its own while its button is hidden. -->
+        <div id="dash-hidden-wrap" style="display:contents">
+          <button class="btn-icon" id="dash-hidden-btn" onclick="toggleDashHiddenMenu(event)" title="Show a panel you have hidden" style="display:none" aria-haspopup="true">Hidden Panels</button>
+          <!-- position:fixed, placed by toggleDashHiddenMenu() from the
+               button's own bounding rect each time it opens. -->
           <div id="dash-hidden-menu" style="display:none;position:fixed;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:6px;min-width:170px;box-shadow:0 4px 16px rgba(0,0,0,.4);z-index:50;font-size:0.78rem"></div>
         </div>
-        <button class="btn-icon" id="dash-edit-btn" onclick="toggleDashEditMode()" title="Rearrange, resize, or hide the panels below"><svg class="icon"><use href="#icon-layout-dashboard"></use></svg></button>
-        <button class="btn-icon" id="header-fs-menu-btn" onclick="toggleFS()" title="Fullscreen"><svg class="icon"><use href="#icon-maximize"></use></svg><span class="header-menu-label">Fullscreen</span></button>
-        <a class="btn-icon" href="{{ request.script_root }}/accessible" title="Accessible View — larger text and screen-reader support"><svg class="icon"><use href="#icon-eye"></use></svg><span class="header-menu-label">Accessible</span></a>
-        <a class="btn-icon" id="manager-link-btn" href="{{ request.script_root }}/henwen-manager" target="_blank" rel="noopener" title="Manager"><svg class="icon"><use href="#icon-book-open"></use></svg><span class="header-menu-label">Manager</span></a>
+        <button class="btn-icon" id="dash-edit-btn" onclick="toggleDashEditMode()" title="Rearrange, resize, or hide the panels below">Edit Layout</button>
+        <!-- Light/dark toggle (issue #153): flips between 'light' and 'dark'
+             via the same henwen-theme localStorage key Manager's own picker
+             uses. The label names the theme a click switches TO
+             (updateKioskThemeBtn()). -->
+        <button class="btn-icon" id="header-theme-btn" onclick="toggleKioskTheme()">Light Theme</button>
+        <button class="btn-icon" id="header-fs-btn" onclick="toggleFS()">Fullscreen</button>
+        <a class="btn-icon" href="{{ request.script_root }}/accessible" title="Larger text and screen-reader support">Accessible View</a>
+        <a class="btn-icon" id="manager-link-btn" href="{{ request.script_root }}/henwen-manager" target="_blank" rel="noopener">Manager</a>
+        <div id="kiosk-user-bar" style="display:none">
+          <button class="btn-icon" onclick="openAccountModal()" title="Change your password or set up two-factor authentication">Account</button>
+          <button class="btn-icon" onclick="kioskLogout()">Logout</button>
+        </div>
       </div>
-      <button type="button" class="btn-icon" id="header-menu-btn" onclick="toggleHeaderMenu(event)" title="Menu" aria-haspopup="true" aria-expanded="false" style="display:none"><svg class="icon"><use href="#icon-menu"></use></svg></button>
+      <button type="button" class="btn-icon" id="header-menu-btn" onclick="toggleHeaderMenu(event)" title="Menu" aria-label="Menu" aria-haspopup="true" aria-expanded="false"><svg class="icon"><use href="#icon-menu"></use></svg><span id="header-menu-badge" class="header-chat-badge" style="display:none"></span></button>
     </div>
   </header>
 
@@ -1953,7 +1834,7 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
   </div>
 
   <!-- Content -->
-  <div class="content-area" id="content-area">
+  <div class="content-area" id="content-area" ondragover="dashAreaDragOver(event)" ondrop="dashAreaDrop(event)">
 
     <!-- Dashboard grid dividers: drag to resize (edit mode only). There are always
          exactly (card count - 1) — one per internal node of the split tree,
@@ -1968,19 +1849,19 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
     <!-- Shows which pane a dragged card will dock into (edge = split, center = swap). -->
     <div id="dash-drop-indicator" class="dash-drop-indicator" style="display:none"></div>
 
-    <!-- Node status: top of the left column, Map directly below it -->
+    <!-- Controls: every audio control for this node (Arm TX, Listen, Mute,
+         Rec, volume, and the PTT bar while armed), directly above Connected
+         Nodes. Still data-dash-id="node"/.node-card internally: it was the
+         Node card until the node's identity moved up into the header. -->
     <div class="node-card dash-card" data-dash-id="node"
          ondragover="dashDragOver(event)" ondragleave="dashDragLeave(event)" ondrop="dashDrop(event,'node')">
       <div class="card-header">
         <span class="dash-header-grip" draggable="true" title="Drag to move"
               ondragstart="dashDragStart(event,'node')" ondragend="dashDragEnd(event)"><svg class="icon"><use href="#icon-grip-vertical"></use></svg></span>
-        <span class="card-title">Node</span>
+        <span class="card-title">Controls</span>
         <button class="dash-hide-btn" onclick="toggleDashHide('node',event)" title="Hide panel"><svg class="icon"><use href="#icon-eye-off"></use></svg></button>
       </div>
       <div class="node-body" id="node-body">
-        <div id="node-info">
-          <div style="color:var(--text2);font-size:.9rem">Loading&hellip;</div>
-        </div>
         <!-- Node-wide audio controls: these act on the node itself (listen to
              it, record it, transmit through it), not on any one connected
              peer, which is why they live here rather than in the Connected
@@ -2001,6 +1882,85 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
           <span style="font-size:0.78rem;color:var(--text2);flex-shrink:0;display:flex;align-items:center;gap:4px" title="Listen volume"><svg class="icon"><use href="#icon-volume-2"></use></svg> Volume</span>
           <input type="range" id="listen-volume" min="0" max="100" value="100" disabled title="Listen volume — separate from your device's system volume" style="flex:1">
         </div>
+        <!-- The PTT control and everything that goes with it (mic meter/gain,
+             BT/Car Mic, Experimental Audio Sources, #tx-status). Shown only
+             while TX is armed; a ResizeObserver (see dashFitNodeCard()) grows
+             the card to fit when it appears or its panel opens. -->
+        <div id="tx-bar" style="display:none">
+          <button id="tx-ptt" disabled>
+            <div><svg class="icon"><use href="#icon-mic"></use></svg> PTT &mdash; hold to transmit&ensp;<span class="tx-ptt-space-hint" style="font-size:0.7rem;font-weight:400">(or hold Space &middot; keys in ~&frac12;s)</span></div>
+            <div id="tx-ptt-tot" style="font-size:0.7rem;font-weight:400;opacity:.8;display:none"></div>
+          </button>
+          <div id="tx-audio-row">
+            <span style="font-size:0.7rem;color:var(--text2);flex-shrink:0">Mic</span>
+            <div id="tx-meter"><div id="tx-meter-fill"></div></div>
+            <input type="range" id="tx-gain" min="0" max="200" value="100" title="Microphone gain">
+            <span id="tx-gain-val" style="font-size:0.7rem;color:var(--text2);width:3em;flex-shrink:0">100%</span>
+          </div>
+          <!-- BT/Car Mic and Experimental Audio Sources share one row; the
+               "setting saved" note follows them and wraps under on a narrow card. -->
+          <div style="display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap">
+            <button type="button" class="sb-btn btmic" id="tx-agc-btn"
+                    title="Off (default): the manual gain slider above controls level, but Android's Bluetooth call-audio routing does not engage, so a paired Bluetooth/car mic and speaker are not used for TX — only the phone's own mic. On: lets Android route TX through a connected Bluetooth/car mic and speaker (useful for Android Auto), but Android's own automatic gain control takes over the mic instead, so the slider above no longer affects level and a hot mic can clip; if it does, lower your phone's Bluetooth mic volume rather than the slider. Takes effect next time you arm TX.">
+              <svg class="icon"><use href="#icon-headphones"></use></svg> BT/Car Mic: <span id="tx-agc-btn-state">Off</span>
+            </button>
+            <button type="button" class="sb-btn btmic" id="tx-exp-btn"
+                    title="Experimental: pick the mic/speaker device and override each audio-processing flag independently, to see which combination makes Android route to a Bluetooth/Android Auto mic. Changes take effect next time you arm TX.">
+              <svg class="icon"><use href="#icon-headphones"></use></svg> Experimental Audio Sources
+            </button>
+            <div id="tx-agc-msg" style="font-size:0.7rem;color:var(--text2);line-height:1.3;display:none">
+              <div>Bluetooth mic setting saved</div>
+              <div>Re-arm TX for it to take effect</div>
+            </div>
+          </div>
+          <div id="tx-exp-panel">
+            <div class="exp-row">
+              <label for="tx-exp-mic">Mic device</label>
+              <select id="tx-exp-mic"><option value="">System default</option></select>
+            </div>
+            <div class="exp-row">
+              <label for="tx-exp-spk">Speaker (Listen)</label>
+              <select id="tx-exp-spk"><option value="">System default</option></select>
+            </div>
+            <div class="exp-row">
+              <label for="tx-exp-aec">Echo cancel</label>
+              <select id="tx-exp-aec"><option value="default">Default (on)</option><option value="on">Force on</option><option value="off">Force off</option></select>
+            </div>
+            <div class="exp-row">
+              <label for="tx-exp-ns">Noise suppress</label>
+              <select id="tx-exp-ns"><option value="default">Default (on)</option><option value="on">Force on</option><option value="off">Force off</option></select>
+            </div>
+            <div class="exp-row">
+              <label for="tx-exp-agc">Auto gain</label>
+              <select id="tx-exp-agc"><option value="default">Follow BT/Car Mic button</option><option value="on">Force on</option><option value="off">Force off</option></select>
+            </div>
+            <div class="exp-row">
+              <label for="tx-exp-path">Mic path</label>
+              <select id="tx-exp-path"><option value="default">Default (raw track only if AGC on)</option><option value="raw">Always raw track (no gain slider)</option><option value="graph">Always WebAudio gain graph</option></select>
+            </div>
+            <div class="exp-row">
+              <button type="button" class="sb-btn" id="tx-exp-scan">Rescan devices</button>
+              <button type="button" class="sb-btn" id="tx-exp-probe">Probe mic (3s)</button>
+              <button type="button" class="sb-btn" id="tx-exp-reset">Reset</button>
+            </div>
+            <div class="exp-note">Mic settings apply next time you arm TX (re-arm after changing). Speaker applies to the Listen player only. On Android Chrome the device lists are often just &ldquo;default&rdquo;, and Bluetooth/car audio usually can&rsquo;t be picked directly &mdash; it engages as a side effect of echo cancellation. Use Probe to see what the phone actually gives you; results are also logged to the server journal.</div>
+            <div id="tx-exp-out"></div>
+          </div>
+          <div id="tx-status" style="font-size:0.75rem;color:var(--accent);min-height:1em"></div>
+        </div>
+        <!-- Connect form (Node #, Connect, Monitor, Fav, Permanent): last thing
+             in the card. It used to head the Connected Nodes list. -->
+        <div class="conn-form-bar" id="conn-form-bar">
+          <input id="conn-form-node" type="text" inputmode="numeric" placeholder="Node #" maxlength="7"
+                 onkeydown="if(event.key==='Enter')statusConnectNew()">
+          <button class="sb-btn connect" onclick="statusConnectNew()">Connect</button>
+          <button class="sb-btn monitor" onclick="statusMonitorNew()">Monitor</button>
+          <button class="sb-btn fav" id="fav-add-btn" onclick="addToFavorites()" title="Add node to your Favorites list"><svg class="icon"><use href="#icon-star"></use></svg> Fav</button>
+          <label class="perm-label" id="perm-label" style="display:none">
+            <input type="checkbox" id="conn-perm-chk"> Permanent
+          </label>
+          <span id="conn-form-msg" style="font-size:0.75rem;color:var(--text2)"></span>
+        </div>
       </div>
     </div>
 
@@ -2015,82 +1975,8 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
           <button class="dash-hide-btn" onclick="toggleDashHide('connected',event)" title="Hide panel"><svg class="icon"><use href="#icon-eye-off"></use></svg></button>
         </span>
       </div>
-      <!-- Stays here, unlike the Arm TX button that raises it (now in the
-           Node card): this is the PTT control itself, and it wants the width
-           for its mic meter/gain row plus room for #tx-status's messages. -->
-      <div id="tx-bar" style="display:none">
-        <button id="tx-ptt" disabled>
-          <div><svg class="icon"><use href="#icon-mic"></use></svg> PTT &mdash; hold to transmit&ensp;<span class="tx-ptt-space-hint" style="font-size:0.7rem;font-weight:400">(or hold Space &middot; keys in ~&frac12;s)</span></div>
-          <div id="tx-ptt-tot" style="font-size:0.7rem;font-weight:400;opacity:.8;display:none"></div>
-        </button>
-        <div id="tx-audio-row">
-          <span style="font-size:0.7rem;color:var(--text2);flex-shrink:0">Mic</span>
-          <div id="tx-meter"><div id="tx-meter-fill"></div></div>
-          <input type="range" id="tx-gain" min="0" max="200" value="100" title="Microphone gain">
-          <span id="tx-gain-val" style="font-size:0.7rem;color:var(--text2);width:3em;flex-shrink:0">100%</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <button type="button" class="sb-btn btmic" id="tx-agc-btn"
-                  title="Off (default): the manual gain slider above controls level, but Android's Bluetooth call-audio routing does not engage, so a paired Bluetooth/car mic and speaker are not used for TX — only the phone's own mic. On: lets Android route TX through a connected Bluetooth/car mic and speaker (useful for Android Auto), but Android's own automatic gain control takes over the mic instead, so the slider above no longer affects level and a hot mic can clip; if it does, lower your phone's Bluetooth mic volume rather than the slider. Takes effect next time you arm TX.">
-            <svg class="icon"><use href="#icon-headphones"></use></svg> BT/Car Mic: <span id="tx-agc-btn-state">Off</span>
-          </button>
-          <div id="tx-agc-msg" style="font-size:0.7rem;color:var(--text2);line-height:1.3;display:none">
-            <div>Bluetooth mic setting saved</div>
-            <div>Re-arm TX for it to take effect</div>
-          </div>
-        </div>
-        <button type="button" class="sb-btn btmic" id="tx-exp-btn"
-                title="Experimental: pick the mic/speaker device and override each audio-processing flag independently, to see which combination makes Android route to a Bluetooth/Android Auto mic. Changes take effect next time you arm TX.">
-          <svg class="icon"><use href="#icon-headphones"></use></svg> Experimental Audio Sources
-        </button>
-        <div id="tx-exp-panel">
-          <div class="exp-row">
-            <label for="tx-exp-mic">Mic device</label>
-            <select id="tx-exp-mic"><option value="">System default</option></select>
-          </div>
-          <div class="exp-row">
-            <label for="tx-exp-spk">Speaker (Listen)</label>
-            <select id="tx-exp-spk"><option value="">System default</option></select>
-          </div>
-          <div class="exp-row">
-            <label for="tx-exp-aec">Echo cancel</label>
-            <select id="tx-exp-aec"><option value="default">Default (on)</option><option value="on">Force on</option><option value="off">Force off</option></select>
-          </div>
-          <div class="exp-row">
-            <label for="tx-exp-ns">Noise suppress</label>
-            <select id="tx-exp-ns"><option value="default">Default (on)</option><option value="on">Force on</option><option value="off">Force off</option></select>
-          </div>
-          <div class="exp-row">
-            <label for="tx-exp-agc">Auto gain</label>
-            <select id="tx-exp-agc"><option value="default">Follow BT/Car Mic button</option><option value="on">Force on</option><option value="off">Force off</option></select>
-          </div>
-          <div class="exp-row">
-            <label for="tx-exp-path">Mic path</label>
-            <select id="tx-exp-path"><option value="default">Default (raw track only if AGC on)</option><option value="raw">Always raw track (no gain slider)</option><option value="graph">Always WebAudio gain graph</option></select>
-          </div>
-          <div class="exp-row">
-            <button type="button" class="sb-btn" id="tx-exp-scan">Rescan devices</button>
-            <button type="button" class="sb-btn" id="tx-exp-probe">Probe mic (3s)</button>
-            <button type="button" class="sb-btn" id="tx-exp-reset">Reset</button>
-          </div>
-          <div class="exp-note">Mic settings apply next time you arm TX (re-arm after changing). Speaker applies to the Listen player only. On Android Chrome the device lists are often just &ldquo;default&rdquo;, and Bluetooth/car audio usually can&rsquo;t be picked directly &mdash; it engages as a side effect of echo cancellation. Use Probe to see what the phone actually gives you; results are also logged to the server journal.</div>
-          <div id="tx-exp-out"></div>
-        </div>
-        <div id="tx-status" style="font-size:0.75rem;color:var(--accent);min-height:1em"></div>
-      </div>
       <div class="connector-warn-bar" id="connector-warn-bar" style="display:none">
         <svg class="icon"><use href="#icon-triangle-alert"></use></svg> <span id="connector-warn-text"></span>
-      </div>
-      <div class="conn-form-bar" id="conn-form-bar">
-        <input id="conn-form-node" type="text" inputmode="numeric" placeholder="Node #" maxlength="7"
-               onkeydown="if(event.key==='Enter')statusConnectNew()">
-        <button class="sb-btn connect" onclick="statusConnectNew()">Connect</button>
-        <button class="sb-btn monitor" onclick="statusMonitorNew()">Monitor</button>
-        <button class="sb-btn fav" id="fav-add-btn" onclick="addToFavorites()" title="Add node to your Favorites list"><svg class="icon"><use href="#icon-star"></use></svg> Fav</button>
-        <label class="perm-label" id="perm-label" style="display:none">
-          <input type="checkbox" id="conn-perm-chk"> Permanent
-        </label>
-        <span id="conn-form-msg" style="font-size:0.75rem;color:var(--text2)"></span>
       </div>
       <div class="node-list" id="node-list">
         <div class="empty-msg">Loading&hellip;</div>
@@ -2733,8 +2619,8 @@ function toggleFS() {
   else document.exitFullscreen().catch(function(){});
 }
 
-/* Light/dark toggle (issue #153) — header button, shown everywhere (mobile
-   and desktop). Deliberately a plain binary flip between 'light' and 'dark'
+/* Light/dark toggle (issue #153) — an item in the header menu, at every
+   screen width. Deliberately a plain binary flip between 'light' and 'dark'
    via the same henwen-theme
    localStorage key Manager's own multi-theme picker writes (see THEME_NAMES
    there), same simplification status-accessible.html's own toggle already
@@ -2759,9 +2645,8 @@ function updateKioskThemeBtn() {
   var btn = document.getElementById('header-theme-btn');
   if (!btn) return;
   var isLight = document.documentElement.getAttribute('data-theme') === 'light';
-  btn.title = isLight ? 'Switch to dark theme' : 'Switch to light theme';
-  var use = btn.querySelector('use');
-  if (use) use.setAttribute('href', isLight ? '#icon-sun' : '#icon-moon');
+  /* The label names the theme a click switches to. */
+  btn.textContent = isLight ? 'Dark Theme' : 'Light Theme';
 }
 
 /* Screen Wake Lock: tied to fullscreenchange (not toggleFS itself) so it
@@ -2786,6 +2671,8 @@ function _releaseWakeLock() {
 document.addEventListener('fullscreenchange', function() {
   if (document.fullscreenElement) _acquireWakeLock();
   else _releaseWakeLock();
+  var fsBtn = document.getElementById('header-fs-btn');
+  if (fsBtn) fsBtn.textContent = document.fullscreenElement ? 'Exit Fullscreen' : 'Fullscreen';
 });
 document.addEventListener('visibilitychange', function() {
   if (document.visibilityState === 'visible' && document.fullscreenElement && !_wakeLock) _acquireWakeLock();
@@ -2836,10 +2723,10 @@ var _mapDirty           = false;  /* data changed while a popup was open */
    both gated to actually do anything only below the 860px breakpoint the
    rest of the mobile CSS already uses):
 
-   1. Header hamburger — collapses everything except Login into one menu,
+   1. Header hamburger — began here as a mobile-only fold; it is now the
+      header's one menu at every width (see #header-menu-items), with the
       same open/outside-click/fixed-position pattern as the map options
-      dropdown just below (#header-menu-items is display:contents on
-      desktop, so this is purely additive there).
+      dropdown just below.
    2. Collapsible Favorites card — starts collapsed to just its header on a
       phone; Node and Connected Nodes (what a visitor checks first) always
       stay expanded. Its open/closed state persists per-browser in
@@ -2898,6 +2785,15 @@ function closeHeaderMenu() {
   if (btn) btn.setAttribute('aria-expanded', 'false');
   _headerMenuOpen = false;
   document.removeEventListener('click', _headerMenuOutsideClick);
+  document.removeEventListener('keydown', _headerMenuKeydown);
+  /* The Hidden Panels submenu lives inside this menu, so it goes with it;
+     without this its own open flag would be left set and the next click on
+     Hidden Panels would do nothing. */
+  if (typeof hideDashHiddenMenu === 'function') hideDashHiddenMenu();
+}
+
+function _headerMenuKeydown(e) {
+  if (e.key === 'Escape') closeHeaderMenu();
 }
 
 function toggleHeaderMenu(e) {
@@ -2917,6 +2813,7 @@ function toggleHeaderMenu(e) {
   btn.setAttribute('aria-expanded', 'true');
   _headerMenuOpen = true;
   document.addEventListener('click', _headerMenuOutsideClick);
+  document.addEventListener('keydown', _headerMenuKeydown);
 }
 
 /* Close the menu once an item inside it is actually picked (Net Schedule,
@@ -4985,14 +4882,22 @@ function noteBoardFailure(why) {
                      BOARD_FAIL_TOLERANCE + ', not flagging yet):', why);
 }
 
+/* The health light behind the header logo. state: true = online (green
+   pulse), false = offline (solid red), null = unknown (dark). The words the
+   old ONLINE/OFFLINE label carried are on the wrap's tooltip/aria-label. */
+function setHeaderStatus(state, why) {
+  var dot = document.getElementById('header-status-dot');
+  var wrap = document.getElementById('header-status');
+  if (!dot || !wrap) return;
+  dot.classList.toggle('healthy', state === true);
+  dot.classList.toggle('down', state === false);
+  var text = state === true ? 'Node online' : state === false ? (why || 'Node offline') : '';
+  wrap.title = text;
+  wrap.setAttribute('aria-label', text ? 'HenWen — ' + text : 'HenWen');
+}
+
 function markServerUnreachable() {
-  var dot = document.querySelector('.keyed-dot');
-  var label = document.querySelector('.keyed-label');
-  if (dot) { dot.classList.remove('healthy'); dot.classList.add('down'); }
-  if (label) {
-    label.classList.remove('healthy'); label.classList.add('down');
-    label.textContent = 'OFFLINE'; label.title = 'Lost contact with the HenWen server';
-  }
+  setHeaderStatus(false, 'Offline — lost contact with the HenWen server');
 }
 
 function boardWatchdog() {
@@ -5022,23 +4927,23 @@ async function refreshBoard() {
     window._lastBoardNodes = nodes;
     var nc = document.getElementById('node-info');
     if (!nodes.length) {
-      nc.innerHTML = '<div style="color:var(--text2)">No nodes configured</div>';
+      nc.innerHTML = '<div class="node-info-msg">No nodes configured</div>';
+      setHeaderStatus(null);
     } else {
       var n = nodes[0];
-      /* Health circle: green pulse only when Asterisk is running, AMI is
+      /* Health light (behind the header logo): green pulse only when Asterisk is running, AMI is
          connected, and this node's AMI data isn't stale. Any one down = solid red. */
       var healthy = !!data.asterisk_active && !!data.ami_connected && !n.stale;
       nc.innerHTML =
-        nodeLink(n.node, 'node-number') +
-        callsignLink(n.callsign, 'node-callsign') +
-        (n.location ? '<div class="node-location">' + esc(n.location) + '</div>' : '') +
-        '<div class="keyed-wrap">' +
-          '<div class="keyed-dot ' + (healthy ? 'healthy' : 'down') + '">' +
-            '<img class="keyed-dot-logo" src="' + henwenLogoSrc(128) + '" alt="">' +
+        '<div class="node-id-text">' +
+          '<div class="node-id-line">' +
+            (n.locked ? '<span class="locked-badge" title="' + esc(n.locked_by ? 'Locked by ' + n.locked_by : 'Locked by the node owner') + '"><svg class="icon"><use href="#icon-lock"></use></svg><span class="locked-text"> LOCKED</span></span>' : '') +
+            nodeLink(n.node, 'node-number') +
+            callsignLink(n.callsign, 'node-callsign') +
           '</div>' +
-          '<div class="keyed-label ' + (healthy ? 'healthy' : 'down') + '">' + (healthy ? 'ONLINE' : 'OFFLINE') + '</div>' +
-        '</div>' +
-        (n.locked ? '<div class="locked-badge" title="' + esc(n.locked_by ? 'Locked by ' + n.locked_by : 'Locked by the node owner') + '"><svg class="icon"><use href="#icon-lock"></use></svg> LOCKED</div>' : '');
+          (n.location ? '<div class="node-location" title="' + esc(n.location) + '">' + esc(n.location) + '</div>' : '') +
+        '</div>';
+      setHeaderStatus(healthy);
     }
 
     /* Update hosted-node star pins */
@@ -5878,9 +5783,11 @@ function _chatUpdateVisibility() {
 /* ── Header chat notification + mobile chat overlay (issue #159) ──
    Chat defaults to hidden even on desktop (DASH_DEFAULT_HIDDEN) and has no
    way to be reached at all on mobile (.chat-card's own display:none rule —
-   see openMobileChat() below), so #header-chat-btn is the one place a
-   viewer can learn new messages exist without the panel already being
-   open, and (on mobile specifically) the only way to reach it at all. */
+   see openMobileChat() below), so the header menu's Chat item
+   (#header-chat-btn) is the one way to reach it on mobile, and its unread
+   badge, mirrored onto the hamburger trigger (#header-menu-badge), is the
+   one place a viewer can learn new messages exist without the panel
+   already being open. */
 var _chatUnreadCount = 0;
 
 /* True exactly when the chat log is already on-screen and doesn't need
@@ -5900,12 +5807,15 @@ function updateHeaderChatBtn() {
   if (!btn || !badge) return;
   if (_chatIsBeingViewed()) _chatUnreadCount = 0;
   btn.style.display = (window._kioskRole && !_chatIsBeingViewed()) ? '' : 'none';
-  if (_chatUnreadCount > 0) {
-    badge.textContent = _chatUnreadCount > 9 ? '9+' : String(_chatUnreadCount);
-    badge.style.display = '';
-  } else {
-    badge.style.display = 'none';
-  }
+  /* Same count on the Chat menu item and on the hamburger trigger, which is
+     the only one visible while the menu is closed. */
+  var menuBadge = document.getElementById('header-menu-badge');
+  var show = _chatUnreadCount > 0 && btn.style.display !== 'none';
+  [badge, menuBadge].forEach(function(b) {
+    if (!b) return;
+    b.textContent = show ? (_chatUnreadCount > 9 ? '9+' : String(_chatUnreadCount)) : '';
+    b.style.display = show ? '' : 'none';
+  });
 }
 
 /* Called on every genuinely-new poll batch (never the first poll after
@@ -9542,30 +9452,21 @@ window.addEventListener('resize', function() {
 var DASH_COLS = 12, DASH_ROWS = 24;
 var DASH_GAP = 10;             /* must match .content-area's CSS `gap` */
 var DASH_MIN_CS = 2, DASH_MIN_RS = 3;
-/* Leaves that should never grow beyond their own measured minimum (see
-   dashMinLinesForSubtree()) when a sibling folds hidden space onto them —
-   every other card on this dashboard is "greedy" (Map, Favorites, etc. all
-   want whatever extra room they can get), but Node's whole point is to stay
-   exactly as big as its own content, even when the Map beneath it is hidden
-   and would otherwise leave it the entire column to itself. See
-   dashSubtreeGreedy() and dashWalkFolded(). */
-var DASH_NON_GREEDY = {node: true};
 var DASH_CARD_IDS = ['node', 'connected', 'map', 'activity', 'favorites', 'chat', 'meshtastic'];
-var DASH_CARD_TITLES = {node: 'Node', connected: 'Connected Nodes',
+var DASH_CARD_TITLES = {node: 'Controls', connected: 'Connected Nodes',
   map: 'Map', activity: 'Global Node Activity', favorites: 'Favorites', chat: 'Chat',
   meshtastic: 'Meshtastic'};
 /* Bumped whenever the default layout itself changes, not just when the card
    set does: dashLoadSaved() only rejects a saved tree that's structurally
    stale (a missing/unknown id), so an existing visitor's localStorage would
    otherwise pin them to the previous default forever. */
-var DASH_STORE_KEY = 'henwen-dash-layout-v9';
+var DASH_STORE_KEY = 'henwen-dash-layout-v10';
 
-/* Three visible columns by default: Node with the Map under it on the left,
-   Connected Nodes (alone, filling the column) in the middle, Favorites down
-   the right — see dashWalk()'s doc comment for how a {dir,ratio} node maps
-   to grid lines. The left column gets 4 of the 12 columns rather than the 3
-   the Node card used to have to itself, since the map underneath it is the
-   one card that actually wants width.
+/* Three visible columns by default: the Map (alone, filling the column) on
+   the left, Controls with Connected Nodes under it in the middle, Favorites
+   down the right — see dashWalk()'s doc comment for how a {dir,ratio} node
+   maps to grid lines. The left column gets 4 of the 12 columns, since the
+   map is the one card that actually wants width.
 
    The tree below still describes all seven cards in their full arrangement —
    Global Node Activity under Connected Nodes (13/24 vs 11/24), Meshtastic
@@ -9576,21 +9477,22 @@ var DASH_STORE_KEY = 'henwen-dash-layout-v9';
    unhiding restores exactly these proportions with no tree surgery. */
 var DASH_DEFAULT_TREE = {
   type: 'split', dir: 'col', ratio: 1 / 3,
-  /* The node/map ratio is a starting value only — dashFitNodeCard() replaces
-     it with a measurement of the Node card's actual text height on the first
-     board refresh (and rewrites it on resize). Keep it in step with
-     .node-card/.map-card's stylesheet row spans, which are what's painted
-     until that first measurement lands. */
-  a: {type: 'split', dir: 'row', ratio: 10 / 24,
-    a: {type: 'leaf', id: 'node'},
-    b: {type: 'leaf', id: 'map'}
-  },
+  a: {type: 'leaf', id: 'map'},
   b: {type: 'split', dir: 'col', ratio: 5 / 8,
-    a: {type: 'split', dir: 'row', ratio: 13 / 24,
-      a: {type: 'leaf', id: 'connected'},
-      b: {type: 'split', dir: 'row', ratio: 7 / 11,
-        a: {type: 'leaf', id: 'activity'},
-        b: {type: 'leaf', id: 'meshtastic'}
+    /* The controls/rest ratio is a starting value only — dashFitNodeCard()
+       replaces it with a measurement of the Controls card's actual content
+       height on the first board refresh (and rewrites it whenever that
+       changes, e.g. the PTT bar appearing). Keep it in step with
+       .node-card/.connected-card's stylesheet row spans, which are what's
+       painted until that first measurement lands. */
+    a: {type: 'split', dir: 'row', ratio: 5 / 24,
+      a: {type: 'leaf', id: 'node'},
+      b: {type: 'split', dir: 'row', ratio: 13 / 24,
+        a: {type: 'leaf', id: 'connected'},
+        b: {type: 'split', dir: 'row', ratio: 7 / 11,
+          a: {type: 'leaf', id: 'activity'},
+          b: {type: 'leaf', id: 'meshtastic'}
+        }
       }
     },
     b: {type: 'split', dir: 'row', ratio: 16 / 24,
@@ -9618,13 +9520,6 @@ var _dashDragId = null;
 var _dashDividerDrag = null;
 var _dashDividerNodes = [];   /* rebuilt by dashWalk() each render; index matches the DOM .dash-divider els (DASH_CARD_IDS.length - 1 of them) */
 
-/* Measured pixel-size floors dashWalk()'s clamp honors on top of the generic
-   DASH_MIN_CS/DASH_MIN_RS, keyed by axis then card id — today only
-   'node' is ever populated, in both axes (see dashUpdateNodeMinWidth()/
-   dashUpdateNodeMinHeight()), so every other card keeps the plain
-   DASH_MIN_CS/DASH_MIN_RS floor it always had. */
-var _dashMinPx = {col: {}, row: {}};
-
 function dashSupported() { return window.matchMedia('(min-width: 861px)').matches; }
 function dashClamp(n, lo, hi) { n = parseInt(n, 10); if (isNaN(n)) n = lo; return Math.max(lo, Math.min(hi, n)); }
 function dashCardEl(id) { return document.querySelector('.dash-card[data-dash-id="' + id + '"]'); }
@@ -9640,17 +9535,20 @@ function dashCellSize(axis) {
   return ch ? (ch - (DASH_ROWS - 1) * DASH_GAP) / DASH_ROWS : 0;
 }
 /* Minimum line-span (columns for axis 'col', rows for axis 'row') a single
-   leaf must keep: the generic DASH_MIN_CS/DASH_MIN_RS floor, or a bigger one
-   if _dashMinPx has a measured pixel requirement for this id on this axis
-   (converted to lines at the current cell size — the same conversion
-   dashDividerStart() already does for drag deltas). */
+   leaf must keep: the generic floor for every card, with one exception. The
+   Controls card ('node') keeps enough rows for its own content
+   (_dashNodeMinRowPx, measured by dashFitNodeCard() and capped there), in
+   every layout: without it, arming TX in a customized layout would open the
+   PTT button below the fold of a card sized for Listen + volume. It is a
+   minimum on that one card only. The old Node card's other rules (a width
+   floor, and a cap that also limited whatever shared its column) are gone. */
+var _dashNodeMinRowPx = 0;
 function dashMinLineFor(axis, id) {
-  var genericMin = axis === 'col' ? DASH_MIN_CS : DASH_MIN_RS;
-  var px = _dashMinPx[axis][id];
-  if (!px) return genericMin;
-  var cell = dashCellSize(axis);
-  if (!(cell > 0)) return genericMin;
-  return Math.max(genericMin, Math.ceil((px + DASH_GAP) / (cell + DASH_GAP)));
+  if (axis === 'col') return DASH_MIN_CS;
+  if (id !== 'node' || !_dashNodeMinRowPx) return DASH_MIN_RS;
+  var cell = dashCellSize('row');
+  if (!(cell > 0)) return DASH_MIN_RS;
+  return Math.max(DASH_MIN_RS, Math.ceil((_dashNodeMinRowPx + DASH_GAP) / (cell + DASH_GAP)));
 }
 /* Minimum lines (along the given axis) an entire subtree needs, so a leaf's
    own floor (see dashMinLineFor()) propagates correctly through however the
@@ -9741,17 +9639,6 @@ function dashSubtreeHidden(node) {
   return dashSubtreeHidden(node.a) && dashSubtreeHidden(node.b);
 }
 
-/* True if `node` should expand to fill space reclaimed from a hidden
-   sibling (see dashWalkFolded()) — every leaf is greedy except the ones
-   listed in DASH_NON_GREEDY, and a subtree counts as greedy only if both
-   its sides are (one non-greedy leaf anywhere inside caps the whole
-   subtree at its own minimum, rather than letting it stretch on that
-   leaf's behalf). */
-function dashSubtreeGreedy(node) {
-  if (node.type === 'leaf') return !DASH_NON_GREEDY[node.id];
-  return dashSubtreeGreedy(node.a) && dashSubtreeGreedy(node.b);
-}
-
 /* ── Render: walk the tree, assigning each leaf a {col,cs,row,rs} rect in
    the 12x24 grid and collecting one descriptor per internal (split) node
    for the divider overlay — see the module doc comment above for how a
@@ -9770,8 +9657,8 @@ function dashWalk(node, colStart, colEnd, rowStart, rowEnd, rects, dividers) {
      at least one visible card, and every recursive call below only
      descends into a side that isn't fully hidden), so at most one of
      aHidden/bHidden is true. */
-  if (aHidden) { dashWalkFolded(node, node.b, colStart, colEnd, rowStart, rowEnd, rects, dividers); return; }
-  if (bHidden) { dashWalkFolded(node, node.a, colStart, colEnd, rowStart, rowEnd, rects, dividers); return; }
+  if (aHidden) { dashWalk(node.b, colStart, colEnd, rowStart, rowEnd, rects, dividers); return; }
+  if (bHidden) { dashWalk(node.a, colStart, colEnd, rowStart, rowEnd, rects, dividers); return; }
   if (node.dir === 'col') {
     var c = dashClamp(Math.round(colStart + (colEnd - colStart) * node.ratio),
       colStart + dashMinLinesForSubtree('col', node.a), colEnd - dashMinLinesForSubtree('col', node.b));
@@ -9784,27 +9671,6 @@ function dashWalk(node, colStart, colEnd, rowStart, rowEnd, rects, dividers) {
     dividers.push({node: node, dir: 'h', colStart: colStart, colEnd: colEnd, rowStart: r, rowEnd: r, range: {colStart: colStart, colEnd: colEnd, rowStart: rowStart, rowEnd: rowEnd}});
     dashWalk(node.a, colStart, colEnd, rowStart, r, rects, dividers);
     dashWalk(node.b, colStart, colEnd, r, rowEnd, rects, dividers);
-  }
-}
-
-/* Hands the range freed up by a hidden sibling to `survivor` — the whole
-   range, same as always, unless survivor is non-greedy (see
-   dashSubtreeGreedy()), in which case it only gets its own measured minimum
-   along the split's own axis (node.dir) and the rest of the range is simply
-   never assigned to anything, rendering as empty space rather than
-   stretching the survivor to fill it. This is what keeps the Node card from
-   ballooning to the window's full height when the Map beneath it is
-   hidden — see DASH_NON_GREEDY. */
-function dashWalkFolded(node, survivor, colStart, colEnd, rowStart, rowEnd, rects, dividers) {
-  if (dashSubtreeGreedy(survivor)) {
-    dashWalk(survivor, colStart, colEnd, rowStart, rowEnd, rects, dividers);
-    return;
-  }
-  var need = dashMinLinesForSubtree(node.dir, survivor);
-  if (node.dir === 'col') {
-    dashWalk(survivor, colStart, colStart + need, rowStart, rowEnd, rects, dividers);
-  } else {
-    dashWalk(survivor, colStart, colEnd, rowStart, rowStart + need, rects, dividers);
   }
 }
 
@@ -9848,14 +9714,9 @@ function dashApply() {
   _dashDividerNodes = dividers;
 
   /* Always write the walked rects, even on the still-default (un-customized)
-     layout: DASH_DEFAULT_TREE's ratios are kept in step with the CSS
-     stylesheet defaults (see its own doc comment), so this is a no-op change
-     from those defaults ordinarily — except when dashMinLinesForSubtree()'s
-     floor (e.g. the Node card's button row or its full content height, see
-     dashUpdateNodeMinWidth()/dashUpdateNodeMinHeight()) forces a boundary
-     wider or taller than the ratio alone would give it. That floor needs to
-     hold before anyone has ever dragged a divider, not just after, so this
-     can no longer be skipped while _dashTree is still null. */
+     layout: dashFitNodeCard() rewrites a ratio in DASH_DEFAULT_TREE and the
+     Controls card's row minimum as its content changes, and that has to
+     reach the cards before anyone has ever dragged anything. */
   DASH_CARD_IDS.forEach(function(id) {
     var el = dashCardEl(id); if (!el) return;
     var r = rects[id]; if (!r) return;
@@ -9878,104 +9739,46 @@ function dashApply() {
   dashPositionDividers();
 }
 
-/* ── Node card auto-fit ──────────────────────────────────────────────────
-   The Node card holds three lines of text, a status badge and a row of audio
-   controls, and how much of that is on screen changes with who's logged in
-   (Arm TX needs a role and a TX-capable server, Rec needs the can_record
-   flag), so any fixed row span is wrong at most window heights:
-   too tall and it's mostly dead space, too short and content is silently
-   clipped (the card is overflow:hidden). Measure what it actually needs,
-   give the Node/Map row split exactly that many rows (handing the rest of
-   the left column to the map — which does want every pixel it can get) and
-   the node/map *column* split exactly the button row's width (handing the
-   rest to the other cards — Connected Nodes, Favorites, etc. — instead of
-   leaving the Map wider than Node needs to be).
+/* ── Controls card auto-fit ('node' leaf) ────────────────────────────────
+   The Controls card holds a row of audio buttons, the volume slider and,
+   while TX is armed, the PTT bar. How much of that is on screen changes with
+   who's logged in (Arm TX needs a role and a TX-capable server, Rec needs
+   the can_record flag) and with arming, so any fixed row span is wrong most
+   of the time: too tall and it's dead space taken from Connected Nodes, too
+   short and content is cut off. Measure what it actually needs and give the
+   Controls/Connected Nodes row split exactly that many rows.
 
    Default layout only (`_dashTree` still null). Once someone has dragged or
-   resized anything, the node/map boundaries are their answer, and re-fitting
-   on the next board refresh would pull them back out from under them a
-   second later. The fitted ratios are written into DASH_DEFAULT_TREE itself,
-   not just onto the cards, so when the layout does become custom —
-   dashEnsureCustom() clones exactly that tree — the boundaries stay where
-   they already are instead of jumping back to the pre-measurement default.
-   (Hiding the Map entirely is a separate mechanism — see DASH_NON_GREEDY/
-   dashWalkFolded() — since at that point there's no row split left to fit.) */
-var _dashFitRows = null, _dashFitCols = null;
+   resized anything, the boundary is their answer, and re-fitting on the next
+   board refresh would pull it back out from under them a second later. The
+   measured height still holds as a minimum there (see dashMinLineFor()), so
+   the PTT bar is never opened below the card's fold.
+   The fitted ratio is written into DASH_DEFAULT_TREE itself, not just onto
+   the cards, so when the layout does become custom — dashEnsureCustom()
+   clones exactly that tree — the boundary stays where it already is instead
+   of jumping back to the pre-measurement default. */
+var _dashFitRows = null;
 
-/* The split whose two children are the node and map leaves, wherever it sits
-   in `node`; null if they aren't siblings (nothing to fit against). */
+/* The row split whose top child is the Controls ('node') leaf, wherever it
+   sits in `node`; null if there isn't one (nothing to fit against). */
 function dashNodeMapSplit(node) {
   if (!node || node.type !== 'split') return null;
-  if (node.dir === 'row' && node.a.type === 'leaf' && node.a.id === 'node'
-      && node.b.type === 'leaf' && node.b.id === 'map') return node;
+  if (node.dir === 'row' && node.a.type === 'leaf' && node.a.id === 'node') return node;
   return dashNodeMapSplit(node.a) || dashNodeMapSplit(node.b);
-}
-
-/* The immediate parent split of `target` (a node reference, found by
-   identity) within `tree`; null if `target` is the root or isn't found. */
-function dashFindParentSplit(tree, target) {
-  if (!tree || tree.type !== 'split') return null;
-  if (tree.a === target || tree.b === target) return tree;
-  return dashFindParentSplit(tree.a, target) || dashFindParentSplit(tree.b, target);
-}
-
-/* Total pixel width the Node card's button row (#node-controls) needs on one
-   line. Each button's own offsetWidth is intrinsic to its content regardless
-   of whether flex-wrap has already wrapped the row onto a second line, so
-   summing the currently-*shown* children (role/permission/capability gate
-   several of them via display:none — see the .node-controls doc comment)
-   plus the row's own gaps gives the one-line floor; .node-body's horizontal
-   padding and .node-card's own border add the rest, since the padding and
-   the border live on different elements now (see the .node-card/.node-body
-   split above) — independent of how narrow the column currently is.
-
-   The buttons are flex:1 1 0 (see .node-controls .btn-icon) so they can
-   grow past their own natural width to fill out the row — normally wider
-   than their combined natural width, since #node-info's identity text is
-   usually the widest thing in the card. offsetWidth alone would report that
-   *grown* width, not the true one-line floor, so the row is temporarily
-   forced to shrink-wrap (width:max-content) before measuring: a flex
-   container's max-content size comes from its items' own preferred sizes,
-   ignoring flex-grow, giving back each button's real minimum. Reverted
-   immediately after, and the whole thing happens within one synchronous
-   call — nothing paints in between, so there's no visible flicker. */
-function dashNodeButtonsMinPx() {
-  var row = document.getElementById('node-controls');
-  var card = dashCardEl('node');
-  var body = document.getElementById('node-body');
-  if (!row || !card || !body) return 0;
-  var prevWidth = row.style.width;
-  row.style.width = 'max-content';
-  var total = 0, count = 0;
-  for (var i = 0; i < row.children.length; i++) {
-    var el = row.children[i];
-    if (!el.offsetWidth && !el.offsetHeight) continue;   /* display:none */
-    total += el.offsetWidth;
-    count++;
-  }
-  row.style.width = prevWidth;
-  if (!count) return 0;
-  total += (count - 1) * (parseFloat(getComputedStyle(row).gap) || 0);
-  var bodyCs = getComputedStyle(body), cardCs = getComputedStyle(card);
-  total += (parseFloat(bodyCs.paddingLeft) || 0) + (parseFloat(bodyCs.paddingRight) || 0)
-         + (parseFloat(cardCs.borderLeftWidth) || 0) + (parseFloat(cardCs.borderRightWidth) || 0);
-  return total;
 }
 
 /* Total pixel height the Node card's own content needs — the header's own
    (border-box) height, plus the full span from .node-body's topmost child's
    top edge to its lowest child's bottom edge, plus .node-body's own
-   padding, plus .node-card's own top/bottom border. Shared by
-   dashFitNodeCard()'s exact-fit (default layout only) and
-   dashUpdateNodeMinHeight()'s floor (every layout) below, so there's
-   exactly one place that knows how to measure this.
+   padding, plus .node-card's own top/bottom border. Used by
+   dashFitNodeCard() for both the exact fit and the minimum.
 
    Content height, not the card's own height: the card is stretched to fill
    its grid area, so offsetHeight/scrollHeight would just report back the
    space we're trying to reclaim. Measuring .node-body's topmost/lowest
    *rendered* child's edges (not simply the first/last) matters twice over:
-   a display:none child reports an all-zero rect, and the controls below
-   #node-info can each be hidden by role/permission — the volume row is even
+   a display:none child reports an all-zero rect, and the controls
+   can each be hidden by role/permission — the volume row is even
    the last child while Listen is unavailable to that viewer, so both ends
    need a real min()/max() rather than assuming DOM order survives.
 
@@ -10011,69 +9814,30 @@ function dashNodeContentMinPx() {
        + (parseFloat(cardCs.borderTopWidth) || 0) + (parseFloat(cardCs.borderBottomWidth) || 0);
 }
 
-/* Re-measures the Node card's floors — button-row width and full-content
-   height — and, if either changed, re-walks the tree so dashWalk()'s column/
-   row clamps pick it up. Unlike the exact-fit sizing below, both of these run
-   regardless of whether the layout is still the default or has been dragged/
-   customized: a divider drag narrower than the buttons need, or a saved
-   layout that predates content the card now shows (e.g. a role grant that
-   revealed a button, or this app's own past button-height/label changes), are
-   exactly the cases this guards against — cell-rounding at some window sizes
-   landing a hair short of dashFitNodeCard()'s own exact-fit rows is another,
-   for the height floor specifically (see its issue: the volume slider's
-   bottom edge clipped by the card's border at certain resolutions). */
-function dashUpdateNodeMinWidth() {
-  if (!dashSupported()) return;
-  var px = dashNodeButtonsMinPx();
-  if (px === _dashMinPx.col.node) return;
-  _dashMinPx.col.node = px;
-  dashApply();
-}
-function dashUpdateNodeMinHeight() {
-  if (!dashSupported()) return;
-  var px = dashNodeContentMinPx();
-  if (px === _dashMinPx.row.node) return;
-  _dashMinPx.row.node = px;
-  dashApply();
-}
-
 function dashFitNodeCard() {
-  dashUpdateNodeMinWidth();
-  dashUpdateNodeMinHeight();
-  if (!dashSupported() || _dashTree) return;
-  /* Neither can actually be hidden while _dashTree is null (hiding calls
-     dashEnsureCustom() first), but the math below assumes both are on
-     screen, so don't rely on that from a distance — Map hidden is handled
-     separately, by dashWalkFolded()'s non-greedy fold, not here. */
-  if (_dashHidden['node'] || _dashHidden['map']) return;
-  var rowSplit = dashNodeMapSplit(DASH_DEFAULT_TREE);
-  if (!rowSplit) return;
-  var changed = false;
+  if (!dashSupported()) return;
+  /* Capped at 60% of the dashboard: with the PTT bar up and its Experimental
+     panel open the content can be taller than the whole dashboard, and
+     whatever shares the column must keep some rows. Past the cap the card
+     scrolls (.node-body is overflow-y:auto). */
+  var area = document.getElementById('content-area');
+  var needH = dashNodeContentMinPx();
+  if (area && area.clientHeight) needH = Math.min(needH, Math.floor(area.clientHeight * 0.6));
+  var floorChanged = needH !== _dashNodeMinRowPx;
+  _dashNodeMinRowPx = needH;   /* the every-layout floor, see dashMinLineFor() */
 
-  var needH = _dashMinPx.row.node;
-  if (needH) {
-    var cellH = dashCellSize('row');
-    if (cellH > 0) {
-      /* n rows are n cells plus the n-1 gaps between them. */
-      var rows = Math.ceil((needH + DASH_GAP) / (cellH + DASH_GAP));
-      rows = Math.max(DASH_MIN_RS, Math.min(DASH_ROWS - DASH_MIN_RS, rows));
-      if (rows !== _dashFitRows) { _dashFitRows = rows; rowSplit.ratio = rows / DASH_ROWS; changed = true; }
-    }
+  /* Exact fit: default layout only (see the comment above). */
+  var fitChanged = false;
+  var rowSplit = (!_dashTree && !_dashHidden['node']) ? dashNodeMapSplit(DASH_DEFAULT_TREE) : null;
+  var cellH = dashCellSize('row');
+  if (rowSplit && needH && cellH > 0) {
+    /* n rows are n cells plus the n-1 gaps between them. */
+    var rows = Math.ceil((needH + DASH_GAP) / (cellH + DASH_GAP));
+    rows = Math.max(DASH_MIN_RS, Math.min(DASH_ROWS - DASH_MIN_RS, rows));
+    if (rows !== _dashFitRows) { _dashFitRows = rows; rowSplit.ratio = rows / DASH_ROWS; fitChanged = true; }
   }
-
-  var needW = _dashMinPx.col.node;
-  var colSplit = dashFindParentSplit(DASH_DEFAULT_TREE, rowSplit);
-  if (needW && colSplit && colSplit.dir === 'col') {
-    var cellW = dashCellSize('col');
-    if (cellW > 0) {
-      var cols = Math.ceil((needW + DASH_GAP) / (cellW + DASH_GAP));
-      cols = Math.max(DASH_MIN_CS, Math.min(DASH_COLS - DASH_MIN_CS, cols));
-      if (cols !== _dashFitCols) { _dashFitCols = cols; colSplit.ratio = cols / DASH_COLS; changed = true; }
-    }
-  }
-
-  if (!changed) return;   /* nothing moved — skip the reflow and Leaflet's resize */
-  dashApply();   /* re-walk so both dividers follow whichever boundary just moved */
+  if (!floorChanged && !fitChanged) return;   /* nothing moved — skip the reflow and Leaflet's resize */
+  dashApply();   /* re-walk so the dividers follow whichever boundary just moved */
   setTimeout(function() { if (_map) _map.invalidateSize(); }, 50);
 }
 
@@ -10106,6 +9870,21 @@ function dashPositionDividers() {
   }
 }
 
+/* The PTT bar comes and goes with arming, and its Experimental panel and
+   status line change its height while it is up. Re-fit the card whenever
+   its box changes, so Connected Nodes hands over (and gets back) exactly
+   the rows it needs. */
+(function() {
+  var bar = document.getElementById('tx-bar');
+  if (!bar || typeof ResizeObserver === 'undefined') return;
+  var ro = new ResizeObserver(function() { dashFitNodeCard(); });
+  ro.observe(bar);
+  /* The connect form below it wraps and shows messages, so it changes
+     height too. */
+  var form = document.getElementById('conn-form-bar');
+  if (form) ro.observe(form);
+})();
+
 function initDashLayout() {
   var saved = dashLoadSaved();
   if (saved) {
@@ -10122,7 +9901,10 @@ function toggleDashEditMode() {
   var area = document.getElementById('content-area');
   if (area) area.classList.toggle('dash-edit', _dashEditOn);
   var btn = document.getElementById('dash-edit-btn');
-  if (btn) btn.classList.toggle('active', _dashEditOn);
+  if (btn) {
+    btn.classList.toggle('active', _dashEditOn);
+    btn.textContent = _dashEditOn ? 'Done Editing' : 'Edit Layout';
+  }
 }
 
 /* ── Hide/unhide: hide has no toggle left on the card itself once it's
@@ -10225,6 +10007,7 @@ function dashDragStart(ev, id) {
   if (!_dashEditOn) { ev.preventDefault(); return; }
   dashEnsureCustom();
   _dashDragId = id;
+  _dashDragStart = {x: ev.clientX, y: ev.clientY};
   ev.dataTransfer.effectAllowed = 'move';
   try { ev.dataTransfer.setData('text/plain', id); } catch(e) {}
   var el = dashCardEl(id); if (el) el.classList.add('dash-dragging');
@@ -10242,6 +10025,89 @@ function dashDropZone(ev, el) {
   if (x < EDGE) return 'left';
   if (x > 1 - EDGE) return 'right';
   return 'center';
+}
+
+/* Dashboard-edge zones. Dropping on a card's edge only ever splits that one
+   card, so a column that holds two stacked cards could not get a new
+   full-height neighbor, and there was no way to start a column where no
+   card sits yet. The outer DASH_AREA_EDGE_PX strip of the whole dashboard
+   is its own target instead: left/right makes a new full-height column
+   there, top/bottom a new full-width row. Takes priority over whichever
+   card happens to be under the pointer (see dashDragOver()/dashDrop()). */
+var DASH_AREA_EDGE_PX = 36;
+/* Top/bottom strips are thinner: a short top-row card (Controls is ~140px
+   tall) has an own "top" drop zone of only ~40px, which a 36px strip would
+   swallow. */
+var DASH_AREA_EDGE_PX_TB = 14;
+/* The strips stay inactive until the pointer has travelled this far from
+   where the drag began: a top-row card's grip is itself inside the top
+   strip, and picking a card up and letting go must not restructure anything. */
+var DASH_AREA_ARM_PX = 30;
+var _dashDragStart = null;   /* {x, y} of the current drag's first event */
+function dashAreaZone(ev) {
+  var area = document.getElementById('content-area');
+  if (!area) return null;
+  if (!_dashDragStart) _dashDragStart = {x: ev.clientX, y: ev.clientY};
+  if (Math.abs(ev.clientX - _dashDragStart.x) < DASH_AREA_ARM_PX &&
+      Math.abs(ev.clientY - _dashDragStart.y) < DASH_AREA_ARM_PX) return null;
+  var r = area.getBoundingClientRect();
+  if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) return null;
+  if (ev.clientX - r.left < DASH_AREA_EDGE_PX) return 'left';
+  if (r.right - ev.clientX < DASH_AREA_EDGE_PX) return 'right';
+  if (ev.clientY - r.top < DASH_AREA_EDGE_PX_TB) return 'top';
+  if (r.bottom - ev.clientY < DASH_AREA_EDGE_PX_TB) return 'bottom';
+  return null;
+}
+/* Share of the dashboard a new edge column/row starts with (its divider can
+   be dragged from there). */
+var DASH_AREA_NEW_SHARE = 0.25;
+
+/* New tree with `id` pulled out of wherever it was and re-inserted as one
+   whole side of a new root split. */
+function dashMoveToEdge(tree, id, zone) {
+  var rest = dashRemoveLeaf(tree, id);
+  if (!rest) return tree;
+  var leaf = {type: 'leaf', id: id};
+  var first = (zone === 'left' || zone === 'top');
+  return {type: 'split', dir: (zone === 'left' || zone === 'right') ? 'col' : 'row',
+    ratio: first ? DASH_AREA_NEW_SHARE : 1 - DASH_AREA_NEW_SHARE,
+    a: first ? leaf : rest, b: first ? rest : leaf};
+}
+
+function dashAreaDragOver(ev) {
+  if (!_dashDragId) return;
+  var zone = dashAreaZone(ev);
+  if (!zone) {
+    /* In a gap between cards: nothing to drop on, so nothing highlighted. */
+    if (!ev.target.closest || !ev.target.closest('.dash-card')) dashHideDropIndicator();
+    return;
+  }
+  ev.preventDefault();
+  var ind = document.getElementById('dash-drop-indicator');
+  var r = document.getElementById('content-area').getBoundingClientRect();
+  var rect = {left: r.left, top: r.top, width: r.width, height: r.height};
+  if (zone === 'left') rect.width = r.width * DASH_AREA_NEW_SHARE;
+  else if (zone === 'right') { rect.left = r.right - r.width * DASH_AREA_NEW_SHARE; rect.width = r.width * DASH_AREA_NEW_SHARE; }
+  else if (zone === 'top') rect.height = r.height * DASH_AREA_NEW_SHARE;
+  else { rect.top = r.bottom - r.height * DASH_AREA_NEW_SHARE; rect.height = r.height * DASH_AREA_NEW_SHARE; }
+  ind.style.left = rect.left + 'px'; ind.style.top = rect.top + 'px';
+  ind.style.width = rect.width + 'px'; ind.style.height = rect.height + 'px';
+  ind.style.display = 'block';
+}
+
+function dashAreaDrop(ev) {
+  var sourceId = _dashDragId;
+  if (!sourceId) return;
+  var zone = dashAreaZone(ev);
+  if (!zone) return;
+  ev.preventDefault();
+  dashHideDropIndicator();
+  _dashDragId = null;
+  dashEnsureCustom();
+  _dashTree = dashMoveToEdge(_dashTree, sourceId, zone);
+  dashApply();
+  dashSave();
+  setTimeout(function() { if (_map) _map.invalidateSize(); }, 50);
 }
 
 function dashUpdateDropIndicator(ev, targetEl) {
@@ -10268,6 +10134,7 @@ function dashHideDropIndicator() {
 function dashDragOver(ev) {
   if (!_dashDragId) return;
   ev.preventDefault();
+  if (dashAreaZone(ev)) return;   /* dashboard edge: dashAreaDragOver() (bubbles to #content-area) owns it */
   var targetId = ev.currentTarget.getAttribute('data-dash-id');
   if (targetId === _dashDragId) { dashHideDropIndicator(); return; }
   dashUpdateDropIndicator(ev, ev.currentTarget);
@@ -10282,10 +10149,12 @@ function dashDragEnd() {
   document.querySelectorAll('.dash-card').forEach(function(el) { el.classList.remove('dash-dragging'); });
   dashHideDropIndicator();
   _dashDragId = null;
+  _dashDragStart = null;
 }
 
 function dashDrop(ev, targetId) {
   ev.preventDefault();
+  if (dashAreaZone(ev)) return;   /* dashboard edge: left for dashAreaDrop() on #content-area */
   var zone = dashDropZone(ev, ev.currentTarget);
   dashHideDropIndicator();
   var sourceId = _dashDragId;
@@ -10357,7 +10226,7 @@ function dashDividerEnd() {
    container size actually matching reality. */
 initDashLayout();
 initMap();
-updateKioskThemeBtn();   /* issue #153: sync the mobile theme button's icon/title with whatever the <head> inline script already applied */
+updateKioskThemeBtn();   /* issue #153: sync the header menu's theme item label with whatever the <head> inline script already applied */
 refreshBoard();
 refreshWeather();
 refreshNwsAlerts();
