@@ -211,6 +211,28 @@ class TestListenerDisconnect:
         assert b["sip"] is None and 0 < b["retry_after"] <= app.SIP_KICK_HOLD_SEC
         assert "AbCdEf" not in client.get("/api/audio/session").get_data(as_text=True)
 
+    def test_own_disconnect_allows_a_deliberate_listen(self, client, fresh_db, _no_kicks):
+        """The owner hung up their own call from another browser: a Listen
+        press (manual=1) goes through, an automatic redial is still stopped,
+        and the hold survives for the browser that was hung up."""
+        _user(fresh_db, "Levi", "levis-password-1", callsign="N8GMZ", role="owner")
+        app._sip_kick_hold("N8GMZ", "levi")           # usernames are NOCASE
+        _login(client, "Levi", "levis-password-1")
+        b = client.get("/api/audio/session?manual=1").get_json()
+        assert not b.get("kicked") and b.get("reason") != "kicked"
+        b = client.get("/api/audio/session").get_json()
+        assert b["kicked"] is True and b["by_self"] is True
+        assert app._sip_kick_remaining("N8GMZ") > 0
+
+    def test_manual_listen_does_not_undo_someone_elses_disconnect(self, client, create_user,
+                                                                   fresh_db, _no_kicks):
+        create_user("owner1", role="owner")
+        _user(fresh_db, "bob", "bobs-password-1", callsign="N8GMZ")
+        app._sip_kick_hold("N8GMZ", "owner1")
+        _login(client, "bob", "bobs-password-1")
+        b = client.get("/api/audio/session?manual=1").get_json()
+        assert b["kicked"] is True and b["by_self"] is False and b["sip"] is None
+
     def test_hold_expires(self, _no_kicks):
         app._sip_kick_hold("N8GMZ", "owner1", now=1000.0)
         assert app._sip_kick_remaining("N8GMZ", now=1000.0 + app.SIP_KICK_HOLD_SEC - 1) == 1

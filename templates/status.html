@@ -8293,7 +8293,7 @@ function toggleListen() {
      (Auto-reconnects call _startListen directly and keep the learned value.) */
   _listenTargetS     = _LISTEN_TARGET_S;
   _listenLastStallTs = 0;
-  _startListen();
+  _startListen(true);
 }
 
 function _listenSetBtn(html, color, disabled) {
@@ -8334,7 +8334,7 @@ function _listenSetBtn(html, color, disabled) {
   });
 })();
 
-function _startListen() {
+function _startListen(manual) {
   var node = (window._lastBoardNodes && window._lastBoardNodes[0])
              ? window._lastBoardNodes[0].node : '';
   if (!node) { sbToast('No local node found', false); return; }
@@ -8351,12 +8351,15 @@ function _startListen() {
   /* HenWen 2.0: the server decides per session whether audio is one native
      call (this account's own SIP identity) or the 1.x stream. See
      /api/audio/session in app.py and _doStartListenSIP() below. */
-  apiFetch('/api/audio/session')
+  /* manual=1 marks a deliberate Listen press (never an automatic redial):
+     the account that pressed the X on its own listener row may listen
+     again at once, e.g. from a different computer. */
+  apiFetch('/api/audio/session' + (manual === true ? '?manual=1' : ''))
     .then(function(r) {
       if (r.status === 401) {
         if (_listenStartTimer) { clearTimeout(_listenStartTimer); _listenStartTimer = null; }
         _listenSetBtn('<svg class="icon"><use href="#icon-headphones"></use></svg> Listen', '', false);
-        openKioskLogin(_startListen, []);
+        openKioskLogin(_startListen, [manual === true]);
         return null;
       }
       return r.ok ? r.json() : {};
@@ -8367,8 +8370,10 @@ function _startListen() {
         /* An admin disconnected this listener (/api/status/disconnect). Stop
            here: falling back to the 1.x stream or redialing would undo it. */
         _stopListen(); _txDisarmForRxStop();   /* same as the user pressing Stop */
-        sbToast('An admin disconnected your audio. You can listen again in ' +
-                (d.retry_after || 60) + ' s.', false);
+        sbToast(d.by_self
+                ? 'You disconnected your own audio. Press Listen to reconnect.'
+                : 'An admin disconnected your audio. You can listen again in ' +
+                  (d.retry_after || 60) + ' s.', false);
         return;
       }
       if (d.sip && _sipCapable() && !_sipBlocked()) {
