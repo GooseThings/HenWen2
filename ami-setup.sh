@@ -295,6 +295,18 @@ print('ok' if b'Success' in resp else 'fail')
         ;;
 esac
 
+# Only a login that worked is written into the unit file. Switching a
+# running service to credentials Asterisk just refused would take away the
+# AMI connection it has now.
+if [ "${RESULT}" != "success" ]; then
+    echo ""
+    echo -e "  ${RED}Not updating $SERVICE_NAME: the AMI login for '$USER' did not succeed.${NC}"
+    echo "  Its service file is unchanged and it keeps the credentials it has."
+    echo "  Check: sudo asterisk -rx 'manager show user $USER'"
+    echo "  then re-run this script."
+    exit 1
+fi
+
 # ── Update service file ───────────────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}[5/5] Updating the $SERVICE_NAME service file...${NC}"

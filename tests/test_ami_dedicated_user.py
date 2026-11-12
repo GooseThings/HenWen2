@@ -115,3 +115,11 @@ class TestAmiSetupScript:
         auto-detection would pick HenWen2 while install.sh set up HenWen."""
         src = open(os.path.join(os.path.dirname(__file__), "..", "install.sh")).read()
         assert 'HENWEN_SERVICE="$SERVICE_NAME" bash "$INSTALL_DIR/ami-setup.sh"' in src
+
+    def test_unit_file_is_only_rewritten_after_a_successful_login(self):
+        """Review of PR #13: a login that still failed fell through to the
+        step that rewrites AMI_USER/AMI_SECRET and restarts the service."""
+        guard = SRC.index('if [ "${RESULT}" != "success" ]; then')
+        rewrite = SRC.index('sed -i "s|^Environment=\\"AMI_USER=')
+        assert SRC.index("Testing AMI login") < guard < rewrite
+        assert "exit 1" in SRC[guard:rewrite]
