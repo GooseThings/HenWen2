@@ -5529,6 +5529,52 @@ _conf_file_cache      = {}   # {path: (mtime, content)}
 _conf_file_cache_lock = threading.Lock()
 
 
+def conf_hash(content):
+    """Version token for rpt.conf as a page loaded it. Sent back with a save
+    so a save made from a stale page is refused (docs/ASL-WEB-UI-PLAN.md,
+    hazard 3: the ASL Web UI also writes rpt.conf)."""
+    if content is None:
+        return None
+    return hashlib.sha256(content.encode("utf-8", "surrogateescape")).hexdigest()[:16]
+
+
+def _current_rpt_conf_hash():
+    """Hash of rpt.conf read straight from disk, not read_conf_file()'s
+    mtime cache, so a write in the same mtime tick can't hide. None when
+    unreadable."""
+    try:
+        with open(RPT_CONF_PATH) as f:
+            return conf_hash(f.read())
+    except OSError:
+        return None
+
+
+# Serializes HenWen's own rpt.conf check-then-write so two saves in this
+# process can't both pass the stale check against the same version.
+_rpt_conf_write_lock = threading.Lock()
+
+
+def _rpt_conf_conflict(data):
+    """A 409 response when the request names the rpt.conf version it was
+    based on (`base_hash`) and the file has changed since, else None.
+    Requests without `base_hash` are not checked. Call with
+    _rpt_conf_write_lock held."""
+    base = (data or {}).get("base_hash")
+    if not base:
+        return None
+    current = _current_rpt_conf_hash()
+    if current is None or current == base:
+        return None
+    log("WARN", "[CONF] Refused a save from a stale page: rpt.conf changed since it was loaded")
+    return jsonify({
+        "error": ("rpt.conf changed since this page loaded it (another HenWen page, "
+                  "the ASL Web UI, or a manual edit). Nothing was saved. Reload, "
+                  "then make the change again."),
+        "conflict": True,
+        "conf_hash": current,
+    }), 409
+
+
 def read_conf_file(path):
     try:
         mtime = os.path.getmtime(path)
@@ -6907,6 +6953,7 @@ def api_get_conf():
         "content":          content,
         "nodes":            nodes,
         "general_settings": parse_stanza_settings(content, "general"),
+        "conf_hash":        conf_hash(content),
     })
 
 
@@ -6933,6 +6980,7 @@ def api_get_node_conf(node):
     usage     = get_node_template_usage(content)
     templates = [t for t, nodes in usage.items() if node in nodes]
     return jsonify({"node": node, "settings": settings, "templates": templates,
+                    "conf_hash": conf_hash(content),
                     "key_typo_warnings": find_key_typos(settings)})
 
 
@@ -6967,6 +7015,7 @@ def api_get_template_conf(name):
     settings = parse_stanza_settings(content, name)
     usage    = get_node_template_usage(content)
     return jsonify({"template": name, "settings": settings, "used_by": usage.get(name, []),
+                    "conf_hash": conf_hash(content),
                     "key_typo_warnings": find_key_typos(settings)})
 
 
@@ -6992,7 +7041,8 @@ def api_get_macro_conf(name):
     # syntax but aren't real macro entries.
     entries = {k: v for k, v in parse_stanza_settings(content, name).items() if MACRO_KEY_RE.match(k)}
     usage   = get_macro_stanza_usage(content)
-    return jsonify({"name": name, "entries": entries, "used_by": usage.get(name, [])})
+    return jsonify({"name": name, "entries": entries, "used_by": usage.get(name, []),
+                    "conf_hash": conf_hash(content)})
 
 
 @app.route("/api/conf/schedules")
@@ -7015,12 +7065,20 @@ def api_get_schedule_conf(name):
     # the same filtering note in api_get_macro_conf.
     entries = {k: v for k, v in parse_stanza_settings(content, name).items() if MACRO_KEY_RE.match(k)}
     usage   = get_schedule_stanza_usage(content)
-    return jsonify({"name": name, "entries": entries, "used_by": usage.get(name, [])})
+    return jsonify({"name": name, "entries": entries, "used_by": usage.get(name, []),
+                    "conf_hash": conf_hash(content)})
 
 
 @app.route("/api/save", methods=["POST"])
 def api_save():
-    data    = request.json or {}
+    with _rpt_conf_write_lock:
+        return _api_save_locked(request.json or {})
+
+
+def _api_save_locked(data):
+    conflict = _rpt_conf_conflict(data)
+    if conflict:
+        return conflict
     content = read_conf_file(RPT_CONF_PATH) or ""
     raw     = data.get("raw_content")
 
@@ -7031,7 +7089,8 @@ def api_save():
         try:
             backup = write_conf_file(RPT_CONF_PATH, raw)
             return jsonify({"success": True, "backup": backup,
-                            "message": f"Saved. Backup: {backup}"})
+                            "message": f"Saved. Backup: {backup}",
+                            "conf_hash": conf_hash(raw)})
         except PermissionError as e:
             return jsonify({"error": str(e),
                             "hint": "Ensure rpt.conf and backups are owned by the service user (chown asterisk:asterisk /etc/asterisk/rpt.conf)"}), 403
@@ -7085,7 +7144,8 @@ def api_save():
     try:
         backup = write_conf_file(RPT_CONF_PATH, content)
         return jsonify({"success": True, "backup": backup,
-                        "message": f"Saved {len(changes)} setting(s). Backup: {backup}"})
+                        "message": f"Saved {len(changes)} setting(s). Backup: {backup}",
+                        "conf_hash": conf_hash(content)})
     except PermissionError as e:
         return jsonify({"error": str(e),
                         "hint": "Ensure rpt.conf and backups are owned by the service user (chown asterisk:asterisk /etc/asterisk/rpt.conf)"}), 403
@@ -7159,7 +7219,8 @@ def api_reload():
 @app.route("/api/backups")
 def api_backups():
     if not os.path.exists(BACKUP_DIR):
-        return jsonify({"backups": [], "backup_dir": BACKUP_DIR})
+        return jsonify({"backups": [], "backup_dir": BACKUP_DIR,
+                        "conf_hash": _current_rpt_conf_hash()})
     names = sorted(
         [f for f in os.listdir(BACKUP_DIR) if f.endswith(".bak")],
         reverse=True
@@ -7172,7 +7233,8 @@ def api_backups():
         except Exception:
             size = 0
         result.append({"name": name, "size": size})
-    return jsonify({"backups": result, "backup_dir": BACKUP_DIR})
+    return jsonify({"backups": result, "backup_dir": BACKUP_DIR,
+                    "conf_hash": _current_rpt_conf_hash()})
 
 
 _BACKUP_NAME_RE = re.compile(r'^rpt\.conf\.(\d{8})_(\d{6})\.bak$')
@@ -7253,9 +7315,13 @@ def api_backup_restore(name):
     try:
         with open(path) as f:
             content = f.read()
-        backup = write_conf_file(RPT_CONF_PATH, content)
+        with _rpt_conf_write_lock:
+            conflict = _rpt_conf_conflict(request.get_json(silent=True))
+            if conflict:
+                return conflict
+            backup = write_conf_file(RPT_CONF_PATH, content)
         log("INFO", f"[API] Restored backup: {name}")
-        return jsonify({"ok": True, "backup": backup})
+        return jsonify({"ok": True, "backup": backup, "conf_hash": conf_hash(content)})
     except PermissionError as e:
         return jsonify({"error": str(e),
                         "hint": "Ensure rpt.conf is writable by the service user (chown asterisk:asterisk)"}), 403

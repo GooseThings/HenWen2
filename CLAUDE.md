@@ -140,7 +140,7 @@ SQLite at `/etc/asterisk/henwen.db`. Schema is defined inline in `get_db()` (cal
 
 ### rpt.conf parsing
 
-Custom parser (not `configparser`) — `_collect_stanzas()`, `parse_stanza_settings()`, `update_setting_in_content()`. It preserves comments and formatting on save and handles ASL3's multi-stanza structure (node stanzas, templates, macros, schedules).
+Custom parser (not `configparser`) — `_collect_stanzas()`, `parse_stanza_settings()`, `update_setting_in_content()`. It preserves comments and formatting on save and handles ASL3's multi-stanza structure (node stanzas, templates, macros, schedules). Every rpt.conf read route returns a `conf_hash`, and `/api/save` and backup restore refuse with 409 (`_rpt_conf_conflict()`) when the request's `base_hash` no longer matches the file, so a save from a stale Manager page can't silently overwrite an edit made elsewhere, e.g. by the ASL Web UI. A request without `base_hash` is not checked.
 
 ### Audio streaming
 
