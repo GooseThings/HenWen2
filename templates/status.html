@@ -413,83 +413,53 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
   gap: 10px; flex: 1; min-height: 0; position: relative;
 }
 
-.connected-card { grid-column: 5 / span 5; grid-row: 1 / span 24; }
+.connected-card { grid-column: 5 / span 5; grid-row: 6 / span 19; }
 
-/* ── Node status card: top of the left column, with the map below it.
+/* ── Controls card (.node-card / dash id "node": it was the Node card until
+   the node's identity moved into the header). Top of the middle column,
+   directly above Connected Nodes.
    The card's own frame always fills its grid cell exactly (same as every
-   other card here) — it's the *cell itself* that's kept fit to the card's
-   content, on both axes, rather than the card being sized independently of
-   it. Column width: dashFitNodeCard() shrinks the node/map column to the
-   button row's width (handing the reclaimed columns to the rest of the
-   dashboard), floored so a divider drag can never pull it in narrower than
-   that row needs (see dashMinLinesForSubtree()/dashUpdateNodeMinWidth() in
-   the JS). Row height: dashFitNodeCard() shrinks the row split to the card's
-   full measured content height, giving the leftover rows to the Map below —
-   and if the Map is hidden (or Node ends up with no sibling under it at
-   all), dashWalk()'s fold takes the card's own non-greedy floor instead of
+   other card here) — it's the *cell's height* that's kept fit to the card's
+   content: dashFitNodeCard() sets the row split between this and Connected
+   Nodes to the card's full measured content height, so Connected Nodes gets
+   every row the controls don't need, and gives rows back when the PTT bar
+   appears (armed) or its Experimental panel opens. If everything under it is
+   hidden, dashWalk()'s fold takes the card's own non-greedy floor instead of
    the usual "hidden side's space goes entirely to its sibling" rule (see
-   DASH_NON_GREEDY/dashSubtreeGreedy()), so Node still only claims what its
-   content needs rather than stretching to the bottom of the window. The
-   span below is only what's painted until the first board refresh — it must
-   stay in step with DASH_DEFAULT_TREE's node/map ratio (10/24), same
-   invariant as every other default here.
-   That ratio was tuned to the actual measured height of a typical
-   populated card (header + identity block + controls + volume row),
-   not picked arbitrarily -- a static guess far from what
-   dashFitNodeCard() computes on the first real refresh is itself a
-   layout-shift source (issue #101: a 6/24 guess against real content
-   came out closer to 10/24, a jump big enough to register as the
-   single largest contributor to a 0.774 Lighthouse CLS score). This
-   still won't be exact for every install (callsign/location length,
-   which buttons a viewer's role shows, etc. all vary), but it should
-   land close enough that the one guaranteed first-refresh reflow is
-   barely visible instead of a full card resizing under the viewer.
-
-   The card itself carries no padding of its own — .card-header uses its
-   ordinary shared style (padding/border-bottom) exactly like every other
-   card's header (Connected Nodes, Favorites, Map, ...), so Node's header
-   inset matches theirs instead of compounding with a second, card-level
-   padding on top of it (a mismatch this app used to have: the header's own
-   padding was zeroed out here and the card's uniform 16px padding stood in
-   for it, making Node's top inset consistently bigger than every other
-   card's). All of the actual "pad the content, absorb the auto-fit
-   leftover" work happens one level down, in .node-body, below. ── */
+   DASH_NON_GREEDY/dashSubtreeGreedy()), so it still only claims what its
+   content needs. Its width is the column's; the button row's one-line width
+   is only a floor for divider drags (dashUpdateNodeMinWidth()).
+   The span below is only what's painted until the first board refresh — it
+   must stay in step with DASH_DEFAULT_TREE's controls/connected ratio
+   (5/24), same invariant as every other default here; a guess far from what
+   dashFitNodeCard() computes is itself a layout-shift source (issue #101).
+   The header is an ordinary .card-header, same inset as every other card's;
+   the padding and slack-absorbing happen one level down, in .node-body. ── */
 .node-card {
-  grid-column: 1 / span 4; grid-row: 1 / span 10;
+  grid-column: 5 / span 5; grid-row: 1 / span 5;
   background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
   display: flex; flex-direction: column; overflow: hidden; min-height: 0;
 }
-/* Everything below the header: the identity block, audio controls, and
-   volume slider. This is the flex child that actually gets padded and
-   centered — kept separate from .node-card/.card-header specifically so
-   the header's inset can stay identical to every other card's (see the
-   comment on .node-card above) while this part still absorbs the auto-fit
-   system's leftover slack on its own.
-   margin-top:auto is deliberately NOT used on the controls row: the card is
-   sized to its content by dashFitNodeCard(), so there's normally no slack
-   to push against. There's still a little left over — the row-span it
-   lands on has to be a whole number of the grid's row lines, so the fitted
-   height rounds up to the next line and leaves some slack, and how much
-   scales with the viewport (a taller content area means a taller row, so
-   the same 1-row-line overshoot is a bigger number of px). Concentrating
-   100% of that at either end reads badly at some screen size — pinned to
-   the bottom, it reads as an oversized gap between the volume slider and
-   the Map card's own header inset below; pinned to the top, it reads as an
-   oversized gap above the identity block on a tall enough viewport.
-   justify-content:center is the option that's never *egregiously* wrong at
-   any one size: worst case is half the slack on each side, rather than all
-   of it landing in one visibly oversized spot. */
+/* Everything below the header: the audio buttons, the volume slider and
+   (while armed) the PTT bar. This is the flex child that gets padded — kept
+   separate from .node-card/.card-header so the header's inset stays
+   identical to every other card's. The card's cell is sized to this content
+   by dashFitNodeCard(), so there is at most one grid row of slack, left at
+   the bottom. Top-aligned and overflow-y:auto rather than centered: once
+   the content outgrows the capped height (PTT bar with the Experimental
+   panel open) it has to scroll, and centered overflow would put the top
+   buttons out of reach. */
 .node-body {
   padding: 16px 12px; display: flex; flex-direction: column;
-  gap: 8px; overflow: hidden; min-height: 0; flex: 1;
-  justify-content: center;
+  gap: 8px; overflow-x: hidden; overflow-y: auto; min-height: 0; flex: 1;
+  justify-content: flex-start;
 }
-/* Node-wide audio controls (Arm TX / Listen / Rec), sitting under the node's
-   identity block. flex-wrap because every one of them is conditional — role,
+/* Node-wide audio controls (Arm TX / Listen / Mute / Rec), first row of the
+   Controls card. flex-wrap because every one of them is conditional — role,
    TX support, the can_record flag — so the row's width varies, and a
    narrowed column should drop a button to a second line rather than have
-   the card clip it (.node-body is overflow:hidden). My Recordings used to
-   live here too but moved up to the header's button row — it's
+   the card clip it. My Recordings used to
+   live here too but moved up to the header menu — it's
    account-scoped self-service, not really a control over *this* node's
    audio. */
 .node-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex-shrink: 0; }
@@ -719,8 +689,8 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
 }
 /* min-height:0 overrides the flex default of min-height:auto (content-sized),
    which otherwise refuses to let this shrink below its content height — so
-   e.g. arming TX (which adds #tx-bar above this in the same flex column)
-   would grow the whole column past .connected-card's fixed height instead of
+   anything shown above this in the same flex column (the connect form, a
+   warning bar) would grow the whole column past .connected-card's fixed height instead of
    this scrolling within the space left over, clipping node entries via the
    card's own overflow:hidden. */
 .node-list { flex: 1; overflow-y: auto; min-height: 0; scrollbar-color: var(--border) transparent; }
@@ -917,7 +887,7 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
 .mesh-text { font-size: 0.78rem; color: var(--text); word-wrap: break-word; margin-top: 1px; }
 
 /* ── Map ── */
-.map-card { grid-column: 1 / span 4; grid-row: 11 / span 14; min-height: 0;
+.map-card { grid-column: 1 / span 4; grid-row: 1 / span 24; min-height: 0;
   background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
   display: flex; flex-direction: column; overflow: hidden; }
 #map { flex: 1; background: #0d1117; }
@@ -1184,9 +1154,9 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
    button above — see refreshBoard()'s own comment on this). */
 .idle-badge.off { opacity: 0.45; }
 
-/* Browser-transmit PTT bar (inline in the Connected Nodes card while armed) */
-#tx-bar { padding: 8px 18px; border-bottom: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 5px; }
+/* Browser-transmit PTT bar (last thing in the Controls card, while armed) */
+#tx-bar { padding: 8px 0 0; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 5px; flex-shrink: 0; }
 #tx-ptt { width: 100%; padding: 18px 14px; font-size: 1rem; font-weight: 700;
   background: rgba(63,185,80,.08); border: 2px solid rgba(63,185,80,.4);
   border-radius: 8px; color: var(--green); cursor: pointer;
@@ -1395,24 +1365,10 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
 
   /* Cards no longer share an implicit grid-row height, so each gets its own
      cap with an internally-scrolling list instead of flexing to fill a row. */
-  /* .node-card itself carries no visible chrome at all on mobile: no "NODE"
-     title bar, and its box is drawn on its children instead (#node-controls
-     + #listen-vol-row together, the Arm TX/Listen/Rec buttons + volume
-     slider, read as one card). The node's identity is in the header. */
-  .node-card {
-    min-height: 0; max-height: none;
-    background: none; border: none; border-radius: 0; padding: 0;
-  }
-  .node-card > .card-header { display: none; }
-  .node-body { padding: 0; gap: 0; }
-  #node-controls {
-    background: var(--bg2); border: 1px solid var(--border);
-    border-bottom: none; border-radius: 10px 10px 0 0; padding: 17px 19px 10px;
-  }
-  #listen-vol-row {
-    background: var(--bg2); border: 1px solid var(--border); border-top: none;
-    border-radius: 0 0 10px 10px; padding: 10px 19px 17px;
-  }
+  /* Controls is an ordinary card here too (title bar, one box), sized to
+     its content. */
+  .node-card { min-height: 0; max-height: none; flex: none; }
+  .node-body { overflow: visible; padding: 15px 17px; }
   .activity-card, .chat-card, .meshtastic-card { max-height: 320px; }
   /* Expanded, Favorites grows to fill whatever's left of the screen below
      Node + Connected Nodes instead of stopping at a fixed height — min-height:0
@@ -1426,9 +1382,7 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
      with a fixed max-height, .node-list's own overflow-y:auto (needed for
      the desktop fixed-grid-row layout) kicks in on mobile too, forcing an
      awkward internally-scrolling list on top of the page's own scroll once
-     more than a couple of nodes are connected, or the PTT bar (#tx-bar,
-     inline above the list in this same card while armed) eats into the
-     capped height. Letting the card grow to its content's natural height
+     more than a couple of nodes are connected. Letting the card grow to its content's natural height
      means every connected node is visible via the one ordinary page
      scroll instead. */
   .connected-card { max-height: none; }
@@ -1886,13 +1840,16 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
     <!-- Shows which pane a dragged card will dock into (edge = split, center = swap). -->
     <div id="dash-drop-indicator" class="dash-drop-indicator" style="display:none"></div>
 
-    <!-- Node status: top of the left column, Map directly below it -->
+    <!-- Controls: every audio control for this node (Arm TX, Listen, Mute,
+         Rec, volume, and the PTT bar while armed), directly above Connected
+         Nodes. Still data-dash-id="node"/.node-card internally: it was the
+         Node card until the node's identity moved up into the header. -->
     <div class="node-card dash-card" data-dash-id="node"
          ondragover="dashDragOver(event)" ondragleave="dashDragLeave(event)" ondrop="dashDrop(event,'node')">
       <div class="card-header">
         <span class="dash-header-grip" draggable="true" title="Drag to move"
               ondragstart="dashDragStart(event,'node')" ondragend="dashDragEnd(event)"><svg class="icon"><use href="#icon-grip-vertical"></use></svg></span>
-        <span class="card-title">Node</span>
+        <span class="card-title">Controls</span>
         <button class="dash-hide-btn" onclick="toggleDashHide('node',event)" title="Hide panel"><svg class="icon"><use href="#icon-eye-off"></use></svg></button>
       </div>
       <div class="node-body" id="node-body">
@@ -1916,6 +1873,70 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
           <span style="font-size:0.78rem;color:var(--text2);flex-shrink:0;display:flex;align-items:center;gap:4px" title="Listen volume"><svg class="icon"><use href="#icon-volume-2"></use></svg> Volume</span>
           <input type="range" id="listen-volume" min="0" max="100" value="100" disabled title="Listen volume — separate from your device's system volume" style="flex:1">
         </div>
+        <!-- The PTT control and everything that goes with it (mic meter/gain,
+             BT/Car Mic, Experimental Audio Sources, #tx-status). Shown only
+             while TX is armed; a ResizeObserver (see dashFitNodeCard()) grows
+             the card to fit when it appears or its panel opens. -->
+        <div id="tx-bar" style="display:none">
+          <button id="tx-ptt" disabled>
+            <div><svg class="icon"><use href="#icon-mic"></use></svg> PTT &mdash; hold to transmit&ensp;<span class="tx-ptt-space-hint" style="font-size:0.7rem;font-weight:400">(or hold Space &middot; keys in ~&frac12;s)</span></div>
+            <div id="tx-ptt-tot" style="font-size:0.7rem;font-weight:400;opacity:.8;display:none"></div>
+          </button>
+          <div id="tx-audio-row">
+            <span style="font-size:0.7rem;color:var(--text2);flex-shrink:0">Mic</span>
+            <div id="tx-meter"><div id="tx-meter-fill"></div></div>
+            <input type="range" id="tx-gain" min="0" max="200" value="100" title="Microphone gain">
+            <span id="tx-gain-val" style="font-size:0.7rem;color:var(--text2);width:3em;flex-shrink:0">100%</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <button type="button" class="sb-btn btmic" id="tx-agc-btn"
+                    title="Off (default): the manual gain slider above controls level, but Android's Bluetooth call-audio routing does not engage, so a paired Bluetooth/car mic and speaker are not used for TX — only the phone's own mic. On: lets Android route TX through a connected Bluetooth/car mic and speaker (useful for Android Auto), but Android's own automatic gain control takes over the mic instead, so the slider above no longer affects level and a hot mic can clip; if it does, lower your phone's Bluetooth mic volume rather than the slider. Takes effect next time you arm TX.">
+              <svg class="icon"><use href="#icon-headphones"></use></svg> BT/Car Mic: <span id="tx-agc-btn-state">Off</span>
+            </button>
+            <div id="tx-agc-msg" style="font-size:0.7rem;color:var(--text2);line-height:1.3;display:none">
+              <div>Bluetooth mic setting saved</div>
+              <div>Re-arm TX for it to take effect</div>
+            </div>
+          </div>
+          <button type="button" class="sb-btn btmic" id="tx-exp-btn"
+                  title="Experimental: pick the mic/speaker device and override each audio-processing flag independently, to see which combination makes Android route to a Bluetooth/Android Auto mic. Changes take effect next time you arm TX.">
+            <svg class="icon"><use href="#icon-headphones"></use></svg> Experimental Audio Sources
+          </button>
+          <div id="tx-exp-panel">
+            <div class="exp-row">
+              <label for="tx-exp-mic">Mic device</label>
+              <select id="tx-exp-mic"><option value="">System default</option></select>
+            </div>
+            <div class="exp-row">
+              <label for="tx-exp-spk">Speaker (Listen)</label>
+              <select id="tx-exp-spk"><option value="">System default</option></select>
+            </div>
+            <div class="exp-row">
+              <label for="tx-exp-aec">Echo cancel</label>
+              <select id="tx-exp-aec"><option value="default">Default (on)</option><option value="on">Force on</option><option value="off">Force off</option></select>
+            </div>
+            <div class="exp-row">
+              <label for="tx-exp-ns">Noise suppress</label>
+              <select id="tx-exp-ns"><option value="default">Default (on)</option><option value="on">Force on</option><option value="off">Force off</option></select>
+            </div>
+            <div class="exp-row">
+              <label for="tx-exp-agc">Auto gain</label>
+              <select id="tx-exp-agc"><option value="default">Follow BT/Car Mic button</option><option value="on">Force on</option><option value="off">Force off</option></select>
+            </div>
+            <div class="exp-row">
+              <label for="tx-exp-path">Mic path</label>
+              <select id="tx-exp-path"><option value="default">Default (raw track only if AGC on)</option><option value="raw">Always raw track (no gain slider)</option><option value="graph">Always WebAudio gain graph</option></select>
+            </div>
+            <div class="exp-row">
+              <button type="button" class="sb-btn" id="tx-exp-scan">Rescan devices</button>
+              <button type="button" class="sb-btn" id="tx-exp-probe">Probe mic (3s)</button>
+              <button type="button" class="sb-btn" id="tx-exp-reset">Reset</button>
+            </div>
+            <div class="exp-note">Mic settings apply next time you arm TX (re-arm after changing). Speaker applies to the Listen player only. On Android Chrome the device lists are often just &ldquo;default&rdquo;, and Bluetooth/car audio usually can&rsquo;t be picked directly &mdash; it engages as a side effect of echo cancellation. Use Probe to see what the phone actually gives you; results are also logged to the server journal.</div>
+            <div id="tx-exp-out"></div>
+          </div>
+          <div id="tx-status" style="font-size:0.75rem;color:var(--accent);min-height:1em"></div>
+        </div>
       </div>
     </div>
 
@@ -1929,69 +1950,6 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
         <span style="margin-left:auto;display:flex;align-items:center;gap:6px">
           <button class="dash-hide-btn" onclick="toggleDashHide('connected',event)" title="Hide panel"><svg class="icon"><use href="#icon-eye-off"></use></svg></button>
         </span>
-      </div>
-      <!-- Stays here, unlike the Arm TX button that raises it (now in the
-           Node card): this is the PTT control itself, and it wants the width
-           for its mic meter/gain row plus room for #tx-status's messages. -->
-      <div id="tx-bar" style="display:none">
-        <button id="tx-ptt" disabled>
-          <div><svg class="icon"><use href="#icon-mic"></use></svg> PTT &mdash; hold to transmit&ensp;<span class="tx-ptt-space-hint" style="font-size:0.7rem;font-weight:400">(or hold Space &middot; keys in ~&frac12;s)</span></div>
-          <div id="tx-ptt-tot" style="font-size:0.7rem;font-weight:400;opacity:.8;display:none"></div>
-        </button>
-        <div id="tx-audio-row">
-          <span style="font-size:0.7rem;color:var(--text2);flex-shrink:0">Mic</span>
-          <div id="tx-meter"><div id="tx-meter-fill"></div></div>
-          <input type="range" id="tx-gain" min="0" max="200" value="100" title="Microphone gain">
-          <span id="tx-gain-val" style="font-size:0.7rem;color:var(--text2);width:3em;flex-shrink:0">100%</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <button type="button" class="sb-btn btmic" id="tx-agc-btn"
-                  title="Off (default): the manual gain slider above controls level, but Android's Bluetooth call-audio routing does not engage, so a paired Bluetooth/car mic and speaker are not used for TX — only the phone's own mic. On: lets Android route TX through a connected Bluetooth/car mic and speaker (useful for Android Auto), but Android's own automatic gain control takes over the mic instead, so the slider above no longer affects level and a hot mic can clip; if it does, lower your phone's Bluetooth mic volume rather than the slider. Takes effect next time you arm TX.">
-            <svg class="icon"><use href="#icon-headphones"></use></svg> BT/Car Mic: <span id="tx-agc-btn-state">Off</span>
-          </button>
-          <div id="tx-agc-msg" style="font-size:0.7rem;color:var(--text2);line-height:1.3;display:none">
-            <div>Bluetooth mic setting saved</div>
-            <div>Re-arm TX for it to take effect</div>
-          </div>
-        </div>
-        <button type="button" class="sb-btn btmic" id="tx-exp-btn"
-                title="Experimental: pick the mic/speaker device and override each audio-processing flag independently, to see which combination makes Android route to a Bluetooth/Android Auto mic. Changes take effect next time you arm TX.">
-          <svg class="icon"><use href="#icon-headphones"></use></svg> Experimental Audio Sources
-        </button>
-        <div id="tx-exp-panel">
-          <div class="exp-row">
-            <label for="tx-exp-mic">Mic device</label>
-            <select id="tx-exp-mic"><option value="">System default</option></select>
-          </div>
-          <div class="exp-row">
-            <label for="tx-exp-spk">Speaker (Listen)</label>
-            <select id="tx-exp-spk"><option value="">System default</option></select>
-          </div>
-          <div class="exp-row">
-            <label for="tx-exp-aec">Echo cancel</label>
-            <select id="tx-exp-aec"><option value="default">Default (on)</option><option value="on">Force on</option><option value="off">Force off</option></select>
-          </div>
-          <div class="exp-row">
-            <label for="tx-exp-ns">Noise suppress</label>
-            <select id="tx-exp-ns"><option value="default">Default (on)</option><option value="on">Force on</option><option value="off">Force off</option></select>
-          </div>
-          <div class="exp-row">
-            <label for="tx-exp-agc">Auto gain</label>
-            <select id="tx-exp-agc"><option value="default">Follow BT/Car Mic button</option><option value="on">Force on</option><option value="off">Force off</option></select>
-          </div>
-          <div class="exp-row">
-            <label for="tx-exp-path">Mic path</label>
-            <select id="tx-exp-path"><option value="default">Default (raw track only if AGC on)</option><option value="raw">Always raw track (no gain slider)</option><option value="graph">Always WebAudio gain graph</option></select>
-          </div>
-          <div class="exp-row">
-            <button type="button" class="sb-btn" id="tx-exp-scan">Rescan devices</button>
-            <button type="button" class="sb-btn" id="tx-exp-probe">Probe mic (3s)</button>
-            <button type="button" class="sb-btn" id="tx-exp-reset">Reset</button>
-          </div>
-          <div class="exp-note">Mic settings apply next time you arm TX (re-arm after changing). Speaker applies to the Listen player only. On Android Chrome the device lists are often just &ldquo;default&rdquo;, and Bluetooth/car audio usually can&rsquo;t be picked directly &mdash; it engages as a side effect of echo cancellation. Use Probe to see what the phone actually gives you; results are also logged to the server journal.</div>
-          <div id="tx-exp-out"></div>
-        </div>
-        <div id="tx-status" style="font-size:0.75rem;color:var(--accent);min-height:1em"></div>
       </div>
       <div class="connector-warn-bar" id="connector-warn-bar" style="display:none">
         <svg class="icon"><use href="#icon-triangle-alert"></use></svg> <span id="connector-warn-text"></span>
@@ -9486,21 +9444,20 @@ var DASH_MIN_CS = 2, DASH_MIN_RS = 3;
    dashSubtreeGreedy() and dashWalkFolded(). */
 var DASH_NON_GREEDY = {node: true};
 var DASH_CARD_IDS = ['node', 'connected', 'map', 'activity', 'favorites', 'chat', 'meshtastic'];
-var DASH_CARD_TITLES = {node: 'Node', connected: 'Connected Nodes',
+var DASH_CARD_TITLES = {node: 'Controls', connected: 'Connected Nodes',
   map: 'Map', activity: 'Global Node Activity', favorites: 'Favorites', chat: 'Chat',
   meshtastic: 'Meshtastic'};
 /* Bumped whenever the default layout itself changes, not just when the card
    set does: dashLoadSaved() only rejects a saved tree that's structurally
    stale (a missing/unknown id), so an existing visitor's localStorage would
    otherwise pin them to the previous default forever. */
-var DASH_STORE_KEY = 'henwen-dash-layout-v9';
+var DASH_STORE_KEY = 'henwen-dash-layout-v10';
 
-/* Three visible columns by default: Node with the Map under it on the left,
-   Connected Nodes (alone, filling the column) in the middle, Favorites down
-   the right — see dashWalk()'s doc comment for how a {dir,ratio} node maps
-   to grid lines. The left column gets 4 of the 12 columns rather than the 3
-   the Node card used to have to itself, since the map underneath it is the
-   one card that actually wants width.
+/* Three visible columns by default: the Map (alone, filling the column) on
+   the left, Controls with Connected Nodes under it in the middle, Favorites
+   down the right — see dashWalk()'s doc comment for how a {dir,ratio} node
+   maps to grid lines. The left column gets 4 of the 12 columns, since the
+   map is the one card that actually wants width.
 
    The tree below still describes all seven cards in their full arrangement —
    Global Node Activity under Connected Nodes (13/24 vs 11/24), Meshtastic
@@ -9511,21 +9468,22 @@ var DASH_STORE_KEY = 'henwen-dash-layout-v9';
    unhiding restores exactly these proportions with no tree surgery. */
 var DASH_DEFAULT_TREE = {
   type: 'split', dir: 'col', ratio: 1 / 3,
-  /* The node/map ratio is a starting value only — dashFitNodeCard() replaces
-     it with a measurement of the Node card's actual text height on the first
-     board refresh (and rewrites it on resize). Keep it in step with
-     .node-card/.map-card's stylesheet row spans, which are what's painted
-     until that first measurement lands. */
-  a: {type: 'split', dir: 'row', ratio: 10 / 24,
-    a: {type: 'leaf', id: 'node'},
-    b: {type: 'leaf', id: 'map'}
-  },
+  a: {type: 'leaf', id: 'map'},
   b: {type: 'split', dir: 'col', ratio: 5 / 8,
-    a: {type: 'split', dir: 'row', ratio: 13 / 24,
-      a: {type: 'leaf', id: 'connected'},
-      b: {type: 'split', dir: 'row', ratio: 7 / 11,
-        a: {type: 'leaf', id: 'activity'},
-        b: {type: 'leaf', id: 'meshtastic'}
+    /* The controls/rest ratio is a starting value only — dashFitNodeCard()
+       replaces it with a measurement of the Controls card's actual content
+       height on the first board refresh (and rewrites it whenever that
+       changes, e.g. the PTT bar appearing). Keep it in step with
+       .node-card/.connected-card's stylesheet row spans, which are what's
+       painted until that first measurement lands. */
+    a: {type: 'split', dir: 'row', ratio: 5 / 24,
+      a: {type: 'leaf', id: 'node'},
+      b: {type: 'split', dir: 'row', ratio: 13 / 24,
+        a: {type: 'leaf', id: 'connected'},
+        b: {type: 'split', dir: 'row', ratio: 7 / 11,
+          a: {type: 'leaf', id: 'activity'},
+          b: {type: 'leaf', id: 'meshtastic'}
+        }
       }
     },
     b: {type: 'split', dir: 'row', ratio: 16 / 24,
@@ -9813,36 +9771,31 @@ function dashApply() {
   dashPositionDividers();
 }
 
-/* ── Node card auto-fit ──────────────────────────────────────────────────
-   The Node card holds three lines of text, a status badge and a row of audio
-   controls, and how much of that is on screen changes with who's logged in
-   (Arm TX needs a role and a TX-capable server, Rec needs the can_record
-   flag), so any fixed row span is wrong at most window heights:
-   too tall and it's mostly dead space, too short and content is silently
-   clipped (the card is overflow:hidden). Measure what it actually needs,
-   give the Node/Map row split exactly that many rows (handing the rest of
-   the left column to the map — which does want every pixel it can get) and
-   the node/map *column* split exactly the button row's width (handing the
-   rest to the other cards — Connected Nodes, Favorites, etc. — instead of
-   leaving the Map wider than Node needs to be).
+/* ── Controls card auto-fit ('node' leaf) ────────────────────────────────
+   The Controls card holds a row of audio buttons, the volume slider and,
+   while TX is armed, the PTT bar. How much of that is on screen changes with
+   who's logged in (Arm TX needs a role and a TX-capable server, Rec needs
+   the can_record flag) and with arming, so any fixed row span is wrong most
+   of the time: too tall and it's dead space taken from Connected Nodes, too
+   short and content is cut off. Measure what it actually needs and give the
+   Controls/Connected Nodes row split exactly that many rows.
 
    Default layout only (`_dashTree` still null). Once someone has dragged or
-   resized anything, the node/map boundaries are their answer, and re-fitting
-   on the next board refresh would pull them back out from under them a
-   second later. The fitted ratios are written into DASH_DEFAULT_TREE itself,
-   not just onto the cards, so when the layout does become custom —
-   dashEnsureCustom() clones exactly that tree — the boundaries stay where
-   they already are instead of jumping back to the pre-measurement default.
-   (Hiding the Map entirely is a separate mechanism — see DASH_NON_GREEDY/
-   dashWalkFolded() — since at that point there's no row split left to fit.) */
-var _dashFitRows = null, _dashFitCols = null;
+   resized anything, the boundary is their answer, and re-fitting on the next
+   board refresh would pull it back out from under them a second later (the
+   measured height still applies as a floor — see dashUpdateNodeMinHeight()).
+   The fitted ratio is written into DASH_DEFAULT_TREE itself, not just onto
+   the cards, so when the layout does become custom — dashEnsureCustom()
+   clones exactly that tree — the boundary stays where it already is instead
+   of jumping back to the pre-measurement default. (Everything under it being
+   hidden is a separate mechanism — see DASH_NON_GREEDY/dashWalkFolded().) */
+var _dashFitRows = null;
 
-/* The split whose two children are the node and map leaves, wherever it sits
-   in `node`; null if they aren't siblings (nothing to fit against). */
+/* The row split whose top child is the Controls ('node') leaf, wherever it
+   sits in `node`; null if there isn't one (nothing to fit against). */
 function dashNodeMapSplit(node) {
   if (!node || node.type !== 'split') return null;
-  if (node.dir === 'row' && node.a.type === 'leaf' && node.a.id === 'node'
-      && node.b.type === 'leaf' && node.b.id === 'map') return node;
+  if (node.dir === 'row' && node.a.type === 'leaf' && node.a.id === 'node') return node;
   return dashNodeMapSplit(node.a) || dashNodeMapSplit(node.b);
 }
 
@@ -9966,6 +9919,12 @@ function dashUpdateNodeMinWidth() {
 function dashUpdateNodeMinHeight() {
   if (!dashSupported()) return;
   var px = dashNodeContentMinPx();
+  /* Capped: with the PTT bar up and its Experimental panel open the content
+     can be taller than the whole dashboard, and an uncapped floor would
+     leave Connected Nodes no rows at all. Past the cap the card scrolls
+     (.node-body is overflow-y:auto). */
+  var area = document.getElementById('content-area');
+  if (area && area.clientHeight) px = Math.min(px, Math.floor(area.clientHeight * 0.6));
   if (px === _dashMinPx.row.node) return;
   _dashMinPx.row.node = px;
   dashApply();
@@ -9975,11 +9934,9 @@ function dashFitNodeCard() {
   dashUpdateNodeMinWidth();
   dashUpdateNodeMinHeight();
   if (!dashSupported() || _dashTree) return;
-  /* Neither can actually be hidden while _dashTree is null (hiding calls
-     dashEnsureCustom() first), but the math below assumes both are on
-     screen, so don't rely on that from a distance — Map hidden is handled
-     separately, by dashWalkFolded()'s non-greedy fold, not here. */
-  if (_dashHidden['node'] || _dashHidden['map']) return;
+  /* Can't actually be hidden while _dashTree is null (hiding calls
+     dashEnsureCustom() first), but the math below assumes it is on screen. */
+  if (_dashHidden['node']) return;
   var rowSplit = dashNodeMapSplit(DASH_DEFAULT_TREE);
   if (!rowSplit) return;
   var changed = false;
@@ -9995,16 +9952,10 @@ function dashFitNodeCard() {
     }
   }
 
-  var needW = _dashMinPx.col.node;
-  var colSplit = dashFindParentSplit(DASH_DEFAULT_TREE, rowSplit);
-  if (needW && colSplit && colSplit.dir === 'col') {
-    var cellW = dashCellSize('col');
-    if (cellW > 0) {
-      var cols = Math.ceil((needW + DASH_GAP) / (cellW + DASH_GAP));
-      cols = Math.max(DASH_MIN_CS, Math.min(DASH_COLS - DASH_MIN_CS, cols));
-      if (cols !== _dashFitCols) { _dashFitCols = cols; colSplit.ratio = cols / DASH_COLS; changed = true; }
-    }
-  }
+  /* Height only. The card shares its column with Connected Nodes, so the
+     column is not narrowed to the button row's width (that was right when
+     the column held just this card and the Map); the width floor above still
+     stops a divider drag from clipping the buttons. */
 
   if (!changed) return;   /* nothing moved — skip the reflow and Leaflet's resize */
   dashApply();   /* re-walk so both dividers follow whichever boundary just moved */
@@ -10039,6 +9990,16 @@ function dashPositionDividers() {
     }
   }
 }
+
+/* The PTT bar comes and goes with arming, and its Experimental panel and
+   status line change its height while it is up. Re-fit the card whenever
+   its box changes, so Connected Nodes hands over (and gets back) exactly
+   the rows it needs. */
+(function() {
+  var bar = document.getElementById('tx-bar');
+  if (!bar || typeof ResizeObserver === 'undefined') return;
+  new ResizeObserver(function() { dashFitNodeCard(); }).observe(bar);
+})();
 
 function initDashLayout() {
   var saved = dashLoadSaved();
