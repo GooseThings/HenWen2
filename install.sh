@@ -543,7 +543,9 @@ if systemctl is-active --quiet "$SERVICE_NAME"; then
     # install.sh prints.
     echo ""
     echo "  Running AMI setup now..."
-    bash "$INSTALL_DIR/ami-setup.sh" || true
+    # Name the unit explicitly: on a box with both HenWen and HenWen2,
+    # ami-setup.sh would otherwise pick HenWen2.
+    HENWEN_SERVICE="$SERVICE_NAME" bash "$INSTALL_DIR/ami-setup.sh" || true
 
     echo ""
     echo "============================================"

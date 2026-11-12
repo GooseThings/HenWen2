@@ -159,6 +159,57 @@ henwen_insert_before_proxypass() {
     return 0
 }
 
+# Like henwen_insert_before_proxypass(), but per <VirtualHost> block: every
+# block that contains HenWen's catch-all ProxyPass and not yet `marker` gets
+# `text` inserted before its own catch-all. A file can hold more than one
+# HenWen block (e.g. :80 and :443, or two hostnames), and a file-wide marker
+# check would patch only the first and then skip the file forever.
+# Returns 0 if any block was patched, 1 if every HenWen block already had
+# the marker, 2 if the file has no HenWen block at all. Plain POSIX awk
+# (Debian's default awk is mawk).
+henwen_insert_before_proxypass_each_block() {
+    local file="$1" port="$2" marker="$3" text="$4"
+    local pat='ProxyPass[[:space:]]+"?/"?[[:space:]]+"?http://127\\.0\\.0\\.1:'"${port}"'/"?'
+    local tmp; tmp=$(mktemp)
+    local rc=0
+    awk -v ins="$text" -v pat="$pat" -v marker="$marker" '
+        function flush(   i, done) {
+            done = 0
+            for (i = 1; i <= n; i++) {
+                if (!has_marker && has_catch && !done && buf[i] ~ pat) {
+                    print ins; done = 1; patched++
+                }
+                print buf[i]
+            }
+            if (has_catch) { henwen++; if (has_marker) already++ }
+            n = 0; has_marker = 0; has_catch = 0; inblock = 0
+        }
+        BEGIN { n = 0; inblock = 0; patched = 0; henwen = 0; already = 0 }
+        # Apache matches section tags case-insensitively; so must this.
+        tolower($0) ~ /<virtualhost/ { if (inblock) flush(); inblock = 1 }
+        {
+            if (!inblock) { print; next }
+            buf[++n] = $0
+            if (index($0, marker) > 0) has_marker = 1
+            if ($0 ~ pat) has_catch = 1
+        }
+        tolower($0) ~ /<\/virtualhost>/ { flush() }
+        END {
+            if (inblock) flush()
+            if (patched > 0) exit 0
+            if (henwen > 0) exit 1
+            exit 2
+        }
+    ' "$file" > "$tmp" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        mv "$tmp" "$file"
+        chmod 644 "$file"
+    else
+        rm -f "$tmp"
+    fi
+    return "$rc"
+}
+
 # Every "host:port" this vhost file actually serves `marker` on -- i.e.
 # only the <VirtualHost ...>...</VirtualHost> blocks that both declare a
 # ServerName and contain `marker` somewhere in their body, paired with that
