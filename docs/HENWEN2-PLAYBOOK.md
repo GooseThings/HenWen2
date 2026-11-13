@@ -22,7 +22,7 @@ stopped and `disable`d. The 2.0 database is a copy of 1.x's, so
 Rollback is `systemctl stop HenWen2 && systemctl enable --now HenWen`; 1.x's
 own database is untouched. Backups: `/root/henwen-cutover-20261110-103223/`.
 
-**What is deployed:** `main` (merge of PR #8). The include wiring
+**What is deployed:** `main` at release **v2.0.0-beta.1** (2026-11-12, the first HenWen2 release, a GitHub pre-release; versions are semver from here, read from `CHANGELOG.md`'s top heading). The include wiring
 (`sip-users/apply.sh`) and the sudoers line have been run by the owner.
 Accounts with a callsign (N8GMZ, K8DIY, WO8E so far) get the one-call path;
 every other account still gets the 1.x Listen and Arm TX unchanged.
@@ -100,7 +100,7 @@ with `0`, so nothing else needs it). Verified from source and live:
 the 1.x repo, so it would reset this checkout onto 1.x. Held for Phase 6 by
 the owner's decision.
 
-**Testing reality:** `./venv/bin/pytest` from `/opt/HenWen2`, 1114 passing.
+**Testing reality:** `./venv/bin/pytest` from `/opt/HenWen2`, 1282 passing.
 Node **643930 is radioless** (UCI-120, hand mic, no transceiver), so keying
 it is not RF — that is what made both Phase 1 spikes possible without a
 separate lab Asterisk. The spike harness is still installed; see

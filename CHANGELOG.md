@@ -1,20 +1,78 @@
 # Changelog
 
-## HenWen 2.0 — unreleased
+## v2.0.0-beta.1
 
-HenWen 2.0 is a fork of HenWen 1.x (`GooseThings/HenWen`, forked at `c875598`)
-that rebuilds audio on Asterisk's own interfaces instead of tapping the node's
-radio channel. Entries below this heading are 1.x history, kept because the
-code they describe is still here until each phase retires it. See
-`docs/HENWEN2-PLAYBOOK.md`.
+The first HenWen 2.0 release, and a **beta**. HenWen 2.0 is a fork of HenWen
+1.x (`GooseThings/HenWen`, forked at `c875598`) that rebuilds browser audio on
+Asterisk's own interfaces instead of tapping the node's radio channel. The 1.x
+audio pipeline is still here as the fallback until later phases retire it. See
+`docs/HENWEN2-PLAYBOOK.md` for the plan and the wiki's Status page for what is
+done.
 
-- **Phase 3 (built, not yet live-verified):** for an account with its own SIP identity, Listen is now one native call — the browser registers as that account and calls the node's phone portal; the node's audio comes down the call, PTT (`*99`/`#`) goes up it, and no server-side capture/encode is involved. Decision D2: no arm step — the PTT bar appears when the call connects, a new **Mute** button silences playback only, and the microphone is requested at connect (a refused mic keeps the call up with a silent track, PTT off). No RX mute while keyed: the downlink is the conference minus this link (measured in Phase 1). Decision D3: the 1.x stream stays as the fallback whenever the call cannot be set up or no inbound RTP arrives, with one `sip-fallback`/`sip-nomedia` journal line each time so the TURN question gets measured, not guessed. `GET /api/audio/session` is the per-session decision; accounts without a callsign, listen-only accounts, and everyone until `sip-users/apply.sh` has run see exactly the 1.x Listen and Arm TX.
-- **Phase 2 (built; include wiring needs the owner):** Manager > Users gets a **Callsign** field; assigning one gives that account its own Asterisk endpoint (`henwen-u-<callsign>`, link name `0<CALLSIGN>`) with a generated SIP secret that rotates on every password change and is removed with the callsign or the account — each of those also hangs up any call that endpoint has up, since a reload alone leaves it running. HenWen renders the endpoints/dialplan into `/etc/asterisk/custom/` and reloads PJSIP/dialplan only when a file changed (`module reload res_pjsip.so` + `dialplan reload`; `pjsip reload` does not exist on this build). `sip-users/apply.sh` adds the two `#tryinclude` lines (owner-only button on TX Diagnostics, `rollback.sh`); until it runs every account keeps the shared `henwen-tx` credential. `/api/tx/config` prefers the per-user identity (SIP user = endpoint name, `auth_user` = callsign). Smart Connector's disconnect-before-connect no longer drops session links. `sip-users/check-register.py` proves a credential registers from a shell.
-- **Phase 0:** repo forked with full history; `HenWen2` unit at `/opt/HenWen2`
-  with its own port, database and audio-relay ports so it runs alongside a live
-  1.x install; Raspberry Pi Zero 2 W removed as the hardware floor (now a Pi 4
-  (4GB) or any 2+ core x86-64); playbook and app_rpt audio notes added under
-  `docs/`.
+**Before you install it:**
+
+- **There is no installer or upgrade path from 1.x yet.** `install.sh` and the
+  Manager's Launch Updater / Force Update button are still 1.x's: they act on
+  `/opt/HenWen` and the 1.x repo. Do not use the updater on a 2.0 checkout.
+  Both are planned for a later phase.
+- **Requirements changed.** Minimum hardware is a Raspberry Pi 4 (4GB) or a
+  2+ core x86-64 machine (the Pi Zero 2 W is no longer supported). Node
+  settings are edited in AllStarLink's ASL Web UI, which needs Debian 13.
+- **Not yet measured:** how many people can listen at once. Each listener is
+  now a real call into the node, which costs more per listener than 1.x's
+  single shared stream.
+
+**Listen and transmit are one call per user**
+
+- **Added: per-user SIP accounts.** Giving an account a callsign (Manager >
+  Users) gives it its own Asterisk login. The secret rotates on every password
+  change, and removing the callsign or the account ends any call it has up.
+  One-time setup: `sip-users/apply.sh`, or the button on Manager > TX
+  Diagnostics.
+- **Changed: for those accounts, Listen places a call from the browser into
+  the node.** Audio comes down the call and push-to-talk goes up it. You do
+  not hear yourself while keyed, and there is no separate Arm TX step: the PTT
+  bar appears when the call connects. A new **Mute** button silences playback
+  only. Accounts without a callsign keep the 1.x Listen and Arm TX.
+- **Added: automatic fallback.** If the call cannot connect or no audio
+  arrives, HenWen starts the 1.x stream instead and logs a `sip-fallback` or
+  `sip-nomedia` line.
+- **Added: listeners appear under Connected Nodes by callsign**, with a keyed
+  light while they hold PTT. Every key-up is logged with the callsign
+  (`[SIP-KEY]`). Owners, superusers and admins can disconnect a listener from
+  the board.
+
+**Running next to AllStarLink's ASL Web UI**
+
+- **Removed: Manager's node settings editors, Raw Editor, rpt.conf Backups
+  page and Asterisk Console.** Node configuration now lives in the ASL Web UI.
+  Macros and schedules stay in Manager.
+- **Changed: HenWen logs in to Asterisk as its own `[henwen]` manager user**
+  instead of `[admin]`, which the ASL Web UI rewrites. Run `ami-setup.sh` once.
+- **Added: `asl-web-ui/apply.sh`** serves the ASL Web UI on HenWen's own site,
+  and Manager links to it from the pages that overlap.
+- **Added: a save from a stale Manager page is refused** instead of
+  overwriting an rpt.conf edit made elsewhere.
+- **Changed: Manager > Asterisk Updates only reports** newer `asl3-asterisk`
+  packages. Installing is done from Cockpit or apt.
+
+**Kiosk**
+
+- **Changed: every header button is a text item in one menu**, on desktop as
+  well as phones.
+- **Changed: the node's number, callsign and location are in the header.**
+  The node's health light glows behind the logo: a green pulse when online,
+  solid red when offline.
+- **Changed: the Node card is now the Controls card**, above Connected Nodes.
+  It holds Listen, Mute, Rec, volume, the PTT bar and the connect form.
+- **Added: in Edit Layout, dropping a card on the dashboard's outer edge makes
+  a new column or row.** Saved custom layouts reset once to the new default.
+
+**Fixes**
+
+- **Fixed: `ami-setup.sh` printed secrets** and named the wrong service in its
+  hint.
+- **Fixed: DVSwitch's logrotate hooks failed** when its units were stopped.
 
 ---
 
