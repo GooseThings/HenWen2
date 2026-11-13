@@ -9,9 +9,11 @@ shows up under Connected Nodes by callsign, hears the node without hearing
 itself, and keys up with push-to-talk. Accounts without a callsign keep the
 1.x stream.
 
-> **Work in progress.** 2.0 is forked from
-> [HenWen 1.x](https://github.com/GooseThings/HenWen) and is being built in
-> phases; some of the 1.x audio code is still here until a phase retires it.
+> **Beta.** The current release is
+> [v2.0.0-beta.1](https://github.com/GooseThings/HenWen2/releases). 2.0 is
+> forked from [HenWen 1.x](https://github.com/GooseThings/HenWen) and is being
+> built in phases; some of the 1.x audio code is still here until a phase
+> retires it.
 
 ![Kiosk](images/Screenshot_2026-10-07_142154.jpg)
 
