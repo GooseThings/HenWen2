@@ -1,12 +1,16 @@
 #!/bin/bash
-# HenWen - Automated updater
+# HenWen 2.0 - Automated updater
 #
 # Launched via `sudo systemd-run --unit=henwen-updater --collect
-# /opt/HenWen/update.sh` from the Manager's "Launch Updater" button
+# /opt/HenWen2/update.sh` from the Manager's "Launch Updater" button
 # (superuser only, see /api/update/launch in app.py). Runs as its own
-# transient systemd unit, deliberately outside HenWen.service's cgroup,
-# so the `systemctl restart HenWen` at the end doesn't get killed along
+# transient systemd unit, deliberately outside HenWen2.service's cgroup,
+# so the `systemctl restart HenWen2` at the end doesn't get killed along
 # with the very service it's restarting.
+#
+# All three settings below are 2.0's. Changing only REPO_URL would be
+# destructive: INSTALL_DIR would still be /opt/HenWen, the stopped 1.x
+# rollback checkout, and the hard reset below would replace it with 2.0.
 #
 # Fetches over plain HTTPS from the public repo rather than the
 # SSH-based `origin` remote (git@github.com:...) — this script runs as
@@ -14,9 +18,9 @@
 # public, so there's nothing to authenticate.
 set -e
 
-REPO_URL="https://github.com/GooseThings/HenWen.git"
-INSTALL_DIR="/opt/HenWen"
-SERVICE_NAME="HenWen"
+REPO_URL="https://github.com/GooseThings/HenWen2.git"
+INSTALL_DIR="/opt/HenWen2"
+SERVICE_NAME="HenWen2"
 TAG="[HENWEN-UPDATE]"
 
 cd "$INSTALL_DIR"

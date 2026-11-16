@@ -96,9 +96,10 @@ with `0`, so nothing else needs it). Verified from source and live:
    if so.
 3. **Phase 4** — recording and stream relay onto `outstreamcmd`.
 
-**Do not** press "Launch Updater": `update.sh`'s `REPO_URL` still points at
-the 1.x repo, so it would reset this checkout onto 1.x. Held for Phase 6 by
-the owner's decision.
+"Launch Updater" now updates 2.0 in place: `update.sh` fetches `main` from
+`GooseThings/HenWen2` over HTTPS, hard-resets `/opt/HenWen2` to it and
+restarts `HenWen2` (owner's decision, 2026-11-16). Uncommitted changes in
+`/opt/HenWen2` are lost, so work in a worktree. `install.sh` is still 1.x's.
 
 **Testing reality:** `./venv/bin/pytest` from `/opt/HenWen2`, 1282 passing.
 Node **643930 is radioless** (UCI-120, hand mic, no transceiver), so keying
@@ -147,7 +148,7 @@ Links for people, `outstreamcmd` for machines.
 | D1 | How TX is restricted | **Software-only** (owner's call). Per-user credentials make abuse attributable and revocable; every `*99` is logged server-side. D1-c spiked in Phase 1; D1-b held in reserve. |
 | D2 | Does an explicit "arm" step stay before keying RF? | **Answered: no.** Connecting is enough. Three controls: **PTT** (hold to talk), **MUTE** (silences received audio), **RECORD** (unchanged). See "D2 as decided" below. |
 | D3 | HTTPS mandatory (no choice — WebRTC); do we ship coturn? | **Answered: start with STUN + the legacy fallback**, instrumented. Owner's preference was coturn + TLS-ALPN demux and they accepted starting simpler. See "D3 as decided" below. |
-| D4 | Repo visibility | Defaulted to **private** at creation; unanswered. `gh repo edit GooseThings/HenWen2 --visibility public` flips it. Note `update.sh`'s self-update fetches over plain HTTPS and needs public (Phase 6 concern only). |
+| D4 | Repo visibility | Defaulted to **private** at creation; since made **public**, which `update.sh`'s self-update needs: it fetches over plain HTTPS with no credentials. |
 
 ### D1 — the security consequence, stated plainly
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Changed: Launch Updater updates HenWen 2.0.** `update.sh` now fetches
+  from the HenWen2 repo, updates `/opt/HenWen2` and restarts `HenWen2`. Before
+  this, it acted on `/opt/HenWen` and the 1.x repo. Run `git pull` by hand once
+  to pick this up; later updates can use the button. `install.sh` is still
+  1.x's.
+
 ## v2.0.0-beta.1
 
 The first HenWen 2.0 release, and a **beta**. HenWen 2.0 is a fork of HenWen

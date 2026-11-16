@@ -144,7 +144,7 @@ AMI_PORT        = int(os.environ.get("AMI_PORT",     5038))
 # updates only Allmon3, which would lock HenWen out (docs/ASL-WEB-UI-PLAN.md,
 # hazard 1).
 AMI_DEDICATED_USER = "henwen"
-SERVICE_NAME    = os.environ.get("SERVICE_NAME",     "HenWen")
+SERVICE_NAME    = os.environ.get("SERVICE_NAME",     "HenWen2")
 # Subdirectory name under Asterisk's sounds dir — single source of truth,
 # used both for SOUNDS_DIR's default and for the "henwen/<slug>" prefix
 # baked into every rpt localplay/playback AMI command elsewhere in this
@@ -2057,7 +2057,7 @@ def _is_password_breached(password):
         prefix, suffix = sha1[:5], sha1[5:]
         body = _http_get_with_dns_backstop(
             f"https://api.pwnedpasswords.com/range/{prefix}",
-            headers={"User-Agent": "HenWen-PasswordCheck (https://github.com/GooseThings/HenWen)"},
+            headers={"User-Agent": "HenWen-PasswordCheck (https://github.com/GooseThings/HenWen2)"},
             timeout=3)
         for line in body.splitlines():
             parts = line.split(':')
@@ -14065,7 +14065,7 @@ NWS_ALERT_EVENT_TYPES = [
     "Extreme Wind Warning",
 ]
 NWS_ALERTS_BASE_URL = "https://api.weather.gov"
-NWS_USER_AGENT = "HenWen/1.0 (ham radio node manager; https://github.com/GooseThings/HenWen)"
+NWS_USER_AGENT = "HenWen/2.0 (ham radio node manager; https://github.com/GooseThings/HenWen2)"
 NWS_ALERT_SPOKEN_PREFIX = "The National Weather Service has issued a "
 
 # Two-letter state/territory codes accepted by NWS's alerts/active?area=
