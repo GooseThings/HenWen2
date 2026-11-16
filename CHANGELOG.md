@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- **Added: a courtesy tone for browser transmissions (#43).** AllStarLink
+  plays none when someone transmitting from a browser unkeys: both Listen's
+  push-to-talk and Arm TX use phone-control mode, which never triggers
+  app_rpt's link courtesy tone. Turn it on under **Manager → Node Control →
+  Browser Courtesy Tone** (Admin and above; off by default). The default tone
+  is the node's own `linkunkeyct` from rpt.conf, the tone a radio link's unkey
+  would get, with three simple presets as alternatives. It plays through the
+  node's normal telemetry, with its usual delay, and only when nothing else
+  is talking. Nodes with `duplex = 0` or `nounkeyct` set get none, as in
+  app_rpt. **Test on node** plays it without turning it on.
+- **Fixed: rpt.conf tone definitions were invisible to HenWen.** A comment
+  line in the sample `[telemetry-main]` (`; [morse] section.`) was read as a
+  stanza header, so the `ct1`-`ct9` definitions after it were lost.
+
 ## v2.0.0-beta.2
 
 The second 2.0 beta: the updater, Manager's service settings and the repository

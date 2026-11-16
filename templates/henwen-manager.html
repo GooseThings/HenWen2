@@ -896,6 +896,38 @@ pre.codeblock { background: var(--bg3); padding: 12px; border-radius: 4px; font-
       </div>
     </div>
 
+    <div class="card" id="courtesy-tone-card">
+      <div class="card-header"><h2>Browser Courtesy Tone</h2></div>
+      <div class="card-body">
+        <p class="muted" style="font-size:0.82rem;margin-top:0">
+          AllStarLink plays no courtesy tone when someone transmitting from a browser
+          (Listen with push-to-talk, or Arm TX) unkeys. Turn this on and HenWen plays one
+          instead, with the node's normal telemetry timing, only when nothing else is talking.
+          It follows the node's own settings: no tone at <span class="mono">duplex=0</span>
+          or with <span class="mono">nounkeyct</span> set.
+        </p>
+        <div class="form-row" style="align-items:flex-end">
+          <div class="form-group">
+            <label class="form-label" style="display:inline-flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="ct-enabled" style="width:auto">
+              Play a courtesy tone when a browser user unkeys
+            </label>
+          </div>
+        </div>
+        <div class="form-row" style="align-items:flex-end">
+          <div class="form-group">
+            <label class="form-label">Tone</label>
+            <select id="ct-tone" class="val-input"></select>
+          </div>
+          <div class="form-group">
+            <button class="btn btn-primary" onclick="courtesyToneSave()">Save</button>
+            <button class="btn" onclick="courtesyToneTest()" title="Plays the selected tone on the Local Node chosen under Connect / Disconnect">Test on node</button>
+          </div>
+        </div>
+        <div id="ct-msg" style="font-size:0.82rem;margin-top:4px"></div>
+      </div>
+    </div>
+
     <div class="card">
       <div class="card-header"><h2>Connect / Disconnect</h2></div>
       <div class="card-body">
@@ -3653,7 +3685,7 @@ function showPage(id) {
   currentPage = id;
 
   if      (id === 'dashboard')    { refreshDashboard(); startDiagPolling(); }
-  else if (id === 'node-control') { loadFavorites(); startNcPolling(); startFavStatusPolling(); renderNodeLockoutCard(); renderKioskBannerCard(); }
+  else if (id === 'node-control') { loadFavorites(); startNcPolling(); startFavStatusPolling(); renderNodeLockoutCard(); renderKioskBannerCard(); renderCourtesyToneCard(); }
   else if (id === 'conn-history')   chLoad(0);
   else if (id === 'alerts')           alLoad();
   else if (id === 'nws-alerts')       nwsLoad();
@@ -4744,6 +4776,51 @@ async function renderKioskBannerCard() {
   } else {
     statusEl.innerHTML = '<span class="muted">No banner currently showing.</span>';
   }
+}
+
+function ctMsg(text, ok) {
+  var el = document.getElementById('ct-msg');
+  el.textContent = text;
+  el.style.color = ok ? 'var(--green)' : 'var(--danger)';
+  if (ok) setTimeout(function(){ if (el.textContent === text) el.textContent = ''; }, 4000);
+}
+
+async function renderCourtesyToneCard() {
+  var r = await api('/api/courtesy-tone');
+  if (!r.ok) { ctMsg((r.data && r.data.error) || 'Could not load courtesy tone settings', false); return; }
+  var sel = document.getElementById('ct-tone');
+  sel.innerHTML = '';
+  (r.data.choices || []).forEach(function(c) {
+    var o = document.createElement('option');
+    o.value = c.value; o.textContent = c.label;
+    sel.appendChild(o);
+  });
+  sel.value = r.data.tone;
+  document.getElementById('ct-enabled').checked = !!r.data.enabled;
+}
+
+async function courtesyToneSave() {
+  var r = await api('/api/courtesy-tone', {
+    method:  'POST',
+    headers: {'Content-Type': 'application/json'},
+    body:    JSON.stringify({enabled: document.getElementById('ct-enabled').checked,
+                             tone:    document.getElementById('ct-tone').value}),
+  });
+  if (!r.ok) { ctMsg((r.data && r.data.error) || 'Save failed', false); return; }
+  ctMsg(r.data.enabled ? 'Saved. Browser unkeys now get a courtesy tone.' : 'Saved. Courtesy tone is off.', true);
+}
+
+async function courtesyToneTest() {
+  var node = (document.getElementById('nc-local') || {}).value;
+  if (!node) { ctMsg('No local node to test on.', false); return; }
+  var r = await api('/api/courtesy-tone/test', {
+    method:  'POST',
+    headers: {'Content-Type': 'application/json'},
+    body:    JSON.stringify({node: node, tone: document.getElementById('ct-tone').value}),
+  });
+  if (!r.ok) { ctMsg((r.data && r.data.error) || 'Test failed', false); return; }
+  if (r.data.skipped) { ctMsg('No tone on ' + node + ': ' + r.data.skipped, false); return; }
+  ctMsg('Playing on ' + node + ' (after the node\'s telemetry delay).', true);
 }
 
 async function kioskBannerSet() {

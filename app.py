@@ -5790,7 +5790,11 @@ def _collect_stanzas(content):
         # recognized as boundaries.
         is_commented = s.startswith(";")
         header_candidate = s[1:].strip() if is_commented else s
-        hdr = re.match(r'^\[([^\]]+)\](?:\(([^)]+)\))?', header_candidate)
+        # The header must be the whole line, bar a trailing comment: prose in
+        # a comment that merely starts with a bracketed word (the sample
+        # [telemetry-main] has "; [morse] section.") is not a boundary, and
+        # treating it as one filed every ctN tone under a phantom [morse].
+        hdr = re.match(r'^\[([^\]]+)\](?:\(([^)]+)\))?\s*(?:;.*)?$', header_candidate)
         if hdr:
             raw_name = hdr.group(1).strip()
             raw_tmpl = (hdr.group(2) or "").strip()
@@ -16177,6 +16181,349 @@ def _sip_keyed_log(transition):
         log("INFO", f"[SIP-KEY] {cs} unkeyed{where} after {secs:.1f}s")
 
 
+# ---------------------------------------------------------------------------
+# Courtesy tone for browser transmissions (issue #43)
+#
+# app_rpt never plays a courtesy tone when a browser user unkeys. Both browser
+# paths -- the 2.0 per-user call and 1.x's Arm TX -- run Rpt(<node>,P,...),
+# phone-control mode, where *99 reaches DC_DOKEY and sets only the link's
+# lastrealrx (app_rpt.c:1745). The link courtesy tone is LINKUNKEY telemetry,
+# raised by rxunkey_helper() only when lastrx1 falls (app_rpt.c:3398), and
+# lastrx1 is set only by rxkey_helper() on a radio-key frame from a non-phone
+# link (app_rpt.c:4832). So a phone link's '#' never sounds one, by design
+# (app_rpt 3.10.8; the AllStarLink maintainers confirm phone mode doesn't
+# toggle COS).
+#
+# HenWen plays it instead: on a '#' unkey it sends `rpt localplay <node>
+# <tone>`. LOCALPLAY telemetry joins RPT_TXCONF exactly like app_rpt's own
+# courtesy tones (rpt_telemetry.c:1604-1614) and waits `telemwait` before
+# playing (rpt_telemetry.c LOCALPLAY case), which with stock wait-times equals
+# `unkeywait`, so the tone lands with the node's normal timing. HenWen only
+# debounces briefly, so a quick re-key cancels it. The default tone is the
+# node's own `linkunkeyct`, synthesized from its `|t(f1,f2,ms,amplitude)`
+# definition, which is what app_rpt would have played for a radio link.
+# app_rpt's own gates are honoured: no tone at duplex=0 or nounkeyct=1.
+#
+# Cost: one AMI command per unkey, plus a one-time ffmpeg conversion when the
+# tone changes.
+# ---------------------------------------------------------------------------
+
+COURTESY_TONE_DEBOUNCE_SEC = 0.3
+COURTESY_TONE_CHOICES = {
+    # value -> (label, segments); "node" resolves from rpt.conf at play time.
+    "node":       ("Node's own link courtesy tone (linkunkeyct)", None),
+    "beep":       ("Single beep (1000 Hz)",  [(1000, 0, 100, 2048)]),
+    "chirp-up":   ("Rising chirp",           [(660, 0, 80, 2048), (880, 0, 80, 2048)]),
+    "chirp-down": ("Falling chirp",          [(880, 0, 80, 2048), (660, 0, 80, 2048)]),
+}
+COURTESY_TONE_FALLBACK = "beep"
+_COURTESY_TONE_SLUG_PREFIX = "_courtesy_tone_"
+_TONE_SPEC_RE = re.compile(r'\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)')
+
+_ct_lock = threading.Lock()
+_ct_timers = {}              # node -> pending threading.Timer
+_armtx_keyed_lock = threading.Lock()
+_armtx_keyed = {}            # Uniqueid -> {"node","digits","keyed"}; 1.x Arm TX calls only
+
+
+def courtesy_tone_config():
+    """{'enabled': bool, 'tone': one of COURTESY_TONE_CHOICES}. Off by
+    default: an existing node must not start beeping on upgrade."""
+    tone = get_setting("courtesy_tone", "node") or "node"
+    if tone not in COURTESY_TONE_CHOICES:
+        tone = "node"
+    return {"enabled": get_setting("courtesy_tone_enabled", "0") == "1", "tone": tone}
+
+
+def parse_tone_spec(spec):
+    """app_rpt's tone telemetry '|t(f1,f2,ms,amp)(...)' -> [(f1,f2,ms,amp)],
+    else None (a sound-file name, or anything unparseable). A segment with
+    both frequencies 0 is a silent gap, as in app_rpt."""
+    s = str(spec or '').strip()
+    if not s.lower().startswith('|t'):
+        return None
+    segs = [tuple(int(x) for x in m.groups()) for m in _TONE_SPEC_RE.finditer(s)]
+    if not segs or any(ms <= 0 or ms > 5000 or amp > 32767 or f1 > 4000 or f2 > 4000
+                       for f1, f2, ms, amp in segs):
+        return None
+    return segs
+
+
+def tone_pcm(segments, rate=8000):
+    """Signed 16-bit mono PCM for tone segments. Each segment sums its two
+    sines at `amp` peak each (Asterisk's tonepair), with 5 ms ramps so the
+    edges don't click."""
+    import math
+    out = bytearray()
+    ramp = int(rate * 0.005)
+    for f1, f2, ms, amp in segments:
+        n = int(rate * ms / 1000)
+        for i in range(n):
+            t = i / rate
+            v = 0.0
+            if f1:
+                v += math.sin(2 * math.pi * f1 * t)
+            if f2:
+                v += math.sin(2 * math.pi * f2 * t)
+            g = min(1.0, i / ramp, (n - 1 - i) / ramp) if ramp else 1.0
+            s = int(max(-32768, min(32767, round(v * amp * max(g, 0.0)))))
+            out += s.to_bytes(2, "little", signed=True)
+    return bytes(out)
+
+
+def rpt_effective_values(stanzas, name, _seen=None):
+    """{key: value} for a stanza as Asterisk reads it: its templates first,
+    left to right (recursively), then its own lines, counting only lines
+    that aren't commented out and dropping inline '; comments'.
+
+    Not parse_stanza_settings(): that one serves the editors, and reports a
+    commented-out line in the stanza itself (';linkunkeyct = ct8', common in
+    a node stanza copied from the sample) as an entry that hides the
+    template's live value. Asterisk ignores the comment, and so must this."""
+    _seen = set() if _seen is None else _seen
+    st = stanzas.get(name)
+    if st is None or name in _seen:
+        return {}
+    _seen.add(name)
+    out = {}
+    for t in (x.strip() for x in str(st.get("template") or "").split(",")):
+        if t:
+            out.update(rpt_effective_values(stanzas, t, _seen))
+    for line in st.get("lines", []):
+        line = line.strip()
+        if not line or line.startswith(";") or line.startswith("#"):
+            continue
+        k, sep, v = line.partition("=")
+        if not sep:
+            continue
+        v = v.split(";", 1)[0].strip()
+        k = k.strip().rstrip(">").strip()
+        if k:
+            out[k] = v
+    return out
+
+
+def _ct_node_settings(node):
+    """(node values, telemetry values) from rpt.conf, both {} when
+    unreadable. The telemetry stanza is the node's telemetry= (default
+    'telemetry'), where ct1..ctN are defined."""
+    try:
+        content = read_conf_file(RPT_CONF_PATH) or ""
+    except Exception as e:
+        log("WARN", f"[CT] Could not read {RPT_CONF_PATH}: {e}")
+        return {}, {}
+    stanzas = _collect_stanzas(content)
+    ns = rpt_effective_values(stanzas, str(node))
+    ts = rpt_effective_values(stanzas, ns.get("telemetry") or "telemetry")
+    return ns, ts
+
+
+def resolve_courtesy_tone(tone, node_settings, telemetry_settings):
+    """What to play for an unkey on a node: ('tone', segments), or
+    ('skip', reason) when app_rpt itself would play none. Pure, for tests.
+
+    'node' follows app_rpt: linkunkeyct names a telemetry entry (e.g. ct8),
+    whose value is a |t(...) tone. A node without linkunkeyct, or whose
+    entry is a sound file or doesn't parse, gets the generic beep."""
+    duplex = str(node_settings.get("duplex", "2")).strip()
+    if duplex == "0":
+        return ("skip", "duplex=0 (no courtesy tones)")
+    if str(node_settings.get("nounkeyct", "0")).strip() not in ("", "0", "no", "false"):
+        return ("skip", "nounkeyct is set")
+    if tone == "node":
+        name = (node_settings.get("linkunkeyct") or "").strip()
+        segs = parse_tone_spec(telemetry_settings.get(name)) if name else None
+        if segs:
+            return ("tone", segs)
+        tone = COURTESY_TONE_FALLBACK
+    return ("tone", COURTESY_TONE_CHOICES.get(tone, COURTESY_TONE_CHOICES[COURTESY_TONE_FALLBACK])[1])
+
+
+def _ct_sound_slug(segments):
+    key = ";".join(",".join(str(x) for x in s) for s in segments)
+    return _COURTESY_TONE_SLUG_PREFIX + hashlib.sha1(key.encode()).hexdigest()[:10]
+
+
+def _ct_ensure_sound(segments):
+    """The sound path (under SOUNDS_SUBDIR, no extension) for these segments,
+    generated on first use. Checked every play: `rpt localplay` with a
+    missing file fails silently. Other generated tones are removed, so a
+    changed setting doesn't leave files behind."""
+    slug = _ct_sound_slug(segments)
+    dest = _ann_sound_path(slug)
+    if not os.path.exists(dest):
+        # Not _ensure_sounds_dir(): that returns a Flask response, and this
+        # also runs on the tone timer thread, outside any request.
+        os.makedirs(SOUNDS_DIR, exist_ok=True)
+        fd, tmp_wav = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        fd, tmp_ulaw = tempfile.mkstemp(suffix=".ulaw", dir=SOUNDS_DIR)
+        os.close(fd)
+        try:
+            with wave.open(tmp_wav, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(8000)
+                w.writeframes(tone_pcm(segments))
+            _convert_to_ulaw(tmp_wav, tmp_ulaw)
+            try:
+                shutil.chown(tmp_ulaw, user="asterisk", group="asterisk")
+            except Exception:
+                pass
+            os.replace(tmp_ulaw, dest)
+        finally:
+            for p in (tmp_wav, tmp_ulaw):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+        log("INFO", f"[CT] Generated courtesy tone {slug} {segments}")
+        for old in glob.glob(os.path.join(SOUNDS_DIR, _COURTESY_TONE_SLUG_PREFIX + "*")):
+            if os.path.splitext(os.path.basename(old))[0] != slug:
+                try:
+                    os.unlink(old)
+                except OSError:
+                    pass
+    return f"{SOUNDS_SUBDIR}/{slug}"
+
+
+def _armtx_keyed_handle_event(ev):
+    """Track 1.x Arm TX calls (context henwen-browser-tx, extension
+    2<node>) for the courtesy tone only. Kept out of _sip_keyed on purpose:
+    that table names callsigns and drives the board's keyed lights, and an
+    Arm TX call is the shared 0HenWen-Web link. Returns ('key'|'unkey', node)
+    on a DTMF transition, else None. A hangup forgets the call without a
+    transition, so a dropped call never beeps."""
+    uid = ev.get("Uniqueid") or ev.get("Channel")
+    if ev.get("Event") == "Hangup":
+        with _armtx_keyed_lock:
+            _armtx_keyed.pop(uid, None)
+        return None
+    if (ev.get("Event") != "DTMFEnd" or ev.get("Direction", "Received") != "Received"
+            or ev.get("Context") != "henwen-browser-tx"):
+        return None
+    exten, digit = str(ev.get("Exten") or ""), str(ev.get("Digit") or "")[:1]
+    if not (exten.startswith("2") and exten[1:].isdigit()) or not digit:
+        return None
+    node = exten[1:]
+    with _armtx_keyed_lock:
+        e = _armtx_keyed.setdefault(uid, {"node": node, "digits": "", "keyed": False})
+        if digit == "#":
+            e["digits"] = ""
+            if e["keyed"]:
+                e["keyed"] = False
+                return ("unkey", node)
+            return None
+        e["digits"] = (e["digits"] + digit)[-3:]
+        if e["digits"] == "*99" and not e["keyed"]:
+            e["keyed"], e["digits"] = True, ""
+            return ("key", node)
+    return None
+
+
+def _armtx_keyed_reset():
+    with _armtx_keyed_lock:
+        _armtx_keyed.clear()
+
+
+def _ct_channel_busy(node):
+    """True while anything else is talking on the node: its own receiver,
+    a real (non-browser) link, or another browser session. Browser sessions
+    are read from the live DTMF tables, not the AMI cache, whose overlay can
+    still show the user who just unkeyed for up to one poll interval."""
+    node = str(node)
+    cached = _ami_cache.get(node, {}) or {}
+    if cached.get("keyed"):
+        return True
+    for name, link in (cached.get("links") or {}).items():
+        if link.get("keyed") and not _sip_session_link(name):
+            return True
+    with _sip_keyed_lock:
+        if any(e["keyed"] and e["node"] in ("", node) for e in _sip_keyed.values()):
+            return True
+    with _armtx_keyed_lock:
+        return any(e["keyed"] and e["node"] == node for e in _armtx_keyed.values())
+
+
+def courtesy_tone_key(node):
+    """A browser session keyed on `node`: cancel a tone still waiting."""
+    with _ct_lock:
+        t = _ct_timers.pop(str(node), None)
+    if t:
+        t.cancel()
+
+
+def courtesy_tone_unkey(node, who=""):
+    """A browser session unkeyed with '#': schedule the tone. Called from the
+    AMI event reader, so it only starts a timer; the play runs on the timer
+    thread, over the command pool, never on the event connection."""
+    if not node or not courtesy_tone_config()["enabled"]:
+        return
+    node = str(node)
+    t = threading.Timer(COURTESY_TONE_DEBOUNCE_SEC, _courtesy_tone_fire, args=(node, who))
+    t.daemon = True
+    with _ct_lock:
+        old = _ct_timers.pop(node, None)
+        _ct_timers[node] = t
+    if old:
+        old.cancel()
+    t.start()
+
+
+def play_courtesy_tone(node, tone=None):
+    """Resolve and play the tone on `node` now. Returns (played, detail)."""
+    tone = tone or courtesy_tone_config()["tone"]
+    ns, ts = _ct_node_settings(node)
+    kind, what = resolve_courtesy_tone(tone, ns, ts)
+    if kind == "skip":
+        return False, what
+    path = _ct_ensure_sound(what)
+    cmd = f"rpt localplay {node} {path}"
+    ami_send_command(lambda ami, _c=cmd: ami.command(_c))
+    return True, path
+
+
+def _courtesy_tone_fire(node, who=""):
+    with _ct_lock:
+        if _ct_timers.get(node) is threading.current_thread():
+            _ct_timers.pop(node, None)
+    try:
+        if not courtesy_tone_config()["enabled"]:
+            return
+        if _ct_channel_busy(node):
+            log("DEBUG", f"[CT] Skipped on {node}: channel busy")
+            return
+        played, detail = play_courtesy_tone(node)
+        by = f" after {who} unkeyed" if who else ""
+        if played:
+            log("INFO", f"[CT] Courtesy tone on {node}{by}")
+        else:
+            log("DEBUG", f"[CT] No courtesy tone on {node}: {detail}")
+    except Exception as e:
+        log("WARN", f"[CT] Courtesy tone on {node} failed: {e}")
+
+
+def _sip_keyed_dispatch(pkt):
+    """One AMI event from the DTMF stream: update both keyed tables, log
+    session transitions, and drive the courtesy tone. Only a '#' unkey
+    sounds a tone; a hangup, an admin kick or a stream reset never does."""
+    t = _sip_keyed_handle_event(pkt)
+    if t:
+        _sip_keyed_log(t)
+        kind, cs, node, _ = t
+        if kind == "key":
+            courtesy_tone_key(node)
+        elif pkt.get("Event") == "DTMFEnd":
+            courtesy_tone_unkey(node, cs)
+    a = _armtx_keyed_handle_event(pkt)
+    if a:
+        kind, node = a
+        if kind == "key":
+            courtesy_tone_key(node)
+        else:
+            courtesy_tone_unkey(node, "Arm TX")
+
+
 def _ami_split_packets(buf):
     """Split an AMI byte stream into complete packets (dicts) plus the
     unfinished remainder."""
@@ -16202,9 +16549,10 @@ def _sip_keyed_event_loop(stop=None):
     while not (stop and stop.is_set()):
         ami = None
         try:
-            # Nothing to watch until some account has a SIP identity; checked
-            # every cycle so a callsign assigned later starts the stream.
-            if not _sip_session_callsigns():
+            # Nothing to watch until some account has a SIP identity or the
+            # courtesy tone is on (an Arm TX-only install has no callsigns);
+            # checked every cycle so either one turned on later starts it.
+            if not _sip_session_callsigns() and not courtesy_tone_config()["enabled"]:
                 time.sleep(SIP_KEYED_RETRY_SEC * 6)
                 continue
             creds = parse_manager_conf()
@@ -16218,6 +16566,7 @@ def _sip_keyed_event_loop(stop=None):
             for f in ("Event: DTMFEnd", "Event: Hangup"):
                 ami._send_action({"Action": "Filter", "Operation": "Add", "Filter": f})
             _sip_keyed_reset("event stream restarted")
+            _armtx_keyed_reset()
             if down_since is not None:
                 log("INFO", f"[SIP-KEY] Event stream back after {int(time.time() - down_since)}s")
             else:
@@ -16228,9 +16577,7 @@ def _sip_keyed_event_loop(stop=None):
             # pressed during a reconnect); connect() hands them over.
             packets, buf = _ami_split_packets(ami.login_leftover)
             for pkt in packets:
-                t = _sip_keyed_handle_event(pkt)
-                if t:
-                    _sip_keyed_log(t)
+                _sip_keyed_dispatch(pkt)
             sock.settimeout(1.0)
             while not (stop and stop.is_set()):
                 try:
@@ -16250,9 +16597,7 @@ def _sip_keyed_event_loop(stop=None):
                 if len(buf) > 65536:          # never a real packet; resync
                     buf = ""
                 for pkt in packets:
-                    t = _sip_keyed_handle_event(pkt)
-                    if t:
-                        _sip_keyed_log(t)
+                    _sip_keyed_dispatch(pkt)
         except Exception as e:
             if down_since is None:
                 down_since = time.time()
@@ -16266,6 +16611,7 @@ def _sip_keyed_event_loop(stop=None):
                 except Exception:
                     pass
             _sip_keyed_reset("event stream down")
+            _armtx_keyed_reset()
         if stop and stop.is_set():
             break
         time.sleep(delay)
@@ -16276,6 +16622,51 @@ def _sip_keyed_event_loop(stop=None):
 def start_sip_keyed_monitor():
     threading.Thread(target=_sip_keyed_event_loop, name="sip-keyed-monitor",
                      daemon=True).start()
+
+
+@app.route("/api/courtesy-tone", methods=["GET"])
+def api_courtesy_tone_get():
+    """Courtesy tone settings (admin+, the check_auth() default)."""
+    cfg = courtesy_tone_config()
+    cfg["choices"] = [{"value": k, "label": v[0]} for k, v in COURTESY_TONE_CHOICES.items()]
+    return jsonify(cfg)
+
+
+@app.route("/api/courtesy-tone", methods=["POST", "PUT"])
+def api_courtesy_tone_set():
+    data = request.json or {}
+    tone = str(data.get("tone", "node"))
+    if tone not in COURTESY_TONE_CHOICES:
+        return jsonify({"error": "Unknown tone"}), 400
+    enabled = bool(data.get("enabled", False))
+    set_setting("courtesy_tone_enabled", "1" if enabled else "0")
+    set_setting("courtesy_tone", tone)
+    log("INFO", f"[CT] Courtesy tone {'on' if enabled else 'off'} ({tone}) "
+                f"set by {session.get('username', '')}")
+    return jsonify(courtesy_tone_config())
+
+
+@app.route("/api/courtesy-tone/test", methods=["POST"])
+def api_courtesy_tone_test():
+    """Play the selected (or saved) tone on a local node now, whether or not
+    the feature is enabled, so it can be heard before turning it on."""
+    data = request.json or {}
+    node = str(data.get("node", "")).strip()
+    content = read_conf_file(RPT_CONF_PATH)
+    if not re.match(r'^\d{1,7}$', node) or node not in [str(n) for n in get_node_numbers(content or '')]:
+        return jsonify({"error": "Pick one of this server's nodes"}), 400
+    tone = str(data.get("tone") or courtesy_tone_config()["tone"])
+    if tone not in COURTESY_TONE_CHOICES:
+        return jsonify({"error": "Unknown tone"}), 400
+    try:
+        played, detail = play_courtesy_tone(node, tone)
+    except Exception as e:
+        log("WARN", f"[CT] Test on {node} failed: {e}")
+        return jsonify({"error": str(e)}), 500
+    if not played:
+        return jsonify({"ok": False, "skipped": detail})
+    log("INFO", f"[CT] Test courtesy tone on {node} by {session.get('username', '')}")
+    return jsonify({"ok": True})
 
 
 def _sip_rotate_secret_for(db, username, reason):
