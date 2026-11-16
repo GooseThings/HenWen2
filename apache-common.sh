@@ -46,7 +46,7 @@ henwen_flask_port() {
         printf '%s\n' "$PORT"
         return 0
     fi
-    local svc="${SERVICE_FILE_PATH:-/etc/systemd/system/${SERVICE_NAME:-HenWen}.service}"
+    local svc="${SERVICE_FILE_PATH:-/etc/systemd/system/${SERVICE_NAME:-HenWen2}.service}"
     local p=""
     if [ -f "$svc" ]; then
         p=$(grep -oE '^Environment="?PORT=[0-9]+' "$svc" 2>/dev/null | grep -oE '[0-9]+$' | head -1)

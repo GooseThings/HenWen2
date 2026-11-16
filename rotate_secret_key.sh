@@ -16,7 +16,7 @@
 # after this succeeds.
 set -euo pipefail
 
-SERVICE_NAME="${SERVICE_NAME:-HenWen}"
+SERVICE_NAME="${SERVICE_NAME:-HenWen2}"
 SERVICE_FILE_PATH="${SERVICE_FILE_PATH:-/etc/systemd/system/${SERVICE_NAME}.service}"
 TAG="[HENWEN-SECRET-ROTATE]"
 

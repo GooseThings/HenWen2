@@ -15,8 +15,8 @@
 # match a standard install for a standalone run.
 set -e
 
-INSTALL_DIR="${INSTALL_DIR:-/opt/HenWen}"
-SERVICE_NAME="${SERVICE_NAME:-HenWen}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/HenWen2}"
+SERVICE_NAME="${SERVICE_NAME:-HenWen2}"
 
 SUDOERS_FILE=/etc/sudoers.d/henwen-systemctl
 SYSTEMCTL_BIN=$(command -v systemctl || echo /bin/systemctl)

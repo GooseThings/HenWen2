@@ -21,7 +21,7 @@
 # then new ami_port (or blank). Never argv, so values never appear in `ps`.
 set -euo pipefail
 
-SERVICE_NAME="${SERVICE_NAME:-HenWen}"
+SERVICE_NAME="${SERVICE_NAME:-HenWen2}"
 SERVICE_FILE_PATH="${SERVICE_FILE_PATH:-/etc/systemd/system/${SERVICE_NAME}.service}"
 PORT_MIN=1024
 PORT_MAX=65535
