@@ -1883,7 +1883,7 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
           <input type="range" id="listen-volume" min="0" max="100" value="100" disabled title="Listen volume — separate from your device's system volume" style="flex:1">
         </div>
         <!-- The PTT control and everything that goes with it (mic meter/gain,
-             BT/Car Mic, Experimental Audio Sources, #tx-status). Shown only
+             BT/Car Mic, Audio Sources, Courtesy Tone, #tx-status). Shown only
              while TX is armed; a ResizeObserver (see dashFitNodeCard()) grows
              the card to fit when it appears or its panel opens. -->
         <div id="tx-bar" style="display:none">
@@ -1897,7 +1897,7 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
             <input type="range" id="tx-gain" min="0" max="200" value="100" title="Microphone gain">
             <span id="tx-gain-val" style="font-size:0.7rem;color:var(--text2);width:3em;flex-shrink:0">100%</span>
           </div>
-          <!-- BT/Car Mic and Experimental Audio Sources share one row; the
+          <!-- BT/Car Mic, Audio Sources and Courtesy Tone share one row; the
                "setting saved" note follows them and wraps under on a narrow card. -->
           <div style="display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap">
             <button type="button" class="sb-btn btmic" id="tx-agc-btn"
@@ -1905,8 +1905,12 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
               <svg class="icon"><use href="#icon-headphones"></use></svg> BT/Car Mic: <span id="tx-agc-btn-state">Off</span>
             </button>
             <button type="button" class="sb-btn btmic" id="tx-exp-btn"
-                    title="Experimental: pick the mic/speaker device and override each audio-processing flag independently, to see which combination makes Android route to a Bluetooth/Android Auto mic. Changes take effect next time you arm TX.">
-              <svg class="icon"><use href="#icon-headphones"></use></svg> Experimental Audio Sources
+                    title="Pick the mic/speaker device and override each audio-processing flag independently, to see which combination makes Android route to a Bluetooth/Android Auto mic. Changes take effect next time you arm TX.">
+              <svg class="icon"><use href="#icon-headphones"></use></svg> Audio Sources
+            </button>
+            <button type="button" class="sb-btn btmic on" id="tx-ct-btn"
+                    title="The courtesy tone this browser plays when a HenWen user lets go of PTT. Only you hear it; nothing is sent over the air. Saved in this browser.">
+              <svg class="icon"><use href="#icon-bell"></use></svg> Courtesy Tone: <span id="tx-ct-btn-state">On</span>
             </button>
             <div id="tx-agc-msg" style="font-size:0.7rem;color:var(--text2);line-height:1.3;display:none">
               <div>Bluetooth mic setting saved</div>
@@ -7861,8 +7865,14 @@ var _beepPrevKeyed = {};
 var _UNKEY_BEEP_TONES = [660, 500, 385];
 var _UNKEY_BEEP_TONE_SEC = 0.05;
 
+/* On unless this browser turned it off (#tx-ct-btn). */
+function _unkeyBeepEnabled() {
+  try { return localStorage.getItem('henwen-courtesy-tone') !== '0'; }
+  catch (e) { return true; }
+}
+
 function _playUnkeyBeep() {
-  if (_userMuted) return;
+  if (_userMuted || !_unkeyBeepEnabled()) return;
   var AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return;
   try {
@@ -7943,6 +7953,22 @@ function _unkeyBeepWatch(nodes) {
     agcState.textContent = on ? 'On' : 'Off';
   }
   _txRenderAgcBtn(_txSavedAgc());
+
+  /* Courtesy tone on/off (#tx-ct-btn): per browser, takes effect at once. */
+  var ctBtn   = document.getElementById('tx-ct-btn');
+  var ctState = document.getElementById('tx-ct-btn-state');
+  function _txRenderCtBtn(on) {
+    ctBtn.classList.toggle('on', on);
+    ctState.textContent = on ? 'On' : 'Off';
+    ctBtn.querySelector('use').setAttribute('href', on ? '#icon-bell' : '#icon-bell-off');
+  }
+  _txRenderCtBtn(_unkeyBeepEnabled());
+  ctBtn.addEventListener('click', function() {
+    var on = !ctBtn.classList.contains('on');
+    _txRenderCtBtn(on);
+    try { localStorage.setItem('henwen-courtesy-tone', on ? '1' : '0'); } catch (e) {}
+  });
+
   agcBtn.addEventListener('click', function() {
     var on = !agcBtn.classList.contains('on');
     _txRenderAgcBtn(on);
