@@ -237,7 +237,6 @@ class TestPlay:
         monkeypatch.setattr(app, "SOUNDS_DIR", str(tmp_path))
         monkeypatch.setattr(app, "_ct_node_settings", lambda n: ({"duplex": "2", "linkunkeyct": "ct8"}, TELEM))
         monkeypatch.setattr(app, "_convert_to_ulaw", lambda src, dest: open(dest, "wb").write(b"\xff" * 10))
-        (tmp_path / "_courtesy_tone_old.ulaw").write_bytes(b"x")          # a previous tone
         sent = []
 
         class FakeAmi:
@@ -249,7 +248,7 @@ class TestPlay:
         slug = app._ct_sound_slug([(700, 1100, 150, 2048)])
         assert played and path == f"{app.SOUNDS_SUBDIR}/{slug}"
         assert sent == [f"rpt localplay 643930 {app.SOUNDS_SUBDIR}/{slug}"]
-        assert sorted(os.listdir(tmp_path)) == [f"{slug}.ulaw"]
+        assert os.listdir(tmp_path) == [f"{slug}.ulaw"]
 
     def test_gate_skips_without_playing(self, monkeypatch):
         monkeypatch.setattr(app, "_ct_node_settings", lambda n: ({"duplex": "0"}, {}))
@@ -338,3 +337,43 @@ class TestRptConf:
     def test_template_cycle_is_safe(self):
         st = app._collect_stanzas("[a](b)\nx=1\n[b](a)\ny=2\n")
         assert app.rpt_effective_values(st, "a") == {"y": "2", "x": "1"}
+
+    def test_arrow_assignment(self):
+        st = app._collect_stanzas("[n]\nlinkunkeyct => ct8 ; tone\nduplex=>2\n")
+        assert app.rpt_effective_values(st, "n") == {"linkunkeyct": "ct8", "duplex": "2"}
+
+    def test_save_path_agrees_on_boundaries(self):
+        """update_setting_in_content() must not treat comment prose as a header."""
+        assert app._section_header_match("; [morse] section.") is None
+        assert app._section_header_match(";[daq-cham-1]").group(1) == "daq-cham-1"
+        assert app._section_header_match("[643930](node-main,allscan-uci) ; x").group(1) == "643930"
+
+
+class TestSoundFiles:
+    def _gen(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(app, "SOUNDS_DIR", str(tmp_path))
+        monkeypatch.setattr(app, "_convert_to_ulaw", lambda src, dest: open(dest, "wb").write(b"\xff"))
+
+    def test_recent_other_tone_survives(self, monkeypatch, tmp_path):
+        """app_rpt opens a queued tone only after telemwait; don't delete it."""
+        self._gen(monkeypatch, tmp_path)
+        a = app._ct_ensure_sound([(1000, 0, 100, 2048)])
+        app._ct_ensure_sound([(700, 1100, 150, 2048)])
+        assert os.path.exists(os.path.join(str(tmp_path), a.split("/")[-1] + ".ulaw"))
+
+    def test_stale_tone_pruned(self, monkeypatch, tmp_path):
+        self._gen(monkeypatch, tmp_path)
+        old = tmp_path / "_courtesy_tone_deadbeef.ulaw"
+        old.write_bytes(b"x")
+        os.utime(old, (1, 1))
+        app._ct_ensure_sound([(700, 1100, 150, 2048)])
+        assert not old.exists()
+
+    def test_hidden_from_sound_picker(self, monkeypatch, tmp_path):
+        d = tmp_path / "henwen"
+        d.mkdir()
+        for n in ("_courtesy_tone_abc.ulaw", "_tts_preview.ulaw", "club-id.ulaw"):
+            (d / n).write_bytes(b"x")
+        monkeypatch.setattr(app, "ASTERISK_SOUNDS_ROOT", str(tmp_path))
+        monkeypatch.setattr(app, "_packaged_sound_files", lambda: set())
+        assert [s["path"] for s in app._list_asterisk_sounds()] == ["henwen/club-id"]

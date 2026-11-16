@@ -5982,7 +5982,9 @@ def _section_header_match(s):
     this function didn't recognize ";[daq-cham-1]" as leaving [macro].
     """
     header_candidate = s[1:].strip() if s.startswith(";") else s
-    return re.match(r'^\[([^\]\(]+)', header_candidate)
+    # Same whole-line rule as _collect_stanzas(), so reading and saving
+    # agree on where a stanza ends ("; [morse] section." is prose).
+    return re.match(r'^\[([^\]\(]+)\](?:\([^)]*\))?\s*(?:;.*)?$', header_candidate)
 
 
 def update_setting_in_content(content, section, key, value, enable=True):
@@ -16296,8 +16298,9 @@ def rpt_effective_values(stanzas, name, _seen=None):
         k, sep, v = line.partition("=")
         if not sep:
             continue
-        v = v.split(";", 1)[0].strip()
-        k = k.strip().rstrip(">").strip()
+        # Asterisk also accepts "key => value"; partition leaves the '>'.
+        v = v.lstrip(">").split(";", 1)[0].strip()
+        k = k.strip()
         if k:
             out[k] = v
     return out
@@ -16341,14 +16344,19 @@ def resolve_courtesy_tone(tone, node_settings, telemetry_settings):
 
 def _ct_sound_slug(segments):
     key = ";".join(",".join(str(x) for x in s) for s in segments)
-    return _COURTESY_TONE_SLUG_PREFIX + hashlib.sha1(key.encode()).hexdigest()[:10]
+    return _COURTESY_TONE_SLUG_PREFIX + hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+COURTESY_TONE_PRUNE_SEC = 86400
 
 
 def _ct_ensure_sound(segments):
     """The sound path (under SOUNDS_SUBDIR, no extension) for these segments,
     generated on first use. Checked every play: `rpt localplay` with a
-    missing file fails silently. Other generated tones are removed, so a
-    changed setting doesn't leave files behind."""
+    missing file fails silently. Each use refreshes the file's mtime, and
+    generated tones unused for a day are removed. Not "every other tone":
+    app_rpt opens the file only after telemwait, so a tone generated for
+    another node or a Test could otherwise delete one still queued."""
     slug = _ct_sound_slug(segments)
     dest = _ann_sound_path(slug)
     if not os.path.exists(dest):
@@ -16378,12 +16386,18 @@ def _ct_ensure_sound(segments):
                 except OSError:
                     pass
         log("INFO", f"[CT] Generated courtesy tone {slug} {segments}")
+        cutoff = time.time() - COURTESY_TONE_PRUNE_SEC
         for old in glob.glob(os.path.join(SOUNDS_DIR, _COURTESY_TONE_SLUG_PREFIX + "*")):
-            if os.path.splitext(os.path.basename(old))[0] != slug:
-                try:
+            try:
+                if old != dest and os.path.getmtime(old) < cutoff:
                     os.unlink(old)
-                except OSError:
-                    pass
+            except OSError:
+                pass
+    else:
+        try:
+            os.utime(dest)
+        except OSError:
+            pass
     return f"{SOUNDS_SUBDIR}/{slug}"
 
 
@@ -19667,6 +19681,10 @@ def _list_asterisk_sounds() -> list:
         for fn in files:
             stem, ext = os.path.splitext(fn)
             if not ext or stem.startswith("."):
+                continue
+            # HenWen's own generated scratch files (TTS preview, courtesy
+            # tones) are replaced or pruned, so they're never offered.
+            if stem == "_tts_preview" or stem.startswith(_COURTESY_TONE_SLUG_PREFIX):
                 continue
             full = os.path.join(dirpath, fn)
             rel  = os.path.relpath(os.path.join(dirpath, stem), root)
