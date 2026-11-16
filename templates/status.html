@@ -4925,6 +4925,7 @@ async function refreshBoard() {
     /* Node card */
     var nodes = data.nodes || [];
     window._lastBoardNodes = nodes;
+    _unkeyBeepWatch(nodes);
     var nc = document.getElementById('node-info');
     if (!nodes.length) {
       nc.innerHTML = '<div class="node-info-msg">No nodes configured</div>';
@@ -7840,7 +7841,73 @@ function _txUnkey() {
   if (sess && sess.isEstablished()) {
     _txStatus('');
     try { sess.sendDTMF('#', { duration: 100, interToneGap: 70 }); } catch (e) {}
+    _playUnkeyBeep();
   }
+}
+
+/* Unkey beep (issue #43). app_rpt never plays a courtesy tone for a phone-
+   mode link, so browser users got no cue that a transmission had ended.
+   The beep is made here in the browser rather than on the node, so only
+   HenWen's own listeners hear it: nothing goes out over RF or to linked
+   nodes. The operator who lets go hears it at once (_txUnkey above); every
+   other browser on a one-call SIP session hears it when the board shows a
+   session link's keyed light go out (_unkeyBeepWatch), which lags the real
+   unkey by the board's poll interval. Mute silences it, and it follows the
+   Volume slider and the speaker picker. */
+var _beepCtx = null;
+var _beepPrevKeyed = {};
+
+function _playUnkeyBeep() {
+  if (_userMuted) return;
+  var AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  try {
+    if (!_beepCtx) {
+      _beepCtx = new AC();
+      var spk = _txExp().spk;
+      if (spk && typeof _beepCtx.setSinkId === 'function') {
+        _beepCtx.setSinkId(spk).catch(function() {});
+      }
+    }
+    if (_beepCtx.state === 'suspended') _beepCtx.resume();
+    var a = document.getElementById('node-audio');
+    var peak = 0.3 * (a ? a.volume : 1);
+    var t = _beepCtx.currentTime + 0.02;
+    var osc = _beepCtx.createOscillator();
+    var g = _beepCtx.createGain();
+    osc.frequency.value = 1000;
+    /* 100ms with 5ms ramps, so it doesn't click. */
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(peak, t + 0.005);
+    g.gain.setValueAtTime(peak, t + 0.095);
+    g.gain.linearRampToValueAtTime(0, t + 0.1);
+    osc.connect(g);
+    g.connect(_beepCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.12);
+  } catch (e) {}
+}
+
+/* Beep when another HenWen session on the node this browser is listening
+   to unkeys. Only a keyed-to-unkeyed transition counts: a row seen for the
+   first time, or one that vanished (hung up mid-transmission), is silent.
+   This browser's own link is skipped, since _txUnkey already beeped. */
+function _unkeyBeepWatch(nodes) {
+  var listening = window._sip && _sip.active && _sip.node;
+  var mine = (listening && _sip.cfg && _sip.cfg.sip && _sip.cfg.sip.auth_user || '').toUpperCase();
+  var now = {};
+  var beep = false;
+  (nodes || []).forEach(function(n) {
+    if (!listening || String(n.node) !== String(_sip.node)) return;
+    (n.connected || []).forEach(function(c) {
+      if (!c.session_label) return;
+      var key = String(c.node).toUpperCase();
+      now[key] = !!c.keyed;
+      if (_beepPrevKeyed[key] && !c.keyed && key !== mine) beep = true;
+    });
+  });
+  _beepPrevKeyed = now;
+  if (beep) _playUnkeyBeep();
 }
 
 (function() {
@@ -7923,6 +7990,9 @@ function _txUnkey() {
     if (a && typeof a.setSinkId === 'function') ps.push(a.setSinkId(id || ''));
     if (_listenAudioCtx && typeof _listenAudioCtx.setSinkId === 'function') {
       ps.push(_listenAudioCtx.setSinkId(id || ''));
+    }
+    if (_beepCtx && typeof _beepCtx.setSinkId === 'function') {
+      ps.push(_beepCtx.setSinkId(id || ''));
     }
     return Promise.all(ps).then(function() { return true; });
   }

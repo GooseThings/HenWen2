@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Added: a beep when a browser user lets go of PTT** (#43). AllStarLink
+  plays no courtesy tone for a browser link, so nothing marked the end of a
+  transmission. The kiosk now plays a short 1 kHz beep in the browser: at once
+  for the person who let go, and for everyone else listening by SIP when the
+  board shows that session unkeyed (up to a few seconds later). Only browser
+  listeners hear it; nothing is sent over the air or to linked nodes. Mute
+  silences it, and it follows Volume and the speaker picker.
+
 ## v2.0.0-beta.2
 
 The second 2.0 beta: the updater, Manager's service settings and the repository
