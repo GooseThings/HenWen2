@@ -7856,6 +7856,10 @@ function _txUnkey() {
    Volume slider and the speaker picker. */
 var _beepCtx = null;
 var _beepPrevKeyed = {};
+/* The "Hornet" courtesy tone: three falling 50ms steps, 660 -> 500 -> 385
+   Hz (app_rpt form |t(660,0,50,2048)(500,0,50,2048)(385,0,50,2048)). */
+var _UNKEY_BEEP_TONES = [660, 500, 385];
+var _UNKEY_BEEP_TONE_SEC = 0.05;
 
 function _playUnkeyBeep() {
   if (_userMuted) return;
@@ -7873,18 +7877,22 @@ function _playUnkeyBeep() {
     var a = document.getElementById('node-audio');
     var peak = 0.3 * (a ? a.volume : 1);
     var t = _beepCtx.currentTime + 0.02;
-    var osc = _beepCtx.createOscillator();
-    var g = _beepCtx.createGain();
-    osc.frequency.value = 1000;
-    /* 100ms with 5ms ramps, so it doesn't click. */
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(peak, t + 0.005);
-    g.gain.setValueAtTime(peak, t + 0.095);
-    g.gain.linearRampToValueAtTime(0, t + 0.1);
-    osc.connect(g);
-    g.connect(_beepCtx.destination);
-    osc.start(t);
-    osc.stop(t + 0.12);
+    _UNKEY_BEEP_TONES.forEach(function(f) {
+      var d = _UNKEY_BEEP_TONE_SEC;
+      var osc = _beepCtx.createOscillator();
+      var g = _beepCtx.createGain();
+      osc.frequency.value = f;
+      /* 3ms attack, 6ms release per tone, so the steps don't click. */
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(peak, t + 0.003);
+      g.gain.setValueAtTime(peak, t + d - 0.006);
+      g.gain.linearRampToValueAtTime(0, t + d);
+      osc.connect(g);
+      g.connect(_beepCtx.destination);
+      osc.start(t);
+      osc.stop(t + d + 0.01);
+      t += d;
+    });
   } catch (e) {}
 }
 
