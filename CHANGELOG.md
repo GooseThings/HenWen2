@@ -10,8 +10,8 @@
   board shows that session, or a linked node, unkeyed (up to a few seconds
   later). Only browser
   listeners hear it; nothing is sent over the air or to linked nodes. Mute
-  silences it, and it follows Volume and the speaker picker. A **Courtesy
-  Tone** button in the PTT bar turns it off or on for that browser.
+  silences it, and it follows Volume and the speaker picker. A **Browser
+  CT** button in the PTT bar turns it off or on for that browser.
 - **Changed:** the PTT bar's "Experimental Audio Sources" button is now
   just "Audio Sources".
 
