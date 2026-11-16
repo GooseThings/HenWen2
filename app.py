@@ -252,24 +252,59 @@ CHAT_LOG_MAX_ROWS    = 5000
 DEFAULT_SECRET_KEYS = {"", "asl3-ez-change-me", "asl3-ez-change-me-in-production",
                        "henwen-change-me", "henwen-change-me-in-production"}
 
-GITHUB_REPO = "GooseThings/HenWen"
+# HenWen 2.0 checks its own repo for releases. It used to inherit 1.x's
+# (GooseThings/HenWen), whose CalVer tags would read as "newer" than any 2.x
+# version and offer an update that resets this checkout onto 1.x.
+GITHUB_REPO = "GooseThings/HenWen2"
+
+
+# A release heading in CHANGELOG.md: "## v2.0.0-beta.1" (HenWen 2.x, semver
+# with an optional pre-release suffix) or "## v2026.10.30" / "## v2026.10.28.2"
+# (the 1.x CalVer history further down the same file).
+_VERSION_HEADING_RE = re.compile(
+    r'^##\s+(v\d+\.\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?)\s*$')
 
 
 def _load_henwen_version():
-    """Read the top version header (## vYYYY.MM.DD, optionally .N for a
-    same-day second release) from CHANGELOG.md, shipped alongside app.py —
-    used for the kiosk footer and the Manager's update check. Falls back to
-    'unknown' for a dev checkout without a stamped release yet."""
+    """Read the top version header from CHANGELOG.md, shipped alongside
+    app.py — used for the kiosk footer and the Manager's update check. Falls
+    back to 'unknown' for a dev checkout without a stamped release yet."""
     try:
         changelog_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "CHANGELOG.md")
         with open(changelog_path) as f:
             for line in f:
-                m = re.match(r'^##\s+(v\d{4}\.\d{2}\.\d{2}(?:\.\d+)?)\s*$', line.strip())
+                m = _VERSION_HEADING_RE.match(line.strip())
                 if m:
                     return m.group(1)
     except Exception:
         pass
     return "unknown"
+
+
+def _version_key(tag):
+    """Sort key for a release tag, or None if it isn't one.
+
+    Numeric parts compare as numbers (so 2.0.10 > 2.0.9, which a plain string
+    compare gets wrong), and a pre-release sorts below the same version
+    without one (2.0.0-beta.2 < 2.0.0), per semver: its dot-separated
+    identifiers compare numerically when both are numbers, as text otherwise,
+    and a numeric identifier sorts below a text one."""
+    m = re.match(r'^v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z][0-9A-Za-z.-]*))?$', (tag or "").strip())
+    if not m:
+        return None
+    nums = tuple(int(x) for x in m.group(1).split("."))
+    if m.group(2) is None:
+        return (nums, (1,))                      # a release outranks any pre-release
+    pre = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in m.group(2).split("."))
+    return (nums, (0,) + pre)
+
+
+def _version_newer(latest, current):
+    """True if release tag `latest` is newer than `current`. False when
+    either one doesn't parse — an unreadable tag must never raise an
+    "update available" notice."""
+    a, b = _version_key(latest), _version_key(current)
+    return a is not None and b is not None and a > b
 
 
 HENWEN_VERSION = _load_henwen_version()
@@ -6593,21 +6628,21 @@ _latest_release_lock  = threading.Lock()
 
 
 def _fetch_latest_release():
-    """Hit GitHub for the latest published release tag. CalVer tags
-    (vYYYY.MM.DD, optionally .N for a same-day second release) sort
-    correctly as plain strings, so no semver parsing is needed — just
-    compare against HENWEN_VERSION lexically elsewhere. (A same-day suffix
-    above single digits, e.g. .10 vs .9, would sort incorrectly as a
-    string — not a real concern at the release cadence this project
-    actually has.)"""
+    """Hit GitHub for the latest published release tag (compared against
+    HENWEN_VERSION by _version_newer()). GitHub's "latest" excludes
+    pre-releases, and answers 404 when a repo has no full release yet: that
+    is a real answer ("nothing published"), not a failed check, so it comes
+    back as an empty tag rather than None."""
     try:
         url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-        req = urlreq.Request(url, headers={"User-Agent": "HenWen/1.0",
+        req = urlreq.Request(url, headers={"User-Agent": "HenWen/2.0",
                                            "Accept": "application/vnd.github+json"})
         with urlreq.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read().decode())
         return {"tag": data.get("tag_name", ""), "url": data.get("html_url", "")}
     except Exception as e:
+        if getattr(e, "code", None) == 404:      # urllib's HTTPError
+            return {"tag": "", "url": ""}
         log("WARN", f"[UPDATE-POLL] release check failed: {e}")
         return None
 
@@ -12794,8 +12829,7 @@ def api_update_check():
         "current":          HENWEN_VERSION,
         "latest":           latest_tag,
         "url":              latest["url"] or f"https://github.com/{GITHUB_REPO}/releases/latest",
-        "update_available": bool(latest_tag) and HENWEN_VERSION != "unknown"
-                            and latest_tag > HENWEN_VERSION,
+        "update_available": _version_newer(latest_tag, HENWEN_VERSION),
         # None = no live check requested; False = requested but GitHub was
         # unreachable (values shown are the last cached check)
         "refreshed":        refreshed,
