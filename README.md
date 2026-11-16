@@ -10,7 +10,7 @@ itself, and keys up with push-to-talk. Accounts without a callsign keep the
 1.x stream.
 
 > **Beta.** The current release is
-> [v2.0.0-beta.1](https://github.com/GooseThings/HenWen2/releases). 2.0 is
+> [v2.0.0-beta.2](https://github.com/GooseThings/HenWen2/releases). 2.0 is
 > forked from HenWen 1.x and is being
 > built in phases; some of the 1.x audio code is still here until a phase
 > retires it.
