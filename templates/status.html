@@ -7906,10 +7906,11 @@ function _playUnkeyBeep() {
   } catch (e) {}
 }
 
-/* Beep when another HenWen session on the node this browser is listening
-   to unkeys. Only a keyed-to-unkeyed transition counts: a row seen for the
-   first time, or one that vanished (hung up mid-transmission), is silent.
-   This browser's own link is skipped, since _txUnkey already beeped. */
+/* Beep when anything connected to the node this browser is listening to
+   unkeys: another HenWen session or a linked node. Only a keyed-to-unkeyed
+   transition counts: a row seen for the first time, or one that vanished
+   (hung up or unlinked mid-transmission), is silent. This browser's own
+   link is skipped, since _txUnkey already beeped. */
 function _unkeyBeepWatch(nodes) {
   var listening = window._sip && _sip.active && _sip.node;
   var mine = (listening && _sip.cfg && _sip.cfg.sip && _sip.cfg.sip.auth_user || '').toUpperCase();
@@ -7918,7 +7919,6 @@ function _unkeyBeepWatch(nodes) {
   (nodes || []).forEach(function(n) {
     if (!listening || String(n.node) !== String(_sip.node)) return;
     (n.connected || []).forEach(function(c) {
-      if (!c.session_label) return;
       var key = String(c.node).toUpperCase();
       now[key] = !!c.keyed;
       if (_beepPrevKeyed[key] && !c.keyed && key !== mine) beep = true;

@@ -7,7 +7,8 @@
   transmission. The kiosk now plays the "Hornet" courtesy tone (660, 500, 385 Hz,
   50 ms each) in the browser: at once
   for the person who let go, and for everyone else listening by SIP when the
-  board shows that session unkeyed (up to a few seconds later). Only browser
+  board shows that session, or a linked node, unkeyed (up to a few seconds
+  later). Only browser
   listeners hear it; nothing is sent over the air or to linked nodes. Mute
   silences it, and it follows Volume and the speaker picker. A **Courtesy
   Tone** button in the PTT bar turns it off or on for that browser.
