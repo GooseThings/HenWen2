@@ -60,10 +60,21 @@ def test_every_script_parses_and_its_sources_resolve():
         for dirpath, _, files in os.walk(os.path.join(ROOT, d)):
             scripts += [os.path.join(dirpath, f) for f in files if f.endswith(".sh")]
     assert scripts
+    checked = []
     for s in scripts:
         r = subprocess.run(["bash", "-n", s], capture_output=True, text=True)
         assert r.returncode == 0, (s, r.stderr)
         here = os.path.dirname(s)
-        for m in re.finditer(r'^\s*\. "\$(?:HERE|SPIKE_DIR|SCRIPT_DIR)/([^"]+)"',
-                             open(s).read(), re.M):
-            assert os.path.isfile(os.path.join(here, m.group(1))), (s, m.group(1))
+        sources = re.findall(
+            r'^\s*\. "(?:\$(?:HERE|SPIKE_DIR|SCRIPT_DIR)|\$\(cd "\$\(dirname "\$0"\)" && pwd\))/([^"]+)"',
+            open(s).read(), re.M)
+        for rel in sources:
+            assert os.path.isfile(os.path.join(here, rel)), (s, rel)
+            checked.append(s)
+    # Every script under setup/ that loads apache-common.sh was seen above
+    # (install.sh loads it via $INSTALL_DIR, the install target, not itself).
+    setup_dir = os.path.join(ROOT, "setup") + os.sep
+    common_users = [s for s in scripts if s.startswith(setup_dir) and "apache-common.sh" in
+                    "".join(l for l in open(s) if l.lstrip().startswith(". "))]
+    assert common_users
+    assert sorted(set(c for c in checked if c.startswith(setup_dir))) == sorted(common_users)
