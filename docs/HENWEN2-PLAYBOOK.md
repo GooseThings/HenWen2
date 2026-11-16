@@ -22,7 +22,7 @@ stopped and `disable`d. The 2.0 database is a copy of 1.x's, so
 Rollback is `systemctl stop HenWen2 && systemctl enable --now HenWen`; 1.x's
 own database is untouched. Backups: `/root/henwen-cutover-20261110-103223/`.
 
-**What is deployed:** `main` at release **v2.0.0-beta.1** (2026-11-12, the first HenWen2 release, a GitHub pre-release; versions are semver from here, read from `CHANGELOG.md`'s top heading). The include wiring
+**What is deployed:** `main` at release **v2.0.0-beta.2** (2026-11-16; v2.0.0-beta.1 on 2026-11-12 was the first HenWen2 release; both are GitHub pre-releases, and versions are semver read from `CHANGELOG.md`'s top heading). The include wiring
 (`setup/sip-users/apply.sh`) and the sudoers line have been run by the owner.
 Accounts with a callsign (N8GMZ, K8DIY, WO8E so far) get the one-call path;
 every other account still gets the 1.x Listen and Arm TX unchanged.

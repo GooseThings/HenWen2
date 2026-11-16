@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## v2.0.0-beta.2
+
+The second 2.0 beta: the updater, Manager's service settings and the repository
+are now fully 2.0's own, and the 1.x wiki's pages have moved into the HenWen2
+wiki. **Upgrading from v2.0.0-beta.1 is a one-time manual step** (see the
+repository change below); after that, Launch Updater works.
 
 - **Changed: Launch Updater updates HenWen 2.0.** `update.sh` now fetches
   from the HenWen2 repo, updates `/opt/HenWen2` and restarts `HenWen2`. Before
@@ -23,6 +28,15 @@
   names each script's path), then `sudo systemctl restart HenWen2`. Launch
   Updater cannot cross this change: the updater already on disk looks for
   `provision-sudoers.sh` at its old path and stops before restarting.
+- **Fixed: Manager's Role Permissions table described 1.x.** It listed the
+  Raw Editor, Backups and Asterisk Console pages that 2.0 removed, and showed
+  Superusers able to create Owners, which the code refuses. It now matches
+  what each role can do, including the owner-only pages it never listed.
+- **Changed: documentation moved to the HenWen2 wiki.** Installation, the
+  Status Board and roles, one page per feature, Troubleshooting and Reference
+  are rewritten for 2.0, and the README no longer points at the 1.x wiki or
+  repository. Requests to the weather service and the password-breach check
+  now name the HenWen2 repository as their contact.
 
 ## v2.0.0-beta.1
 
