@@ -1085,6 +1085,9 @@ html, body { height: 100%; background: var(--bg); color: var(--text);
 .sb-btn.btmic:hover { color: var(--text); }
 .sb-btn.btmic.on    { background: rgba(88,166,255,.08); border-color: rgba(88,166,255,.3); color: var(--accent); }
 .sb-btn.btmic.on:hover { background: rgba(88,166,255,.2); }
+/* Browser CT tone picker (#tx-ct-sel), sized to sit beside the toggle. */
+.ct-sel { background: var(--bg3); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 3px 6px; font-size: 0.75rem; max-width: 100%; }
 
 /* always-visible connect bar: last row of the Controls card */
 .conn-form-bar { padding: 8px 0 0; border-top: 1px solid var(--border);
@@ -1912,6 +1915,8 @@ button.idle-badge.idle-pressing { border-color: rgba(224,68,68,.5); }
                     title="The courtesy tone this browser plays when a HenWen user lets go of PTT. Only you hear it; nothing is sent over the air. Saved in this browser.">
               <svg class="icon"><use href="#icon-bell"></use></svg> Browser CT: <span id="tx-ct-btn-state">On</span>
             </button>
+            <select id="tx-ct-sel" class="ct-sel" aria-label="Browser courtesy tone"
+                    title="Which courtesy tone this browser plays. Picking one plays it so you can hear it. Saved in this browser."></select>
             <div id="tx-agc-msg" style="font-size:0.7rem;color:var(--text2);line-height:1.3;display:none">
               <div>Bluetooth mic setting saved</div>
               <div>Re-arm TX for it to take effect</div>
@@ -7860,10 +7865,30 @@ function _txUnkey() {
    Volume slider and the speaker picker. */
 var _beepCtx = null;
 var _beepPrevKeyed = {};
-/* The "Hornet" courtesy tone: three falling 50ms steps, 660 -> 500 -> 385
-   Hz (app_rpt form |t(660,0,50,2048)(500,0,50,2048)(385,0,50,2048)). */
-var _UNKEY_BEEP_TONES = [660, 500, 385];
-var _UNKEY_BEEP_TONE_SEC = 0.05;
+/* The tones this browser can pick (#tx-ct-sel). Each step is
+   [freq1, freq2, ms], app_rpt's |t(f1,f2,ms,amp) shape: freq2 0 is a single
+   tone, freq1 0 is a silent gap. Morse is 20 wpm (60ms dit). */
+var _CT_TONES = {
+  hornet:  { name: 'Hornet',      seq: [[660,0,50],[500,0,50],[385,0,50]] },
+  beep:    { name: 'Beep',        seq: [[1000,0,100]] },
+  double:  { name: 'Double beep', seq: [[1000,0,60],[0,0,50],[1000,0,60]] },
+  dual:    { name: 'Dual tone',   seq: [[700,1100,150]] },
+  rising:  { name: 'Rising',      seq: [[600,0,40],[900,0,40],[1200,0,40]] },
+  falling: { name: 'Falling',     seq: [[1200,0,40],[900,0,40],[600,0,40]] },
+  beeboo:  { name: 'Bee-boo',     seq: [[880,0,80],[660,0,120]] },
+  chime:   { name: 'Chime',       seq: [[1320,0,60],[1760,0,120]] },
+  low:     { name: 'Low tone',    seq: [[440,0,150]] },
+  morse_k: { name: 'Morse K',     seq: [[800,0,180],[0,0,60],[800,0,60],[0,0,60],[800,0,180]] },
+  morse_r: { name: 'Morse R',     seq: [[800,0,60],[0,0,60],[800,0,180],[0,0,60],[800,0,60]] },
+};
+var _CT_DEFAULT = 'hornet';
+
+/* The tone this browser picked, falling back to Hornet. */
+function _ctToneId() {
+  var id = '';
+  try { id = localStorage.getItem('henwen-ct-tone') || ''; } catch (e) {}
+  return _CT_TONES.hasOwnProperty(id) ? id : _CT_DEFAULT;
+}
 
 /* On unless this browser turned it off (#tx-ct-btn). */
 function _unkeyBeepEnabled() {
@@ -7871,8 +7896,11 @@ function _unkeyBeepEnabled() {
   catch (e) { return true; }
 }
 
-function _playUnkeyBeep() {
-  if (_userMuted || !_unkeyBeepEnabled()) return;
+/* preview: play `preview` (a _CT_TONES id) now, ignoring Off and Mute,
+   so picking a tone lets you hear it. */
+function _playUnkeyBeep(preview) {
+  if (!preview && (_userMuted || !_unkeyBeepEnabled())) return;
+  var tone = _CT_TONES[preview || _ctToneId()] || _CT_TONES[_CT_DEFAULT];
   var AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return;
   try {
@@ -7887,20 +7915,24 @@ function _playUnkeyBeep() {
     var a = document.getElementById('node-audio');
     var peak = 0.3 * (a ? a.volume : 1);
     var t = _beepCtx.currentTime + 0.02;
-    _UNKEY_BEEP_TONES.forEach(function(f) {
-      var d = _UNKEY_BEEP_TONE_SEC;
-      var osc = _beepCtx.createOscillator();
-      var g = _beepCtx.createGain();
-      osc.frequency.value = f;
-      /* 3ms attack, 6ms release per tone, so the steps don't click. */
-      g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(peak, t + 0.003);
-      g.gain.setValueAtTime(peak, t + d - 0.006);
-      g.gain.linearRampToValueAtTime(0, t + d);
-      osc.connect(g);
-      g.connect(_beepCtx.destination);
-      osc.start(t);
-      osc.stop(t + d + 0.01);
+    tone.seq.forEach(function(step) {
+      var d = step[2] / 1000;
+      var freqs = [step[0], step[1]].filter(function(f) { return f > 0; });
+      freqs.forEach(function(f) {
+        var v = peak / freqs.length;
+        var osc = _beepCtx.createOscillator();
+        var g = _beepCtx.createGain();
+        osc.frequency.value = f;
+        /* 3ms attack, 6ms release per tone, so the steps don't click. */
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(v, t + 0.003);
+        g.gain.setValueAtTime(v, t + d - 0.006);
+        g.gain.linearRampToValueAtTime(0, t + d);
+        osc.connect(g);
+        g.connect(_beepCtx.destination);
+        osc.start(t);
+        osc.stop(t + d + 0.01);
+      });
       t += d;
     });
   } catch (e) {}
@@ -7967,6 +7999,20 @@ function _unkeyBeepWatch(nodes) {
     var on = !ctBtn.classList.contains('on');
     _txRenderCtBtn(on);
     try { localStorage.setItem('henwen-courtesy-tone', on ? '1' : '0'); } catch (e) {}
+  });
+
+  /* Which tone (#tx-ct-sel): per browser; picking one plays it. */
+  var ctSel = document.getElementById('tx-ct-sel');
+  Object.keys(_CT_TONES).forEach(function(id) {
+    var o = document.createElement('option');
+    o.value = id;
+    o.textContent = _CT_TONES[id].name;
+    ctSel.appendChild(o);
+  });
+  ctSel.value = _ctToneId();
+  ctSel.addEventListener('change', function() {
+    try { localStorage.setItem('henwen-ct-tone', ctSel.value); } catch (e) {}
+    _playUnkeyBeep(ctSel.value);
   });
 
   agcBtn.addEventListener('click', function() {
