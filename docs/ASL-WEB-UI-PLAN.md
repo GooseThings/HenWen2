@@ -41,7 +41,7 @@ Read from the 1.0-1 package itself (`apt-get download asl-web-ui`, unpacked,
 Each was checked against the package source.
 
 1. **AMI user `admin`.** HenWen logs in as `admin` (`AMI_USER=admin` in the
-   unit; `ami-setup.sh` defaults to it). The UI's Asterisk > Settings > AMI
+   unit; `scripts/ami-setup.sh` defaults to it). The UI's Asterisk > Settings > AMI
    Secret rewrites exactly `[admin]` in `manager.conf` and updates only
    Allmon3 (`nodes/planner.py: set_ami_secret`). One click and HenWen loses
    AMI: board, connects, keyed monitors. **Fix:** HenWen gets its own AMI user.
@@ -99,7 +99,7 @@ reverse before W3 merges.
    account in `asl-web-ui` to block a node. Manager links to the UI's
    equivalent when it is installed.
 2. **Asterisk Updates: retire.** ASL plus Cockpit is the supported path, and
-   retiring it removes `asl-asterisk-update.sh` and two passwordless-root
+   retiring it removes `scripts/asl-asterisk-update.sh` and two passwordless-root
    sudoers rules. The weekly "update available" notice stays and points at
    Cockpit.
 3. **Require the ASL Web UI for 2.0.** 2.0 already needs HTTPS for one-call
