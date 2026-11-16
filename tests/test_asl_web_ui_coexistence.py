@@ -20,9 +20,9 @@ import pytest
 import app
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-APPLY = os.path.join(ROOT, "asl-web-ui", "apply.sh")
-ROLLBACK = os.path.join(ROOT, "asl-web-ui", "rollback.sh")
-COMMON = os.path.join(ROOT, "apache-common.sh")
+APPLY = os.path.join(ROOT, "setup", "asl-web-ui", "apply.sh")
+ROLLBACK = os.path.join(ROOT, "setup", "asl-web-ui", "rollback.sh")
+COMMON = os.path.join(ROOT, "scripts", "apache-common.sh")
 SRC = open(APPLY).read()
 PORT = 5000
 
@@ -114,7 +114,7 @@ def test_backup_dir_is_unique_per_run():
 def test_setup_https_lan_rewrite_carries_the_rules(tmp_path):
     """PR #14 review: setup-https.sh --lan rebuilds the SSL vhost and keeps
     only the lines its CARRY grep selects."""
-    src = open(os.path.join(ROOT, "tx-spike", "setup-https.sh")).read()
+    src = open(os.path.join(ROOT, "setup", "browser-tx", "setup-https.sh")).read()
     pattern = re.search(r"CARRY=\$\(grep -E '([^']+)' \"\$SSL_AVAIL\"", src).group(1)
     _, patched = _patch(tmp_path)
     patched = patched.replace("    ProxyPreserveHost On\n",
@@ -135,7 +135,7 @@ def test_setup_https_lan_rewrite_carries_the_rules(tmp_path):
 def test_setup_https_full_flow_carries_the_rules(tmp_path):
     """Review of PR #14: the full flow rewrites the port-80 vhost from
     scratch too. Run its own carry grep and re-insert on a scratch vhost."""
-    src = open(os.path.join(ROOT, "tx-spike", "setup-https.sh")).read()
+    src = open(os.path.join(ROOT, "setup", "browser-tx", "setup-https.sh")).read()
     pattern = re.search(r"ASL_CARRY=\$\(grep -E '([^']+)' \"\$HTTP_AVAIL\"", src).group(1)
     assert ('henwen_insert_before_proxypass_each_block "$HTTP_AVAIL" "$FLASK_PORT" '
             '"HenWen: ASL Web UI" "$ASL_CARRY"') in src

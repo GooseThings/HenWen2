@@ -162,6 +162,6 @@ def test_install_half_is_gone():
     root = os.path.join(os.path.dirname(__file__), "..")
     rules = {r.rule for r in app.app.url_map.iter_rules()}
     assert "/api/asl-update/install" not in rules and "/api/asl-update/log" not in rules
-    assert "asl-asterisk-update.sh install" not in open(os.path.join(root, "provision-sudoers.sh")).read()
-    script = open(os.path.join(root, "asl-asterisk-update.sh")).read()
+    assert "asl-asterisk-update.sh install" not in open(os.path.join(root, "scripts", "provision-sudoers.sh")).read()
+    script = open(os.path.join(root, "scripts", "asl-asterisk-update.sh")).read()
     assert "apt-get install" not in script and "usage: $0 check" in script

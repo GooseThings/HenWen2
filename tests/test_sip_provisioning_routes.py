@@ -427,8 +427,8 @@ class TestApplyRoute:
 
     def test_sudoers_rule_matches_the_route(self):
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        text = open(os.path.join(here, "provision-sudoers.sh")).read()
-        assert "${INSTALL_DIR}/sip-users/apply.sh" in text
+        text = open(os.path.join(here, "scripts", "provision-sudoers.sh")).read()
+        assert "${INSTALL_DIR}/setup/sip-users/apply.sh" in text
 
 
 class TestConnectorExclusion:

@@ -77,7 +77,7 @@ call; D1-a as approved still stands if the residual risk is acceptable.
 
 ## 3. Does a muted mic keep sending RTP? — **ANSWERED BY DESIGN**
 
-`tx-spike/pjsip.snippet` sets `rtp_timeout=60` because a browser that vanishes
+`setup/browser-tx/pjsip.snippet` sets `rtp_timeout=60` because a browser that vanishes
 otherwise leaves `Rpt(<node>,P)` up forever (1.x saw a 27-hour-old phone-mode
 channel). So mic mute must not stop the media stream:
 

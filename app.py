@@ -71,6 +71,21 @@ except ImportError:
 
 from collections import deque
 
+# Repo layout: app.py, templates/ and static/ at the top; the standalone
+# Python modules in henwen/; operator and privileged scripts in scripts/;
+# one-time Asterisk/Apache feature setup in setup/<feature>/. Every path
+# below is built from these, never with '..': the sudoers rule
+# (scripts/provision-sudoers.sh) matches the literal path sudo is given.
+APP_DIR     = os.path.dirname(os.path.abspath(__file__))
+MODULES_DIR = os.path.join(APP_DIR, "henwen")
+SCRIPTS_DIR = os.path.join(APP_DIR, "scripts")
+SETUP_DIR   = os.path.join(APP_DIR, "setup")
+# henwen/ is a directory of top-level modules, not a package: the generated
+# meshtastic_proto/*_pb2.py files import 'meshtastic_proto' by that bare
+# name, so the directory goes on sys.path instead.
+if MODULES_DIR not in sys.path:
+    sys.path.insert(0, MODULES_DIR)
+
 # recording.py (in-browser recording) is a standalone module with no
 # import-time dependency on this file — see its module docstring for why.
 # app.py drives it entirely through the Recorder class and the pure
@@ -139,7 +154,7 @@ HOST            = os.environ.get("HOST",             "0.0.0.0")
 DB_PATH         = os.environ.get("DB_PATH",          "/etc/asterisk/henwen.db")
 AMI_HOST        = os.environ.get("AMI_HOST",         "127.0.0.1")
 AMI_PORT        = int(os.environ.get("AMI_PORT",     5038))
-# HenWen's own manager.conf user, created by ami-setup.sh. Not [admin]: the
+# HenWen's own manager.conf user, created by scripts/ami-setup.sh. Not [admin]: the
 # ASL Web UI's Asterisk > Settings > AMI Secret rewrites exactly [admin] and
 # updates only Allmon3, which would lock HenWen out (docs/ASL-WEB-UI-PLAN.md,
 # hazard 1).
@@ -407,21 +422,21 @@ SUDO_PATH       = "/usr/bin/sudo"
 SYSTEMD_RUN_PATH = "/usr/bin/systemd-run"
 if not os.path.exists(SYSTEMD_RUN_PATH):
     SYSTEMD_RUN_PATH = "/bin/systemd-run"
-UPDATE_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "update.sh")
-ASL_UPDATE_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "asl-asterisk-update.sh")
-ROTATE_SECRET_KEY_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rotate_secret_key.sh")
-UPDATE_SERVICE_PORTS_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "update_service_ports.sh")
-AUDIOSOCKET_TAP_APPLY_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audiosocket-tap", "apply.sh")
+UPDATE_SCRIPT_PATH = os.path.join(SCRIPTS_DIR, "update.sh")
+ASL_UPDATE_SCRIPT_PATH = os.path.join(SCRIPTS_DIR, "asl-asterisk-update.sh")
+ROTATE_SECRET_KEY_SCRIPT_PATH = os.path.join(SCRIPTS_DIR, "rotate_secret_key.sh")
+UPDATE_SERVICE_PORTS_SCRIPT_PATH = os.path.join(SCRIPTS_DIR, "update_service_ports.sh")
+AUDIOSOCKET_TAP_APPLY_SCRIPT_PATH = os.path.join(SETUP_DIR, "audiosocket-tap", "apply.sh")
 # Same marker string apply.sh greps modules.conf for before deciding whether
 # to append its snippet — reused here (read-only) so the Manager UI can show
 # applied/not-applied without needing root.
 AUDIOSOCKET_TAP_MARKER = "HenWen AudioSocket tap"
-WS_AUDIO_APPLY_SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ws-audio", "apply.sh")
-# Same marker string ws-audio/apply.sh greps for -- see that script's own
+WS_AUDIO_APPLY_SCRIPT_PATH = os.path.join(SETUP_DIR, "ws-audio", "apply.sh")
+# Same marker string setup/ws-audio/apply.sh greps for -- see that script's own
 # comment for why it patches whichever of these two vhost files is present.
 WS_AUDIO_MARKER = "HenWen low-latency RX audio"
 # Where Apache actually loads vhosts from -- overridable (mirroring
-# apache-common.sh's identical HENWEN_APACHE_SITES_DIR env var) so a test
+# scripts/apache-common.sh's identical HENWEN_APACHE_SITES_DIR env var) so a test
 # suite, or an operator with a non-default Apache layout, can point this
 # somewhere else; production installs never need to set it.
 HENWEN_APACHE_SITES_DIR = os.environ.get("HENWEN_APACHE_SITES_DIR", "/etc/apache2/sites-enabled")
@@ -434,13 +449,13 @@ HENWEN_APACHE_SITES_DIR = os.environ.get("HENWEN_APACHE_SITES_DIR", "/etc/apache
 # times apply.sh was re-run -- confirmed live on a production install that
 # already runs HenWen behind two independently-named vhosts at once, only
 # one of which that tuple ever found. _find_henwen_apache_vhosts() now
-# discovers vhosts the same way apache-common.sh's shell scripts do --
+# discovers vhosts the same way scripts/apache-common.sh's shell scripts do --
 # asking Apache's own config what's actually proxying HenWen's real Flask
 # port, rather than guessing filenames -- and this tuple is kept only as an
 # explicit override hook for tests and operators who want to name a path
 # outside HENWEN_APACHE_SITES_DIR.
 HENWEN_APACHE_VHOST_CANDIDATES = ()
-# Matches both Apache's bare ProxyPass syntax (what install.sh/setup-https.sh
+# Matches both Apache's bare ProxyPass syntax (what scripts/install.sh/setup-https.sh
 # write: `ProxyPass / http://127.0.0.1:PORT/`) and its equally-valid quoted
 # form (`ProxyPass "/" "http://127.0.0.1:PORT/"`), tolerant of whatever
 # whitespace/trailing params (retry=, timeout=...) happen to be there --
@@ -454,7 +469,7 @@ def _find_henwen_apache_vhosts():
     HenWen's own Flask port at the root path -- i.e. apply.sh's own former
     candidate-loop, generalized from "one of two hardcoded filenames" to
     "whichever files in HENWEN_APACHE_SITES_DIR actually do this, however
-    many there are" (see apache-common.sh's henwen_discover_vhosts(), the
+    many there are" (see scripts/apache-common.sh's henwen_discover_vhosts(), the
     shell-side twin of this function -- kept in sync by hand since app.py
     can't source a bash library). Symlinks (the usual sites-enabled entry)
     are resolved to their sites-available target first, matching every
@@ -519,7 +534,7 @@ def _apache_marker_status(marker):
 def _systemctl(*args, timeout=30):
     """Run systemctl, elevating via a narrowly-scoped passwordless sudo rule
     when not already root. The service normally runs unprivileged as
-    `asterisk` (HenWen.service User=asterisk); install.sh installs a
+    `asterisk` (HenWen.service User=asterisk); scripts/install.sh installs a
     sudoers drop-in permitting exactly the daemon-reload/restart
     invocations this function is used for — restarting `asterisk` or this
     service and reloading unit files. `sudo -n` fails fast (no password
@@ -721,7 +736,7 @@ class _SchemeAwareSessionInterface(SecureCookieSessionInterface):
         Scoping the *path* to script_root was tried first and is wrong: the
         browser's low-latency audio connection opens /ws-audio/<node>, an
         Apache-level proxy that lives at the hostname root by design (see
-        ws-audio/apply.sh), and audio_ws_relay.py authorizes it by forwarding
+        setup/ws-audio/apply.sh), and audio_ws_relay.py authorizes it by forwarding
         that very cookie to api_internal_audio_authorize_ws(). A cookie
         scoped to /henwen is not sent to /ws-audio, so low-latency Listen
         would silently fall back to the legacy path on every prefixed
@@ -1253,7 +1268,7 @@ def get_db():
     _rx_audio_cfg_cols = {r[1] for r in conn.execute("PRAGMA table_info(rx_audio_config)").fetchall()}
     if 'agc_enabled' not in _rx_audio_cfg_cols:
         conn.execute("ALTER TABLE rx_audio_config ADD COLUMN agc_enabled INTEGER NOT NULL DEFAULT 0")
-    # RX_AUDIO_DEFAULT_PATH is set by install.sh only when it successfully
+    # RX_AUDIO_DEFAULT_PATH is set by scripts/install.sh only when it successfully
     # provisioned the Apache /ws-audio proxy for a fresh install (see
     # "Low-latency RX audio" in CLAUDE.md). It is unset or invalid for
     # every existing install and every test run, in which case this is a
@@ -1350,7 +1365,7 @@ def get_db():
     # Owner-only, opt-in DMR<->AllStar bridge via the DVSwitch suite
     # (dvswitch-server: Analog_Bridge + MMDVM_Bridge). Off by default on
     # every install, including this table only ever being consulted once
-    # `enabled` is set -- see dvswitch/README.md for the guided-setup flow.
+    # `enabled` is set -- see setup/dvswitch/README.md for the guided-setup flow.
     # network_password is stored plaintext, matching every other credential
     # column in this file (irc_relay_config.nickserv_password,
     # stream_relay_config.broadcastify_pass, ...) -- this app has no
@@ -1396,7 +1411,7 @@ def get_db():
         conn.execute("ALTER TABLE dvswitch_config ADD COLUMN talkgroup_presets TEXT NOT NULL DEFAULT '[]'")
     if 'latitude' not in _dvswitch_cfg_cols:
         # The station's own coordinates, written into MMDVM_Bridge.ini's
-        # [Info] section by dvswitch/apply.sh -- that block is what the
+        # [Info] section by setup/dvswitch/apply.sh -- that block is what the
         # bridge reports to the DMR network when it logs in (TGIF/custom;
         # MMDVM_Bridge isn't used for BrandMeister). NULL = not entered yet,
         # which is distinct from a legitimate 0.0, so these are nullable
@@ -1825,7 +1840,7 @@ def check_auth():
         # Before any account exists, the *only* page worth showing is the
         # first-run "Create Account" screen — and the kiosk board is public,
         # so without this it renders normally and gives a brand-new owner no
-        # hint that setup is even pending. install.sh prints
+        # hint that setup is even pending. scripts/install.sh prints
         # "Open your browser: http://<ip>:5000", i.e. it sends every new
         # operator to '/' specifically, which was the one URL that never
         # surfaced setup: /henwen-manager already redirected here, and
@@ -1971,7 +1986,7 @@ def _no_cache_auth_pages(resp):
 def _security_headers(resp):
     """
     Baseline security headers applied to every response, regardless of
-    whether this install ever ran tx-spike/setup-https.sh's optional
+    whether this install ever ran setup/browser-tx/setup-https.sh's optional
     Apache vhost — doing it here in Flask means every install gets these,
     not just the subset that's HTTPS-fronted.
 
@@ -2604,7 +2619,7 @@ def ami_shared_user_warning(user):
     return ("HenWen logs into AMI as the shared 'admin' user. The ASL Web UI's "
             "Asterisk > Settings > AMI Secret changes that user's secret and "
             "only updates Allmon3, which would disconnect HenWen. Run "
-            "ami-setup.sh to give HenWen its own '" + AMI_DEDICATED_USER +
+            "scripts/ami-setup.sh to give HenWen its own '" + AMI_DEDICATED_USER +
             "' AMI user.")
 
 
@@ -2667,7 +2682,7 @@ def parse_manager_conf():
         result["port"] = int(m.group(1))
         log("INFO", f"[AMI-CREDS] AMI port from manager.conf: {result['port']}")
 
-    # HenWen's own user wins when it exists; it's the one ami-setup.sh writes.
+    # HenWen's own user wins when it exists; it's the one scripts/ami-setup.sh writes.
     dedicated = _manager_conf_user(raw, AMI_DEDICATED_USER)
     if dedicated:
         log("INFO", f"[AMI-CREDS] Using manager.conf user: '{AMI_DEDICATED_USER}'")
@@ -2723,8 +2738,8 @@ def parse_manager_conf():
     log("ERROR",
         "[AMI-CREDS] No usable AMI user found in manager.conf. "
         "Add a user stanza with 'secret = ...' OR set AMI_USER and AMI_SECRET "
-        "in /etc/systemd/system/HenWen.service then: "
-        "systemctl daemon-reload && systemctl restart HenWen")
+        "in /etc/systemd/system/HenWen2.service then: "
+        "systemctl daemon-reload && systemctl restart HenWen2")
     return result
 
 
@@ -2885,9 +2900,9 @@ class AMIClient:
                 f"AMI authentication failed: {msg}\n"
                 f"  User:   '{self.user}'\n"
                 f"  Host:   {self.host}:{self.port}\n"
-                f"  Fix:    Set AMI_USER and AMI_SECRET in HenWen.service to match\n"
+                f"  Fix:    Set AMI_USER and AMI_SECRET in HenWen2.service to match\n"
                 f"          the [username] and secret= in /etc/asterisk/manager.conf\n"
-                f"  Then:   systemctl daemon-reload && systemctl restart HenWen"
+                f"  Then:   systemctl daemon-reload && systemctl restart HenWen2"
             )
 
     def close(self):
@@ -6872,7 +6887,7 @@ def api_restart():
                             "command": "systemctl restart asterisk"})
         stderr = r.stderr.strip()
         hint = ("Service account lacks sudo rights for this systemctl action — "
-                "re-run install.sh to install the henwen-systemctl sudoers rule."
+                "re-run scripts/install.sh to install the henwen-systemctl sudoers rule."
                 if "password" in stderr.lower() or "authoriz" in stderr.lower()
                 else "Check: systemctl status asterisk  and  journalctl -u asterisk -n 30")
         return jsonify({
@@ -9089,14 +9104,12 @@ def api_status_reset_idle():
 # loopback-only builtin HTTP server) and calls the phone-portal extension
 # 2<node> (PTT = DTMF *99, unkey = #). HenWen's only job is handing the SIP
 # credentials to a sufficiently-privileged logged-in session. The Asterisk side
-# is set up by tx-spike/apply.sh; if its secret file is missing the feature is
+# is set up by setup/browser-tx/apply.sh; if its secret file is missing the feature is
 # simply not configured and the kiosk hides the TX button.
 TX_SECRET_PATH = os.environ.get("TX_SECRET_PATH", "/etc/asterisk/henwen-tx.secret")
 TX_SIP_USER    = os.environ.get("TX_SIP_USER", "henwen-tx")
 TX_WS_PATH     = os.environ.get("TX_WS_PATH", "/asterisk-ws")
-TX_APPLY_SCRIPT_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "tx-spike", "apply.sh"
-)
+TX_APPLY_SCRIPT_PATH = os.path.join(SETUP_DIR, "browser-tx", "apply.sh")
 
 
 def _find_henwen_apache_vhost():
@@ -9134,7 +9147,7 @@ def api_audio_session():
     `can_tx`, PTT via DTMF -- and there is no server-side audio pipeline
     at all. `sip` is null for everyone else, and the kiosk uses the 1.x
     streaming path (`legacy_path` says which flavor) exactly as before:
-    accounts without a callsign, every account until sip-users/apply.sh has
+    accounts without a callsign, every account until setup/sip-users/apply.sh has
     run, listen-only accounts (under decision D1-a any issued credential
     can key, so they are never handed one -- wiring listen_only into the
     call itself is Phase 5), and any non-owner while a node lockout is on.
@@ -9235,7 +9248,7 @@ def api_tx_config():
     # HenWen 2.0: an account with a provisioned SIP identity gets *its own*
     # credential (per-user endpoint, context and app_rpt link name); the
     # shared 1.x `henwen-tx` credential is the fallback for accounts without
-    # one, and for every account until sip-users/apply.sh has wired the
+    # one, and for every account until setup/sip-users/apply.sh has wired the
     # generated files into Asterisk (see _sip_user_identity()).
     ident = _sip_user_identity(urow)
     try:
@@ -9308,9 +9321,7 @@ def api_tx_config():
     return resp
 
 
-TX_CHECK_PORTS_SCRIPT = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "tx-spike", "check-ports.sh"
-)
+TX_CHECK_PORTS_SCRIPT = os.path.join(SETUP_DIR, "browser-tx", "check-ports.sh")
 
 
 @app.route("/api/tx/diagnostics")
@@ -9321,7 +9332,7 @@ def api_tx_diagnostics():
       1. Fast in-process checks (secret file, PJSIP endpoint, local node,
          whether *this* request itself arrived over HTTPS) covering "was
          apply.sh/setup-https.sh ever run at all".
-      2. tx-spike/check-ports.sh (read-only, changes nothing) covering the
+      2. setup/browser-tx/check-ports.sh (read-only, changes nothing) covering the
          network/NAT layer neither of the setup scripts can verify for
          themselves — reused rather than reimplemented so the two never
          drift apart.
@@ -9339,10 +9350,10 @@ def api_tx_diagnostics():
         })
 
     # The true prerequisite gate: apply.sh itself refuses to run at all
-    # without at least one such vhost present (see apache-common.sh's
+    # without at least one such vhost present (see scripts/apache-common.sh's
     # henwen_discover_vhosts()) -- surfaced here first so an operator sees
     # "provision Apache first" instead of every check below it failing for
-    # the same root cause. Confirmed live: install.sh's own default
+    # the same root cause. Confirmed live: scripts/install.sh's own default
     # (--http-only) satisfies this just as well as the full Let's-Encrypt
     # flow -- no particular filename needs to be created by hand, and more
     # than one vhost can satisfy it at once.
@@ -9362,7 +9373,7 @@ def api_tx_diagnostics():
         secret_configured = False
     add("Browser TX configured", secret_configured,
         "SIP secret present at " + TX_SECRET_PATH if secret_configured else
-        "Not set up yet — run: sudo bash /opt/HenWen/tx-spike/apply.sh")
+        "Not set up yet — run: sudo bash /opt/HenWen2/setup/browser-tx/apply.sh")
 
     content = read_conf_file(RPT_CONF_PATH)
     nodes   = get_node_numbers(content) if content else []
@@ -9375,7 +9386,7 @@ def api_tx_diagnostics():
         "You're viewing the Manager over plain HTTP — the TX button needs "
         "https:// (or localhost) to get microphone access at all. For use on "
         "your own network only (no public hostname or port forwards): "
-        "sudo bash /opt/HenWen/tx-spike/setup-https.sh --lan",
+        "sudo bash /opt/HenWen2/setup/browser-tx/setup-https.sh --lan",
         warn=not is_https)
 
     try:
@@ -9384,7 +9395,7 @@ def api_tx_diagnostics():
         found = any(l.strip().startswith("Endpoint:") and TX_SIP_USER in l for l in out)
         add("PJSIP endpoint registered in Asterisk", found,
             f"'{TX_SIP_USER}' endpoint present" if found else
-            f"No '{TX_SIP_USER}' endpoint — run tx-spike/apply.sh (or re-run it if it was rolled back)")
+            f"No '{TX_SIP_USER}' endpoint — run setup/browser-tx/apply.sh (or re-run it if it was rolled back)")
     except Exception as e:
         add("PJSIP endpoint registered in Asterisk", False, f"Could not query AMI: {e}")
 
@@ -9399,7 +9410,7 @@ def api_tx_diagnostics():
             f"{st.get('path')} has the #tryinclude line" if st.get("included") else
             (f"Cannot read {st.get('path')}: {st.get('error')}" if not st.get("readable", True)
              else f"{st.get('path')} has no #tryinclude for the generated file — "
-                  "run sip-users/apply.sh (Per-user SIP card below)"),
+                  "run setup/sip-users/apply.sh (Per-user SIP card below)"),
             warn=not st.get("included") and n_ident == 0)
     add("Accounts with a per-user SIP identity", n_ident > 0,
         f"{n_ident} account(s) have a callsign and credential"
@@ -9412,7 +9423,7 @@ def api_tx_diagnostics():
     script_output = ""
     if not os.path.isfile(TX_CHECK_PORTS_SCRIPT):
         add("Network/port checks (check-ports.sh)", False,
-            "tx-spike/check-ports.sh not found on disk — reinstall or update HenWen", warn=True)
+            "setup/browser-tx/check-ports.sh not found on disk — reinstall or update HenWen", warn=True)
     else:
         try:
             proc = subprocess.run(["bash", TX_CHECK_PORTS_SCRIPT],
@@ -9442,7 +9453,7 @@ def api_tx_diagnostics():
 # (and the AudioSocket tap routes those two themselves mirror) exactly —
 # same owner-only gate, same narrowly-scoped passwordless-sudo pattern.
 # Closes the one gap those two already-shipped features didn't have: before
-# this, tx-spike/apply.sh was the only one of the three apply.sh scripts an
+# this, setup/browser-tx/apply.sh was the only one of the three apply.sh scripts an
 # operator had to SSH in and run by hand.
 
 @app.route("/api/tx/apply-status")
@@ -9464,7 +9475,7 @@ def api_tx_apply_status():
 
 @app.route("/api/tx/apply", methods=["POST"])
 def api_tx_apply():
-    """Runs tx-spike/apply.sh via the same narrowly-scoped passwordless sudo
+    """Runs setup/browser-tx/apply.sh via the same narrowly-scoped passwordless sudo
     rule pattern as the ws-audio/AudioSocket tap apply routes. Live-loads
     Asterisk PJSIP modules and generates/keeps a real SIP credential -- see
     apply.sh's own comments for exactly what it touches. Doesn't restart
@@ -9487,7 +9498,7 @@ def api_tx_apply():
 
     output = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0:
-        hint = ("Service account lacks sudo rights for apply.sh — re-run install.sh "
+        hint = ("Service account lacks sudo rights for apply.sh — re-run scripts/install.sh "
                  "to install the henwen-systemctl sudoers rule."
                  if "password" in output.lower() or "authoriz" in output.lower()
                  else None)
@@ -9525,7 +9536,7 @@ def api_sip_users_status():
 
 @app.route("/api/sip-users/apply", methods=["POST"])
 def api_sip_users_apply():
-    """Runs sip-users/apply.sh (adds the two #tryinclude lines, reloads), then
+    """Runs setup/sip-users/apply.sh (adds the two #tryinclude lines, reloads), then
     writes the generated files and reloads again so an account assigned a
     callsign *before* the wiring existed becomes a live endpoint right away
     rather than on its next change."""
@@ -9545,8 +9556,8 @@ def api_sip_users_apply():
 
     output = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0:
-        hint = ("Service account lacks sudo rights for sip-users/apply.sh — re-run "
-                "provision-sudoers.sh (or install.sh) to refresh the henwen-systemctl "
+        hint = ("Service account lacks sudo rights for setup/sip-users/apply.sh — re-run "
+                "scripts/provision-sudoers.sh (or scripts/install.sh) to refresh the henwen-systemctl "
                 "sudoers rule."
                 if "password" in output.lower() or "authoriz" in output.lower()
                 else None)
@@ -9633,7 +9644,7 @@ def api_rx_diagnostics():
     vhosts, applied_to, missing_from = _apache_marker_status(WS_AUDIO_MARKER)
     proxy_applied = bool(vhosts) and not missing_from
     if not vhosts:
-        detail = "No HenWen Apache vhost found — run ws-audio/apply.sh after provisioning Apache"
+        detail = "No HenWen Apache vhost found — run setup/ws-audio/apply.sh after provisioning Apache"
     elif missing_from:
         detail = (f"Applied to {len(applied_to)}/{len(vhosts)} vhost(s) — missing from: "
                    + ", ".join(missing_from))
@@ -9834,8 +9845,8 @@ def _check_asterisk_restart():
                     f"capture(s) that were bound to channels that no longer exist")
 
 
-_AUDIO_RELAY_SCRIPT    = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'audio_relay.py')
-_AUDIO_WS_RELAY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'audio_ws_relay.py')
+_AUDIO_RELAY_SCRIPT    = os.path.join(MODULES_DIR, 'audio_relay.py')
+_AUDIO_WS_RELAY_SCRIPT = os.path.join(MODULES_DIR, 'audio_ws_relay.py')
 
 # In-browser recordings (recording.py) in progress right now, keyed by their
 # `recordings` table row id -> recording.Recorder. Separate from
@@ -10466,8 +10477,8 @@ def _try_audiosocket_tap(node, channel, fifo_out_path, gen, relay_env):
     Attempt the low-latency AudioSocket capture path (issue #30) for this
     broadcast: spawn audio_relay.py in AudioSocket-listen mode, then
     Originate a ChanSpy(<channel>,q) + AudioSocket() Local-channel bridge
-    (installed by audiosocket-tap/apply.sh -- see that script and
-    audiosocket-tap/extensions-custom.snippet) pointed at it, and confirm
+    (installed by setup/audiosocket-tap/apply.sh -- see that script and
+    setup/audiosocket-tap/extensions-custom.snippet) pointed at it, and confirm
     the connection actually completed before handing back to the caller.
 
     This exists because MixMonitor writes to its FIFO through a buffered
@@ -10506,7 +10517,7 @@ def _try_audiosocket_tap(node, channel, fifo_out_path, gen, relay_env):
     issue.
 
     Purely additive. On ANY failure, most commonly the feature not
-    installed yet (audiosocket-tap/apply.sh never run or failed; install.sh
+    installed yet (setup/audiosocket-tap/apply.sh never run or failed; scripts/install.sh
     applies it automatically on every fresh install, but only when Asterisk
     is already installed and running at install time), but also a handshake
     timeout or a rejected Originate, this returns None so the caller
@@ -10540,7 +10551,7 @@ def _try_audiosocket_tap(node, channel, fifo_out_path, gen, relay_env):
             return {'ok': has_res and has_app and has_cs}
         if not ami_send_command(_check_modules).get('ok'):
             log('DEBUG', f'[AUDIO] AudioSocket tap not available for node {node} '
-                        f'(modules not loaded -- run audiosocket-tap/apply.sh to enable)')
+                        f'(modules not loaded -- run setup/audiosocket-tap/apply.sh to enable)')
             return None
     except Exception as e:
         log('DEBUG', f'[AUDIO] AudioSocket tap module check failed for node {node}: {e}')
@@ -10974,7 +10985,7 @@ AUDIO_WS_RELAY_HOST = os.environ.get('AUDIO_WS_RELAY_HOST', '127.0.0.1')
 # real RFC 6455 WebSocket Apache proxies to actual browsers).
 AUDIO_WS_RELAY_PORT = int(os.environ.get('AUDIO_WS_RELAY_PORT', '8099'))
 # The port audio_ws_relay.py listens on for browser WebSocket connections,
-# proxied by Apache at /ws-audio (see ws-audio/apply.sh).
+# proxied by Apache at /ws-audio (see setup/ws-audio/apply.sh).
 AUDIO_WS_PORT = int(os.environ.get('AUDIO_WS_PORT', '8098'))
 
 _capture_only_lock    = threading.Lock()
@@ -11361,7 +11372,7 @@ def api_internal_audio_authorize_ws():
 # Unlike audio_relay.py (spawned fresh per broadcast by _start_broadcast()/
 # _start_capture_only()), this is a long-lived singleton for the whole
 # HenWen process's lifetime: Apache's static /ws-audio ProxyPass line (see
-# ws-audio/apply.sh) needs one stable local port to target the entire time
+# setup/ws-audio/apply.sh) needs one stable local port to target the entire time
 # HenWen is up, not just while low-latency listeners happen to be attached.
 # Always started regardless of rx_audio_config.path -- the process itself
 # is cheap while idle (two blocked accept() loops, nothing else), and it's
@@ -12838,10 +12849,10 @@ def api_update_check():
 
 @app.route("/api/update/launch", methods=["POST"])
 def api_update_launch():
-    """Kick off update.sh as its own transient systemd unit (superuser only
+    """Kick off scripts/update.sh as its own transient systemd unit (superuser only
     — it ends in a full service restart). Launched via `systemd-run` rather
     than a plain subprocess so the script survives outside HenWen.service's
-    cgroup: `systemctl restart HenWen` at the end of the script would
+    cgroup: `systemctl restart HenWen2` at the end of the script would
     otherwise kill the very process running it."""
     if session.get('role') not in ('superuser', 'owner'):
         return jsonify({"error": "Superuser access required"}), 403
@@ -12860,7 +12871,7 @@ def api_update_launch():
     if r.returncode != 0:
         stderr = r.stderr.strip()
         hint = ("Service account lacks sudo rights for the updater — "
-                "re-run install.sh to install the henwen-systemctl sudoers rule."
+                "re-run scripts/install.sh to install the henwen-systemctl sudoers rule."
                 if "password" in stderr.lower() or "authoriz" in stderr.lower()
                 else "Check: journalctl -u henwen-updater -n 50")
         log("ERROR", f"[API] update launch failed: {stderr}")
@@ -12882,8 +12893,8 @@ def api_update_launch():
 # AllStarLink already configured on this box. It only reports: installing is
 # done with Cockpit's Software Updates (linked from the ASL Web UI) or apt,
 # since HenWen handed that over (docs/ASL-WEB-UI-PLAN.md, decision 2). The
-# privileged half is asl-asterisk-update.sh `check` (apt-get update), reached
-# through one narrowly-scoped NOPASSWD sudoers rule (provision-sudoers.sh).
+# privileged half is scripts/asl-asterisk-update.sh `check` (apt-get update), reached
+# through one narrowly-scoped NOPASSWD sudoers rule (scripts/provision-sudoers.sh).
 # Everything else reads apt's own state (apt-cache policy / apt-get -s),
 # which needs no root.
 
@@ -13122,10 +13133,10 @@ def api_asl_update_check():
 #
 # Swaps the Status Board's Listen capture path from AMI MixMonitor (buffered,
 # adds ~2s of latency; see "Audio streaming" in CLAUDE.md) to a live
-# AudioSocket tap. install.sh applies this automatically on every fresh
+# AudioSocket tap. scripts/install.sh applies this automatically on every fresh
 # install (when Asterisk is already running at install time); these routes
 # exist for installs where that didn't happen yet, or to re-apply after a
-# rollback. See audiosocket-tap/README.md for what apply.sh actually does.
+# rollback. See setup/audiosocket-tap/README.md for what apply.sh actually does.
 # Owner-only, matching every other shell/deploy-level action on this page
 # (Force Update, ports, secret key). Misconfiguring Asterisk modules or the
 # dialplan isn't something to expose below the top role.
@@ -13144,7 +13155,7 @@ def api_audiosocket_tap_status():
 
 @app.route("/api/audiosocket-tap/apply", methods=["POST"])
 def api_audiosocket_tap_apply():
-    """Runs audiosocket-tap/apply.sh via the same narrowly-scoped passwordless
+    """Runs setup/audiosocket-tap/apply.sh via the same narrowly-scoped passwordless
     sudo rule pattern as the updater/secret-key/ports routes above. Unlike
     Force Update, this doesn't restart HenWen or Asterisk — modules load live
     and the dialplan reload doesn't touch in-progress calls — so it's run
@@ -13167,7 +13178,7 @@ def api_audiosocket_tap_apply():
 
     output = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0:
-        hint = ("Service account lacks sudo rights for apply.sh — re-run install.sh "
+        hint = ("Service account lacks sudo rights for apply.sh — re-run scripts/install.sh "
                  "to install the henwen-systemctl sudoers rule."
                  if "password" in output.lower() or "authoriz" in output.lower()
                  else None)
@@ -13184,14 +13195,14 @@ def api_audiosocket_tap_apply():
 
 
 # Apache proxy for the low-latency RX audio path's WebSocket server
-# (audio_ws_relay.py, always running once HenWen starts). install.sh applies
+# (audio_ws_relay.py, always running once HenWen starts). scripts/install.sh applies
 # this automatically on every fresh install, provisioning a minimal Apache
 # vhost first if none exists yet, or reusing one from browser TX's HTTPS
 # setup. It only seeds rx_audio_config.path to 'lowlatency' when HTTPS was
 # also set up, since the browser side needs a secure context (WebCodecs)
 # and would otherwise silently keep using the legacy pipeline regardless of
 # this setting. These routes exist for installs that predate that automatic
-# step, or where it failed or was declined. See ws-audio/README.md for what
+# step, or where it failed or was declined. See setup/ws-audio/README.md for what
 # apply.sh does. Owner-only, same rationale as the AudioSocket tap routes
 # above: this edits an Apache vhost, not something to expose below the top
 # role.
@@ -13224,7 +13235,7 @@ def api_ws_audio_status():
 
 @app.route("/api/ws-audio/apply", methods=["POST"])
 def api_ws_audio_apply():
-    """Runs ws-audio/apply.sh via the same narrowly-scoped passwordless sudo
+    """Runs setup/ws-audio/apply.sh via the same narrowly-scoped passwordless sudo
     rule pattern as the AudioSocket tap route above. Doesn't restart HenWen
     or Asterisk -- audio_ws_relay.py is already running regardless (app.py
     spawns/supervises it unconditionally); this only patches Apache."""
@@ -13246,7 +13257,7 @@ def api_ws_audio_apply():
 
     output = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0:
-        hint = ("Service account lacks sudo rights for apply.sh — re-run install.sh "
+        hint = ("Service account lacks sudo rights for apply.sh — re-run scripts/install.sh "
                  "to install the henwen-systemctl sudoers rule."
                  if "password" in output.lower() or "authoriz" in output.lower()
                  else None)
@@ -13320,7 +13331,7 @@ def _write_secret_key_direct(new_key: str):
 
 def _write_secret_key_via_sudo_helper(new_key: str):
     """Fallback for when _write_secret_key_direct() hits PermissionError.
-    rotate_secret_key.sh is the one piece of code install.sh's sudoers rule
+    scripts/rotate_secret_key.sh is the one piece of code scripts/install.sh's sudoers rule
     grants NOPASSWD root rights to — it does this exact edit and nothing
     else (no reload/restart; that stays here, via the pre-existing
     _systemctl() sudo rule). The key is piped over stdin, never argv, so it
@@ -13390,7 +13401,7 @@ def api_set_secret_key():
             _write_secret_key_direct(new_key)
         except PermissionError as direct_err:
             if SERVICE_FILE_PATH != _DEFAULT_SERVICE_FILE_PATH:
-                # rotate_secret_key.sh always targets the default path (sudo's
+                # scripts/rotate_secret_key.sh always targets the default path (sudo's
                 # env_reset strips any override before the script sees it) —
                 # falling back here against a customized SERVICE_FILE_PATH
                 # would silently edit the wrong file. Skip straight to the
@@ -13408,9 +13419,9 @@ def api_set_secret_key():
             stderr = dr.stderr.strip()
             log("ERROR", f"[SETTINGS] daemon-reload failed after SECRET_KEY write: {stderr}")
             hint = ("Service account lacks sudo rights for systemctl — re-run "
-                    "install.sh to install the henwen-systemctl sudoers rule."
+                    "scripts/install.sh to install the henwen-systemctl sudoers rule."
                     if "password" in stderr.lower() or "authoriz" in stderr.lower()
-                    else "Check: journalctl -u HenWen -n 30")
+                    else "Check: journalctl -u HenWen2 -n 30")
             return jsonify({
                 "error": f"SECRET_KEY was written to {SERVICE_FILE_PATH}, but "
                         f"'systemctl daemon-reload' failed: {stderr or dr.returncode}. "
@@ -13439,8 +13450,8 @@ def api_set_secret_key():
         return jsonify({"error": str(e),
                         "hint": f"The service account ({os.environ.get('USER', 'asterisk')}) "
                                 "cannot write the root-owned unit file directly, and the "
-                                "sudo fallback (rotate_secret_key.sh) also failed — re-run "
-                                "install.sh to install its sudoers rule, or edit SECRET_KEY in "
+                                "sudo fallback (scripts/rotate_secret_key.sh) also failed — re-run "
+                                "scripts/install.sh to install its sudoers rule, or edit SECRET_KEY in "
                                 f"{SERVICE_FILE_PATH} as root, then "
                                 "`systemctl daemon-reload && systemctl restart "
                                 f"{SERVICE_NAME}`."}), 403
@@ -13456,7 +13467,7 @@ def api_set_secret_key():
 # HenWen.service, but must agree with manager.conf's own `port =`, which
 # Asterisk itself binds). The HTTPS port deliberately isn't here — that's
 # Apache's `ports.conf`/vhost/certbot territory, provisioned once by
-# tx-spike/setup-https.sh's `--port` flag; rewriting that live from a web
+# setup/browser-tx/setup-https.sh's `--port` flag; rewriting that live from a web
 # request is a different, much larger blast radius than these two.
 PORT_MIN = 1024
 PORT_MAX = 65535
@@ -13563,7 +13574,7 @@ def api_set_ports():
             _atomic_replace(SERVICE_FILE_PATH, content, prefix=".henwen_svc_")
         except PermissionError as direct_err:
             if SERVICE_FILE_PATH != _DEFAULT_SERVICE_FILE_PATH:
-                # update_service_ports.sh always targets the default path
+                # scripts/update_service_ports.sh always targets the default path
                 # (sudo's env_reset strips any override first) — falling
                 # back here against a customized SERVICE_FILE_PATH would
                 # silently edit the wrong file.
@@ -13592,9 +13603,9 @@ def api_set_ports():
             stderr = dr.stderr.strip()
             log("ERROR", f"[SETTINGS] daemon-reload failed after port change: {stderr}")
             hint = ("Service account lacks sudo rights for systemctl — re-run "
-                    "install.sh to install the henwen-systemctl sudoers rule."
+                    "scripts/install.sh to install the henwen-systemctl sudoers rule."
                     if "password" in stderr.lower() or "authoriz" in stderr.lower()
-                    else "Check: journalctl -u HenWen -n 30")
+                    else "Check: journalctl -u HenWen2 -n 30")
             return jsonify({
                 "error": f"Port(s) written, but 'systemctl daemon-reload' failed: "
                         f"{stderr or dr.returncode}. Changes will not take effect until "
@@ -13639,8 +13650,8 @@ def api_set_ports():
         return jsonify({"error": str(e),
                         "hint": f"The service account ({os.environ.get('USER', 'asterisk')}) "
                                 "cannot write the root-owned unit file directly, and the sudo "
-                                "fallback (update_service_ports.sh) also failed — re-run "
-                                "install.sh to install its sudoers rule, or edit PORT/AMI_PORT in "
+                                "fallback (scripts/update_service_ports.sh) also failed — re-run "
+                                "scripts/install.sh to install its sudoers rule, or edit PORT/AMI_PORT in "
                                 f"{SERVICE_FILE_PATH} (and manager.conf's port= to match) as "
                                 "root, then `systemctl daemon-reload && systemctl restart "
                                 f"{SERVICE_NAME}`."}), 403
@@ -13841,7 +13852,7 @@ def api_ami_test():
     if not result["creds_found"]:
         result["error"] = (
             "AMI credentials not found in manager.conf. "
-            "Run: sudo bash /opt/HenWen/ami-setup.sh"
+            "Run: sudo bash /opt/HenWen2/scripts/ami-setup.sh"
         )
         return jsonify(result), 500
 
@@ -13874,7 +13885,7 @@ def api_ami_test():
     except Exception as e:
         result["error"] = str(e)
         result["hint"]  = (
-            "Run: sudo bash /opt/HenWen/ami-setup.sh\n"
+            "Run: sudo bash /opt/HenWen2/scripts/ami-setup.sh\n"
             "This script reads manager.conf directly, tests the connection, "
             "and updates the service file automatically."
         )
@@ -13898,7 +13909,7 @@ def api_ami_raw_test():
         return jsonify({
             "error":      "Credentials not configured",
             "transcript": transcript,
-            "fix":        "Set AMI_USER and AMI_SECRET in /etc/systemd/system/HenWen.service"
+            "fix":        "Set AMI_USER and AMI_SECRET in /etc/systemd/system/HenWen2.service"
         }), 500
 
     host, port   = creds["host"], creds["port"]
@@ -15546,7 +15557,7 @@ def sip_identity(callsign):
 
 def render_pjsip_user(callsign, secret):
     """One account's PJSIP endpoint/auth/aor, as it will appear in HenWen's
-    generated include file. Mirrors tx-spike/pjsip.snippet's shared endpoint,
+    generated include file. Mirrors setup/browser-tx/pjsip.snippet's shared endpoint,
     with the two differences that matter: the context is this account's own,
     and rtp_timeout is kept, because a browser that vanishes without a BYE
     otherwise leaves Rpt(<node>,P) up forever -- confirmed in 1.x on a
@@ -15619,7 +15630,7 @@ def render_user_dialplans(accounts):
 
 
 # The generated files live in Asterisk's own custom/ directory, which already
-# exists and is asterisk-owned (it holds tx-spike's and the AudioSocket tap's
+# exists and is asterisk-owned (it holds browser-tx's and the AudioSocket tap's
 # dialplan contexts). Env-overridable so tests never go near /etc/asterisk.
 SIP_USERS_CONF     = os.environ.get("SIP_USERS_CONF",
                                     "/etc/asterisk/custom/henwen-sip-users.conf")
@@ -15737,9 +15748,7 @@ def write_sip_user_files(accounts, node):
 # ---------------------------------------------------------------------------
 _sip_provision_lock = threading.Lock()
 
-SIP_USERS_APPLY_SCRIPT_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "sip-users", "apply.sh"
-)
+SIP_USERS_APPLY_SCRIPT_PATH = os.path.join(SETUP_DIR, "sip-users", "apply.sh")
 
 # `pjsip reload` is NOT a command on this build (only `pjsip reload qualify
 # ...` exists -- checked with `core show help pjsip reload` on Asterisk 22 /
@@ -15915,7 +15924,7 @@ def sip_provision_accounts(reason="", force_reload=False, db=None):
                 # files, so a reload would be a no-op. Say so instead.
                 result["detail"] = ("Generated files written, but pjsip.conf/"
                                     "extensions.conf do not include them yet -- "
-                                    "run sip-users/apply.sh (Manager > TX "
+                                    "run setup/sip-users/apply.sh (Manager > TX "
                                     "Diagnostics > Per-user SIP)")
                 return result
             if changed or force_reload:
@@ -15936,7 +15945,7 @@ def _sip_startup_provision(attempts=12, delay=10, sleep=time.sleep):
     """Re-render the per-user SIP files once at startup, so a change to the
     renderers (e.g. the 0<CALLSIGN> -> <CALLSIGN> link rename) reaches an
     upgraded install without anyone editing an account. Nothing else calls
-    sip_provision_accounts() on startup or from update.sh.
+    sip_provision_accounts() on startup or from scripts/update.sh.
 
     Waits for AMI, since the reload goes over it. If a write lands but the
     reload fails, the files on disk now match what HenWen would render, so a
@@ -16578,18 +16587,18 @@ def api_stream_relay_config_save():
 # ---------------------------------------------------------------------------
 # DVSwitch (owner-only, opt-in DMR<->AllStar bridge)
 #
-# Off by default on every install -- not touched by install.sh at all.
-# dvswitch/apply.sh (installed alongside app.py, not a separate package)
+# Off by default on every install -- not touched by scripts/install.sh at all.
+# setup/dvswitch/apply.sh (installed alongside app.py, not a separate package)
 # installs the dvswitch-server apt package and configures/enables exactly
 # two of its systemd units (analog_bridge.service, mmdvm_bridge.service);
 # every other unit that package ships (D-Star/P25/NXDN/YSF gateways) is
 # explicitly left stopped/disabled since only DMR is in scope here. See
-# dvswitch/README.md for the full guided-setup flow and what each script
+# setup/dvswitch/README.md for the full guided-setup flow and what each script
 # touches.
 #
 # rpt.conf ownership stays with Python (append_node_stanza() above, same
 # backup/write path every other rpt.conf writer in this file uses) --
-# dvswitch/apply.sh never touches rpt.conf itself, only the DVSwitch-side
+# setup/dvswitch/apply.sh never touches rpt.conf itself, only the DVSwitch-side
 # ini files and systemd units, so the two don't duplicate rpt.conf logic.
 # ---------------------------------------------------------------------------
 
@@ -16616,7 +16625,7 @@ _DVSWITCH_TG_RE        = re.compile(r'^\d{1,8}$')
 # so Analog_Bridge needs txPort=32001 (to reach Asterisk's bound socket)
 # and rxPort=34001 (to receive what Asterisk sends). The names below name
 # which port ASTERISK uses each one for, not Analog_Bridge's own key names
-# -- dvswitch/apply.sh maps DVSWITCH_USRP_ASTERISK_TXPORT to Analog_
+# -- setup/dvswitch/apply.sh maps DVSWITCH_USRP_ASTERISK_TXPORT to Analog_
 # Bridge's txPort and DVSWITCH_USRP_ASTERISK_RXPORT to its rxPort. These
 # used to be mapped backwards (a bug in apply.sh, not here) -- Analog_
 # Bridge started and reported status fine either way since its TLV/remote-
@@ -16640,7 +16649,7 @@ DVSWITCH_ABINFO_PATH = f"/tmp/ABInfo_{DVSWITCH_USRP_ASTERISK_RXPORT}.json"
 # rather than reimplementing DVSwitch's own USRP TLV framing in Python.
 DVSWITCH_TUNE_SCRIPT_PATH = "/opt/MMDVM_Bridge/dvswitch.sh"
 
-DVSWITCH_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dvswitch")
+DVSWITCH_DIR = os.path.join(SETUP_DIR, "dvswitch")
 DVSWITCH_APPLY_SCRIPT_PATH = os.path.join(DVSWITCH_DIR, "apply.sh")
 DVSWITCH_CHECK_SCRIPT_PATH = os.path.join(DVSWITCH_DIR, "check.sh")
 # Root-only-readable handoff of the DB config to apply.sh -- passing
@@ -17082,7 +17091,7 @@ def api_dvswitch_apply_status():
     content = read_conf_file(RPT_CONF_PATH) or ""
     bridge_node_exists = bool(cfg) and cfg["bridge_node"] in _active_stanza_names(content)
     # BrandMeister uses stfu.service instead of mmdvm_bridge.service (see
-    # dvswitch/apply.sh's "BrandMeister via STFU, not MMDVM_Bridge" comment
+    # setup/dvswitch/apply.sh's "BrandMeister via STFU, not MMDVM_Bridge" comment
     # for why) -- check whichever one that config actually needs.
     needed_unit = "stfu" if (cfg and cfg["dmr_network"] == "brandmeister") else "mmdvm_bridge"
     with _dvswitch_status_lock:
@@ -17100,7 +17109,7 @@ def api_dvswitch_apply_status():
 def api_dvswitch_apply():
     """Guided setup: creates the bridge node's rpt.conf stanza (Python-side,
     via append_node_stanza()) if it doesn't already exist, hands the saved
-    config to dvswitch/apply.sh (apt install + ini config + systemd enable,
+    config to setup/dvswitch/apply.sh (apt install + ini config + systemd enable,
     root via the same narrowly-scoped sudo rule every other apply.sh uses),
     then reloads rpt.conf live. Owner-only, and refuses to run at all unless
     the config is complete -- see _validate_dvswitch_config()."""
@@ -17180,7 +17189,7 @@ def api_dvswitch_apply():
 
     output_parts.append((r.stdout or "") + (r.stderr or ""))
     if r.returncode != 0:
-        hint = ("Service account lacks sudo rights for apply.sh — re-run install.sh "
+        hint = ("Service account lacks sudo rights for apply.sh — re-run scripts/install.sh "
                  "to install the henwen-systemctl sudoers rule."
                  if "password" in (r.stderr or "").lower() or "authoriz" in (r.stderr or "").lower()
                  else None)
@@ -17214,7 +17223,7 @@ def api_dvswitch_apply():
 @app.route("/api/dvswitch/diagnostics")
 def api_dvswitch_diagnostics():
     """Mirrors api_tx_diagnostics()'s shape exactly: fast in-process checks
-    (config complete, rpt.conf node present) plus dvswitch/check.sh's own
+    (config complete, rpt.conf node present) plus setup/dvswitch/check.sh's own
     read-only PASS/FAIL/WARN lines for everything that needs real shell
     access (package/service state, ports, AMBE device reachability)."""
     if session.get('role') != 'owner':
@@ -17241,7 +17250,7 @@ def api_dvswitch_diagnostics():
     script_output = ""
     if not os.path.isfile(DVSWITCH_CHECK_SCRIPT_PATH):
         add("System checks (check.sh)", False,
-            "dvswitch/check.sh not found on disk — reinstall or update HenWen", warn=True)
+            "setup/dvswitch/check.sh not found on disk — reinstall or update HenWen", warn=True)
     else:
         try:
             proc = subprocess.run(["bash", DVSWITCH_CHECK_SCRIPT_PATH, DVSWITCH_EXPORT_PATH],
@@ -17309,7 +17318,7 @@ def start_dvswitch_status_poller():
 
 
 # "Who's talking right now" for the Kiosk DVSwitch panel, DVSwitch-
-# dashboard-style -- BrandMeister/STFU only for now (see dvswitch/README.md's
+# dashboard-style -- BrandMeister/STFU only for now (see setup/dvswitch/README.md's
 # "BrandMeister via STFU" section for why STFU, not MMDVM_Bridge, handles
 # BrandMeister here); MMDVM_Bridge's own Homebrew gateway (TGIF/custom) logs
 # in a different format this doesn't parse, so those show no caller info.
@@ -19812,7 +19821,7 @@ def api_id_morse():
 # Detected from the filesystem only -- no subprocess, no AMI -- so the check
 # is cheap enough to run on every Manager page load. Installed = the
 # package's static files exist; running = its socket-activated API socket
-# exists (systemd removes it on stop); scoped = asl-web-ui/apply.sh has put
+# exists (systemd removes it on stop); scoped = setup/asl-web-ui/apply.sh has put
 # its include into HenWen's vhost(s); global = the package's own conf still
 # serves /asl-web-ui/ on every virtual host.
 # ---------------------------------------------------------------------------
@@ -19822,8 +19831,7 @@ ASL_WEB_UI_SOCKET      = os.environ.get("ASL_WEB_UI_SOCKET", "/run/asl-web-ui/we
 ASL_WEB_UI_GLOBAL_CONF = os.environ.get("ASL_WEB_UI_GLOBAL_CONF",
                                         "/etc/apache2/conf-enabled/asl-web-ui.conf")
 ASL_WEB_UI_VHOST_MARKER = "HenWen: ASL Web UI"
-ASL_WEB_UI_APPLY_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                       "asl-web-ui", "apply.sh")
+ASL_WEB_UI_APPLY_SCRIPT = os.path.join(SETUP_DIR, "asl-web-ui", "apply.sh")
 ASL_WEB_UI_PATH = "/asl-web-ui/"
 
 # Manager page -> where the same job lives in the ASL Web UI. Routes are the
@@ -19848,7 +19856,7 @@ def _asl_web_ui_vhost_scoped(path):
     port also carries apply.sh's marker. Per block, not per file: one file
     can hold several HenWen blocks (:80 and :443, two hostnames), and a
     block without the include sends /asl-web-ui/ to Flask. Mirrors
-    henwen_insert_before_proxypass_each_block() in apache-common.sh."""
+    henwen_insert_before_proxypass_each_block() in scripts/apache-common.sh."""
     try:
         with open(path) as f:
             text = f.read()

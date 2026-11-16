@@ -15,7 +15,7 @@ itself, and keys up with push-to-talk. Accounts without a callsign keep the
 > built in phases; some of the 1.x audio code is still here until a phase
 > retires it.
 
-![Kiosk](images/Screenshot_2026-10-07_142154.jpg)
+![Kiosk](docs/images/Screenshot_2026-10-07_142154.jpg)
 
 ## Highlights
 

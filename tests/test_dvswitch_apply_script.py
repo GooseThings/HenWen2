@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 
-SCRIPT = os.path.join(os.path.dirname(__file__), "..", "dvswitch", "apply.sh")
+SCRIPT = os.path.join(os.path.dirname(__file__), "..", "setup", "dvswitch", "apply.sh")
 SRC = open(SCRIPT).read()
 
 # Same shape as the package-shipped ini: [Info] present with a stale location,

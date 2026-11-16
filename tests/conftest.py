@@ -31,7 +31,11 @@ os.environ.setdefault("TTS_VOICES_DIR", os.path.join(_TEST_ROOT, "tts_voices"))
 # returns [], so nothing needs to be created here.
 os.environ.setdefault("HENWEN_APACHE_SITES_DIR", os.path.join(_TEST_ROOT, "apache-sites-enabled"))
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO_ROOT)
+# The standalone modules (recording, stream_relay, meshtastic_mqtt, ...) live
+# in henwen/; app.py puts it on sys.path the same way at import.
+sys.path.insert(0, os.path.join(_REPO_ROOT, "henwen"))
 
 import app as henwen_app  # noqa: E402
 

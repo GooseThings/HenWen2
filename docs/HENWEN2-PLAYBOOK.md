@@ -23,7 +23,7 @@ Rollback is `systemctl stop HenWen2 && systemctl enable --now HenWen`; 1.x's
 own database is untouched. Backups: `/root/henwen-cutover-20261110-103223/`.
 
 **What is deployed:** `main` at release **v2.0.0-beta.1** (2026-11-12, the first HenWen2 release, a GitHub pre-release; versions are semver from here, read from `CHANGELOG.md`'s top heading). The include wiring
-(`sip-users/apply.sh`) and the sudoers line have been run by the owner.
+(`setup/sip-users/apply.sh`) and the sudoers line have been run by the owner.
 Accounts with a callsign (N8GMZ, K8DIY, WO8E so far) get the one-call path;
 every other account still gets the 1.x Listen and Arm TX unchanged.
 
@@ -96,10 +96,10 @@ with `0`, so nothing else needs it). Verified from source and live:
    if so.
 3. **Phase 4** — recording and stream relay onto `outstreamcmd`.
 
-"Launch Updater" now updates 2.0 in place: `update.sh` fetches `main` from
+"Launch Updater" now updates 2.0 in place: `scripts/update.sh` fetches `main` from
 `GooseThings/HenWen2` over HTTPS, hard-resets `/opt/HenWen2` to it and
 restarts `HenWen2` (owner's decision, 2026-11-16). Uncommitted changes in
-`/opt/HenWen2` are lost, so work in a worktree. `install.sh` is still 1.x's.
+`/opt/HenWen2` are lost, so work in a worktree. `scripts/install.sh` is still 1.x's.
 
 **Testing reality:** `./venv/bin/pytest` from `/opt/HenWen2`, 1282 passing.
 Node **643930 is radioless** (UCI-120, hand mic, no transceiver), so keying
@@ -148,7 +148,7 @@ Links for people, `outstreamcmd` for machines.
 | D1 | How TX is restricted | **Software-only** (owner's call). Per-user credentials make abuse attributable and revocable; every `*99` is logged server-side. D1-c spiked in Phase 1; D1-b held in reserve. |
 | D2 | Does an explicit "arm" step stay before keying RF? | **Answered: no.** Connecting is enough. Three controls: **PTT** (hold to talk), **MUTE** (silences received audio), **RECORD** (unchanged). See "D2 as decided" below. |
 | D3 | HTTPS mandatory (no choice — WebRTC); do we ship coturn? | **Answered: start with STUN + the legacy fallback**, instrumented. Owner's preference was coturn + TLS-ALPN demux and they accepted starting simpler. See "D3 as decided" below. |
-| D4 | Repo visibility | Defaulted to **private** at creation; since made **public**, which `update.sh`'s self-update needs: it fetches over plain HTTPS with no credentials. |
+| D4 | Repo visibility | Defaulted to **private** at creation; since made **public**, which `scripts/update.sh`'s self-update needs: it fetches over plain HTTPS with no credentials. |
 
 ### D1 — the security consequence, stated plainly
 
@@ -333,7 +333,7 @@ include file plus `pjsip reload`.
 
 Connect places the call; RX mute is page-side; TX is `*99`/`#`.
 
-**Mute must never be `track.enabled = false`.** `tx-spike/pjsip.snippet` sets
+**Mute must never be `track.enabled = false`.** `setup/browser-tx/pjsip.snippet` sets
 `rtp_timeout=60` because a browser that vanishes otherwise leaves
 `Rpt(<node>,P)` up forever (confirmed in HenWen 1 on a 27-hour-old phone-mode
 channel). A muted mic therefore has to keep sending RTP: mute is
@@ -407,7 +407,7 @@ per-listener (bridge member + link thread + DTLS-SRTP).
 |---|---|---|
 | **0** ✅ | Repo, history, remotes; `/opt/HenWen2` + unit + DB + port; docs; floor rewrite | HenWen2 runs alongside HenWen 1, 1.x untouched |
 | **1** ✅ | Spikes — run against 643930 itself, which is radioless, so no lab Asterisk was needed | Both answered by measurement: the call downlink is self-free (0.0000 rms), and `outstreamcmd` carries the on-air mix including telemetry |
-| **2** ✅ | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential. **Built:** PR #1 (schema, renderers, writer) merged; PR #2 (assignment route + Manager field, provisioning trigger + reload, revocation incl. hangup of live calls, `sip-users/apply.sh`, `/api/tx/config` per-user identity, connector exclusion) open and deployed. **Verified live 2026-11-10** (N8GMZ registered and heard node audio on its own credential). |
+| **2** ✅ | `users.callsign`, per-user SIP provisioning, per-user dialplan/context, revocation | A second account registers and hears node audio on its own credential. **Built:** PR #1 (schema, renderers, writer) merged; PR #2 (assignment route + Manager field, provisioning trigger + reload, revocation incl. hangup of live calls, `setup/sip-users/apply.sh`, `/api/tx/config` per-user identity, connector exclusion) open and deployed. **Verified live 2026-11-10** (N8GMZ registered and heard node audio on its own credential). |
 | **3** ✅ | Frontend: one call = audio; connect / MUTE / PTT | Two accounts connected at once, neither hears itself, PTT keys. **Built (PR #3):** `/api/audio/session` + `_doStartListenSIP()`; mic up front, PTT bar on confirm, playback-side Mute, no keyed RX mute, 1.x stream as the instrumented fallback. **Verified live 2026-11-10** (three accounts at once, no self-echo, PTT from each, zero fallbacks). |
 | **4** | Recording + stream relay onto `outstreamcmd` | A mid-QSO forced ID provably appears in a recording |
 | **5** | Delete the old pipeline and its tests; wire `listen_only`; classify session links by live channel rather than name (may land earlier, with issue #5 step 3) | Full suite green on a smaller codebase |

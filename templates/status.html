@@ -7673,7 +7673,7 @@ async function armTx() {
     var socket = new JsSIP.WebSocketInterface('wss://' + location.host + cfg.ws_path);
     /* 2.0: a per-user identity registers as its endpoint name (the SIP
        user) but authenticates as the callsign (auth_user) -- see
-       sip-users/README.md. The shared credential sends the same value in
+       setup/sip-users/README.md. The shared credential sends the same value in
        both, so this is a no-op for it. */
     _tx.ua = new JsSIP.UA({ sockets: [socket], uri: 'sip:' + cfg.username + '@' + domain,
                             authorization_user: cfg.auth_user || cfg.username,
@@ -7702,7 +7702,7 @@ async function armTx() {
            the Apache WSS proxy over TCP 443, but the media is direct UDP — the
            browser must discover its public candidate or ICE never completes
            and zero RTP flows (verified: mic live, pktsSent=0). Asterisk needs
-           its own stunaddr in rtp.conf for the same reason (tx-spike). */
+           its own stunaddr in rtp.conf for the same reason (browser-tx). */
         pcConfig: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
       });
       _tx.session = s;
@@ -8401,7 +8401,7 @@ function _doStartListen(audio, node, rxAudioPath) {
 }
 
 /* Low-latency path: raw Opus over a plain WebSocket (/ws-audio/<node>,
-   proxied by Apache to audio_ws_relay.py — see ws-audio/README.md) decoded
+   proxied by Apache to audio_ws_relay.py — see setup/ws-audio/README.md) decoded
    via WebCodecs and played through an AudioWorklet, instead of WebM/MSE.
    No container, no AGC lookahead — see the "Low-Latency Listen Path" plan
    for the tradeoffs. Reuses _listenCtrl the same way _doStartListenMSE()

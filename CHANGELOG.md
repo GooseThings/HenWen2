@@ -7,6 +7,22 @@
   this, it acted on `/opt/HenWen` and the 1.x repo. Run `git pull` by hand once
   to pick this up; later updates can use the button. `install.sh` is still
   1.x's.
+- **Fixed: Manager's Rotate SECRET_KEY and Change Ports edited the 1.x
+  service.** They changed the stopped `HenWen` unit's file and tried to
+  restart `HenWen`, so the running `HenWen2` never picked up the change. They
+  now act on `HenWen2`.
+- **Changed: the repository is organized into folders.** Python modules are in
+  `henwen/`, install and maintenance scripts in `scripts/`, the per-feature
+  Asterisk/Apache setup in `setup/` (`tx-spike/` is now `setup/browser-tx/`),
+  the unit template in `systemd/`, and notes and images in `docs/`. Commands
+  change to match, for example `sudo bash scripts/install.sh` and
+  `sudo bash setup/sip-users/apply.sh`.
+
+  **Upgrading an existing checkout needs three manual steps, together:**
+  `git pull`, then `sudo bash scripts/provision-sudoers.sh` (the sudoers rule
+  names each script's path), then `sudo systemctl restart HenWen2`. Launch
+  Updater cannot cross this change: the updater already on disk looks for
+  `provision-sudoers.sh` at its old path and stops before restarting.
 
 ## v2.0.0-beta.1
 

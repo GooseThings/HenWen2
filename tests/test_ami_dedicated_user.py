@@ -14,7 +14,7 @@ import sys
 
 import app as henwen_app
 
-SCRIPT = os.path.join(os.path.dirname(__file__), "..", "ami-setup.sh")
+SCRIPT = os.path.join(os.path.dirname(__file__), "..", "scripts", "ami-setup.sh")
 SRC = open(SCRIPT).read()
 
 
@@ -113,8 +113,8 @@ class TestAmiSetupScript:
     def test_installer_names_its_unit(self):
         """PR #13 review: with both HenWen and HenWen2 units present,
         auto-detection would pick HenWen2 while install.sh set up HenWen."""
-        src = open(os.path.join(os.path.dirname(__file__), "..", "install.sh")).read()
-        assert 'HENWEN_SERVICE="$SERVICE_NAME" bash "$INSTALL_DIR/ami-setup.sh"' in src
+        src = open(os.path.join(os.path.dirname(__file__), "..", "scripts", "install.sh")).read()
+        assert 'HENWEN_SERVICE="$SERVICE_NAME" bash "$INSTALL_DIR/scripts/ami-setup.sh"' in src
 
     def test_unit_file_is_only_rewritten_after_a_successful_login(self):
         """Review of PR #13: a login that still failed fell through to the
