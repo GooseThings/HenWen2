@@ -11,7 +11,7 @@ itself, and keys up with push-to-talk. Accounts without a callsign keep the
 
 > **Beta.** The current release is
 > [v2.0.0-beta.1](https://github.com/GooseThings/HenWen2/releases). 2.0 is
-> forked from [HenWen 1.x](https://github.com/GooseThings/HenWen) and is being
+> forked from HenWen 1.x and is being
 > built in phases; some of the 1.x audio code is still here until a phase
 > retires it.
 
@@ -38,15 +38,16 @@ for the setup steps.
 
 ## Install
 
-There is no 2.0 installer or upgrade path from 1.x yet (Phase 6). For now,
-run [HenWen 1.x](https://github.com/GooseThings/HenWen#install).
+There is no 2.0 installer or upgrade path from 1.x yet (Phase 6). The wiki's
+[Installation](https://github.com/GooseThings/HenWen2/wiki/Installation) page
+covers requirements, commissioning a node, and updating an existing 2.0
+checkout.
 
 ## Documentation
 
-- **[HenWen 2.0 wiki](https://github.com/GooseThings/HenWen2/wiki)** — what changed in 2.0, per-user SIP setup, Connected Nodes, [running with the ASL Web UI](https://github.com/GooseThings/HenWen2/wiki/Running-with-the-ASL-Web-UI)
+- **[HenWen 2.0 wiki](https://github.com/GooseThings/HenWen2/wiki)** — installation and updating, the Status Board and roles, Listen and Transmit, per-user SIP setup, each feature, troubleshooting, and [running with the ASL Web UI](https://github.com/GooseThings/HenWen2/wiki/Running-with-the-ASL-Web-UI)
 - [`docs/HENWEN2-PLAYBOOK.md`](docs/HENWEN2-PLAYBOOK.md) — plan, phase status, decisions
 - [`docs/ASL-WEB-UI-PLAN.md`](docs/ASL-WEB-UI-PLAN.md) — what HenWen hands over to AllStarLink's new web UI, and what it keeps
-- [HenWen 1.x wiki](https://github.com/GooseThings/HenWen/wiki) — everything shared with 1.x (install, features, troubleshooting)
 
 ## Status and roadmap
 
