@@ -12,6 +12,10 @@
   listeners hear it; nothing is sent over the air or to linked nodes. Mute
   silences it, and it follows Volume and the speaker picker. A **Browser
   CT** button in the PTT bar turns it off or on for that browser.
+- **Added: pick the browser courtesy tone.** A menu next to **Browser CT**
+  offers 11 tones: Hornet, Beep, Double beep, Dual tone, Rising, Falling,
+  Bee-boo, Chime, Low tone, Morse K and Morse R. Picking one plays it, and the
+  choice is saved in that browser. Hornet stays the default.
 - **Changed:** the PTT bar's "Experimental Audio Sources" button is now
   just "Audio Sources".
 
