@@ -9202,7 +9202,7 @@ function _doStartListenFallback(audio, node) {
    journal instead of guessed. Repeated failures stop retrying the call
    for this page load (_sipBlocked()). */
 var _sip = { ua: null, session: null, cfg: null, node: '', canTx: false, micOk: false,
-             active: false, gen: 0, silentCtx: null,
+             active: false, gen: 0, silentCtx: null, wsLostAt: 0,
              connectTimer: null, mediaTimer: null, statsTimer: null, failures: [] };
 var _userMuted = false;
 var _SIP_CONNECT_MS   = 12000;   // registration + INVITE must confirm within this
@@ -9259,7 +9259,7 @@ function _doStartListenSIP(audio, node, cfg) {
   if (_listenStartTimer) { clearTimeout(_listenStartTimer); _listenStartTimer = null; }
   var gen = ++_sip.gen;
   var stale = function() { return _sip.gen !== gen; };
-  _sip.node = node; _sip.cfg = cfg; _sip.canTx = !!cfg.can_tx; _sip.active = false;
+  _sip.node = node; _sip.cfg = cfg; _sip.canTx = !!cfg.can_tx; _sip.active = false; _sip.wsLostAt = 0;
   _listenNode = node;
   var sip = cfg.sip;
 
@@ -9293,6 +9293,20 @@ function _doStartListenSIP(audio, node, cfg) {
     _sip.ua = ua;
     ua.on('registrationFailed', function(e) {
       if (!stale()) _sipFallback('registration-failed:' + (e.cause || ''));
+    });
+    /* The WSS signaling socket dropped mid-call. JsSIP reconnects on its
+       own, but the dialog stays bound to the dead connection on Asterisk's
+       side ("Unable to send in-dialog request"), and the call later dies
+       as "Dialog Error". Media is direct UDP and keeps playing meanwhile,
+       so wait for the reconnect, then re-dial on the new socket. */
+    ua.on('disconnected', function() {
+      if (stale() || !_sip.active || _sip.wsLostAt) return;
+      _sip.wsLostAt = Date.now();
+      _audioClientLog(node, 'sip-ws-lost', 'call still up, waiting for reconnect');
+    });
+    ua.on('connected', function() {
+      if (stale() || !_sip.wsLostAt) return;
+      _sipRecover('after ' + (Date.now() - _sip.wsLostAt) + 'ms');
     });
     ua.on('registered', function() {
       if (stale() || _sip.session) return;
@@ -9418,6 +9432,22 @@ function _sipEnded(e) {
   setTimeout(function() { if (!_listenActive) _startListen(); }, 3000);
 }
 
+/* Re-dial after the signaling socket came back (see the 'disconnected'
+   handler). Hanging up now sends the BYE over the new socket, which
+   Asterisk accepts for the old dialog, so the stale link doesn't linger
+   until rtp_timeout. Not counted in _sip.failures: that measures whether
+   the call works from here at all (decision D3), and a socket drop is a
+   network blip, not that. */
+function _sipRecover(detail) {
+  var node = _sip.node;
+  _audioClientLog(node, 'sip-ws-recover', detail);
+  _sipTeardown();
+  _listenActive = false;
+  _listenSetBtn('... Reconnecting', 'var(--text2)', true);
+  sbToast('Connection to the node dropped — reconnecting audio', false);
+  _startListen();
+}
+
 function _sipFallback(reason) {
   var node = _sip.node, audio = document.getElementById('node-audio');
   _audioClientLog(node, 'sip-fallback', reason);
@@ -9449,7 +9479,7 @@ function _sipTeardown() {
   if (_sip.silentCtx) { try { _sip.silentCtx.close(); } catch (e) {} _sip.silentCtx = null; }
   var a = document.getElementById('node-audio');
   if (a && a.srcObject) a.srcObject = null;
-  _sip.active = false; _sip.micOk = false; _sip.canTx = false;
+  _sip.active = false; _sip.micOk = false; _sip.canTx = false; _sip.wsLostAt = 0;
   return had;
 }
 
