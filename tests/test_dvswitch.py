@@ -756,7 +756,8 @@ class TestCallerKeyedPromotion:
 
 
 ABINFO_USRP = {"usrp": {"to_pcm": {"shape": "AUDIO_USE_GAIN", "gain": "1.50"},
-                        "to_ambe": {"shape": "AUDIO_USE_GAIN", "gain": "0.35"}}}
+                        "to_ambe": {"shape": "AUDIO_USE_GAIN", "gain": "0.35"}},
+               "tlv": {"rx_port": "36100"}}
 
 
 class TestValidateDvswitchAudio:
@@ -811,10 +812,34 @@ class TestDvswitchLiveAudio:
 
     def test_commands(self):
         audio, _ = app._validate_dvswitch_audio({"dmr_gain": 0.35, "allstar_gain": 1.5})
-        cmds = [c[1:] for c in app._dvswitch_live_audio_commands(audio)]
-        assert cmds == [["tlvAudio", "AUDIO_USE_GAIN", "0.35"],
-                        ["usrpAudio", "AUDIO_USE_GAIN", "1.5"],
-                        ["usrpAgc", "-20", "10", "100"]]
+        assert app._dvswitch_live_audio_commands(audio) == [
+            "tlvAudio=AUDIO_USE_GAIN", "tlvGain=0.35", "usrpAudio=AUDIO_USE_GAIN",
+            "usrpGain=1.5", "agcUSRP=-20,10,100"]
+
+    def test_commands_refuse_an_unvalidated_mode(self):
+        import pytest
+        with pytest.raises(ValueError):
+            app._dvswitch_live_audio_commands({"tlv_audio": "AUDIO_UNITY\nx", "usrp_audio": "AUDIO_UNITY",
+                                               "dmr_gain": 1, "allstar_gain": 1, "agc_threshold": -20,
+                                               "agc_slope": 10, "agc_decay": 100})
+
+    def test_remote_control_framing(self):
+        import socket
+        rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        rx.bind(("127.0.0.1", 0)); rx.settimeout(2)
+        try:
+            app._dvswitch_remote_control(["tlvGain=0.35", "agcUSRP=-20,10,100"], rx.getsockname()[1])
+            assert rx.recv(300) == b"\x05\x0ctlvGain=0.35"
+            assert rx.recv(300) == b"\x05\x12agcUSRP=-20,10,100"
+        finally:
+            rx.close()
+
+    def test_control_port(self, monkeypatch, tmp_path):
+        f = tmp_path / "ABInfo.json"; f.write_text(json.dumps(ABINFO_USRP))
+        monkeypatch.setattr(app, "DVSWITCH_ABINFO_PATH", str(f))
+        assert app._dvswitch_control_port() == 36100
+        f.write_text(json.dumps({"tlv": {"rx_port": "0"}}))
+        assert app._dvswitch_control_port() is None
 
 
 class TestDvswitchAudioRoute:
@@ -827,10 +852,11 @@ class TestDvswitchAudioRoute:
         db.execute("INSERT OR REPLACE INTO dvswitch_config (id, enabled, bridge_node) VALUES (1, 1, '1999')")
         db.commit()
         f = tmp_path / "ABInfo.json"; f.write_text(json.dumps(ABINFO_USRP))
-        script = tmp_path / "dvswitch.sh"; script.write_text("")
         apply = tmp_path / "apply.sh"; apply.write_text("")
+        self.sent = []
+        monkeypatch.setattr(app, "_dvswitch_remote_control",
+                            lambda cmds, port: self.sent.append((port, list(cmds))))
         monkeypatch.setattr(app, "DVSWITCH_ABINFO_PATH", str(f))
-        monkeypatch.setattr(app, "DVSWITCH_TUNE_SCRIPT_PATH", str(script))
         monkeypatch.setattr(app, "DVSWITCH_APPLY_SCRIPT_PATH", str(apply))
         monkeypatch.setattr(app, "DVSWITCH_EXPORT_PATH", str(tmp_path / "export.json"))
         monkeypatch.setattr(app.time, "sleep", lambda s: None)
@@ -853,9 +879,10 @@ class TestDvswitchAudioRoute:
             resp = client.post("/api/dvswitch/audio", json={"dmr_gain": "0.3", "allstar_gain": "1.2"})
         d = resp.get_json()
         assert resp.status_code == 200 and d["ok"] and d["live_applied"] and d["persisted"]
-        argv = [c.args[0] for c in run.call_args_list]
-        assert argv[0][1:] == ["tlvAudio", "AUDIO_USE_GAIN", "0.3"]
-        assert argv[-1][-2:] == ["--audio-only", str(tmp / "export.json")]
+        assert self.sent == [(36100, ["tlvAudio=AUDIO_USE_GAIN", "tlvGain=0.3", "usrpAudio=AUDIO_USE_GAIN",
+                                      "usrpGain=1.2", "agcUSRP=-20,10,100"])]
+        assert run.call_count == 1
+        assert run.call_args.args[0][-2:] == ["--audio-only", str(tmp / "export.json")]
         assert json.loads((tmp / "export.json").read_text())["dmr_gain"] == 0.3
         row = app.get_db().execute("SELECT dmr_gain, allstar_gain, usrp_audio FROM dvswitch_config").fetchone()
         assert tuple(row) == (0.3, 1.2, "AUDIO_USE_GAIN")
@@ -868,7 +895,17 @@ class TestDvswitchAudioRoute:
                           return_value=MagicMock(returncode=0, stdout="", stderr="")) as run:
             d = client.post("/api/dvswitch/audio", json={}).get_json()
         assert run.call_count == 1 and d["persisted"] and not d["live_applied"] and not d["ok"]
-        assert "isn't running" in " ".join(d["problems"])
+        assert "isn't running" in " ".join(d["problems"]) and self.sent == []
+
+    def test_errors_are_not_echoed_to_the_client(self, client, create_user, monkeypatch, tmp_path):
+        self._setup(client, create_user, monkeypatch, tmp_path)
+        def boom(*a, **k):
+            raise OSError("secret internal detail")
+        monkeypatch.setattr(app, "_dvswitch_remote_control", boom)
+        with patch.object(app.subprocess, "run", side_effect=OSError("another detail")):
+            d = client.post("/api/dvswitch/audio", json={}).get_json()
+        assert not d["live_applied"] and not d["persisted"]
+        assert "detail" not in json.dumps(d)
 
     def test_config_get_includes_live_values(self, client, create_user, monkeypatch, tmp_path):
         self._setup(client, create_user, monkeypatch, tmp_path)

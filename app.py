@@ -17223,15 +17223,45 @@ def _dvswitch_live_audio():
 
 
 def _dvswitch_live_audio_commands(audio):
-    """Pure: the dvswitch.sh invocations that set `audio` on a running
-    Analog_Bridge. Same unprivileged remote-control channel `tune` uses."""
-    sh = DVSWITCH_TUNE_SCRIPT_PATH
+    """Pure: Analog_Bridge remote-control commands that set `audio` on the
+    running bridge -- exactly what `dvswitch.sh tlvAudio|usrpAudio|usrpAgc`
+    send. Modes are re-taken from the constant tuples and numbers re-rendered
+    from floats, so nothing caller-supplied reaches the bridge verbatim."""
+    tlv  = DVSWITCH_TLV_AUDIO_MODES[DVSWITCH_TLV_AUDIO_MODES.index(audio["tlv_audio"])]
+    usrp = DVSWITCH_USRP_AUDIO_MODES[DVSWITCH_USRP_AUDIO_MODES.index(audio["usrp_audio"])]
     return [
-        [sh, "tlvAudio", audio["tlv_audio"], f"{audio['dmr_gain']:g}"],
-        [sh, "usrpAudio", audio["usrp_audio"], f"{audio['allstar_gain']:g}"],
-        [sh, "usrpAgc", f"{audio['agc_threshold']:g}", f"{audio['agc_slope']:g}",
-         str(audio["agc_decay"])],
+        f"tlvAudio={tlv}",
+        f"tlvGain={float(audio['dmr_gain']):g}",
+        f"usrpAudio={usrp}",
+        f"usrpGain={float(audio['allstar_gain']):g}",
+        f"agcUSRP={float(audio['agc_threshold']):g},{float(audio['agc_slope']):g},"
+        f"{int(audio['agc_decay'])}",
     ]
+
+
+def _dvswitch_remote_control(commands, port):
+    """Send Analog_Bridge remote-control commands the way dvswitch.sh's
+    remoteControlCommand() does: one UDP datagram per command to 127.0.0.1 on
+    Analog_Bridge's TLV rx_port (from ABInfo), framed as 0x05, a length byte,
+    then the ASCII command. Done in-process rather than through dvswitch.sh,
+    so no command line is built from request data. Fire-and-forget like the
+    script -- the caller reads ABInfo back to see what took. Raises OSError."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        for cmd in commands:
+            data = cmd.encode("ascii")
+            if len(data) > 255:
+                raise ValueError("remote-control command too long")
+            sock.sendto(bytes((0x05, len(data))) + data, ("127.0.0.1", port))
+
+
+def _dvswitch_control_port():
+    """Analog_Bridge's remote-control port (ABInfo tlv.rx_port), or None."""
+    try:
+        with open(DVSWITCH_ABINFO_PATH) as f:
+            port = int(json.load(f)["tlv"]["rx_port"])
+        return port if 1 <= port <= 65535 else None
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
 
 
 def _dvswitch_write_export(data):
@@ -17273,23 +17303,17 @@ def api_dvswitch_audio():
     problems = []
 
     live_applied = False
-    if not os.path.isfile(DVSWITCH_TUNE_SCRIPT_PATH):
-        problems.append(f"Not applied live: {DVSWITCH_TUNE_SCRIPT_PATH} not found.")
-    elif _dvswitch_live_audio() is None:
+    port = _dvswitch_control_port()
+    if port is None or _dvswitch_live_audio() is None:
         problems.append("Not applied live: Analog_Bridge isn't running. It will pick up the "
                         "saved values when it starts.")
     else:
-        live_applied = True
-        for cmd in _dvswitch_live_audio_commands(audio):
-            try:
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                if r.returncode != 0:
-                    raise RuntimeError(((r.stdout or "") + (r.stderr or "")).strip()
-                                       or f"exit {r.returncode}")
-            except Exception as e:
-                live_applied = False
-                problems.append(f"Live '{cmd[1]}' failed: {e}")
-                log("WARN", f"[DVSWITCH] live audio command {cmd[1:]} failed: {e}")
+        try:
+            _dvswitch_remote_control(_dvswitch_live_audio_commands(audio), port)
+            live_applied = True
+        except Exception as e:
+            problems.append("Not applied live: sending to Analog_Bridge failed (see the HenWen log).")
+            log("WARN", f"[DVSWITCH] live audio update to port {port} failed: {e}")
 
     persisted = False
     if not os.path.exists(DVSWITCH_APPLY_SCRIPT_PATH):
@@ -17307,13 +17331,17 @@ def api_dvswitch_audio():
                                 f"{out[-400:]}")
                 log("WARN", f"[DVSWITCH] apply.sh --audio-only exit {r.returncode}: {out[-400:]}")
         except Exception as e:
-            problems.append(f"Not saved to Analog_Bridge.ini: {e}")
+            problems.append("Not saved to Analog_Bridge.ini: running apply.sh failed (see the HenWen log).")
             log("WARN", f"[DVSWITCH] apply.sh --audio-only failed: {e}")
 
     time.sleep(0.3)   # let Analog_Bridge rewrite its status export
+    live = _dvswitch_live_audio()
+    if live_applied and live and (live["tlv_audio"], live["usrp_audio"]) != (audio["tlv_audio"], audio["usrp_audio"]):
+        live_applied = False
+        problems.append("Sent to Analog_Bridge, but it still reports the old mode.")
     return jsonify({"ok": live_applied and persisted, "saved": True,
                     "live_applied": live_applied, "persisted": persisted,
-                    "problems": problems, "audio_live": _dvswitch_live_audio()})
+                    "problems": problems, "audio_live": live})
 
 
 def _dvswitch_bridge_node_settings(context):

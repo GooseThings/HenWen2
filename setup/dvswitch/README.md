@@ -212,9 +212,12 @@ and 60% everywhere else. The defaults now match the package's.
 **Apply Audio Levels** (`POST /api/dvswitch/audio`) does this:
 
 1. It saves the values to `dvswitch_config`.
-2. It sets them on the running bridge with `dvswitch.sh tlvAudio|usrpAudio|usrpAgc`.
-   This uses the same unprivileged remote-control port that `tune` uses, so it
-   takes effect immediately. Analog_Bridge doesn't restart, so the tuned
+2. It sets them on the running bridge by sending the same remote-control
+   commands that `dvswitch.sh tlvAudio|usrpAudio|usrpAgc` send. These go over
+   the same unprivileged UDP port that `tune` uses (ABInfo `tlv.rx_port`), so
+   the change takes effect immediately. HenWen sends the datagrams itself
+   (`0x05`, length byte, `key=value`) and doesn't build a command line from
+   request data. Analog_Bridge doesn't restart, so the tuned
    talkgroup stays (a restart drops back to `txTg`).
 3. It runs `apply.sh --audio-only`, which patches only those five keys in
    `Analog_Bridge.ini` so they survive a restart. The previous file is kept
