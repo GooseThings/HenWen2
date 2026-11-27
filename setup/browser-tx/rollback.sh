@@ -43,6 +43,19 @@ else
   printf '     %s\n' "${RESTORED_VHOSTS[@]}"
 fi
 
+# A backup taken on a re-run of apply.sh can itself already point
+# /asterisk-ws at the relay, which is about to be removed: point any such
+# line back at Asterisk.
+for conf in "${RESTORED_VHOSTS[@]}"; do
+  sed -i -E 's#^([[:space:]]*ProxyPass[[:space:]]+/asterisk-ws[[:space:]]+ws://)127\.0\.0\.1:[0-9]+(/ws)#\1127.0.0.1:8088\2#' "$conf"
+  chmod 644 "$conf"
+done
+
+echo "== Removing the henwen-sip-ws relay"
+systemctl disable --now henwen-sip-ws >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/henwen-sip-ws.service
+systemctl daemon-reload
+
 [ -f "$BACKUP_DIR/rtp.conf" ] && cp "$BACKUP_DIR/rtp.conf" /etc/asterisk/rtp.conf
 if [ -f "$BACKUP_DIR/custom-extensions.conf" ]; then
   cp "$BACKUP_DIR/custom-extensions.conf" /etc/asterisk/custom/extensions.conf

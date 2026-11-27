@@ -9109,6 +9109,57 @@ def api_status_reset_idle():
 TX_SECRET_PATH = os.environ.get("TX_SECRET_PATH", "/etc/asterisk/henwen-tx.secret")
 TX_SIP_USER    = os.environ.get("TX_SIP_USER", "henwen-tx")
 TX_WS_PATH     = os.environ.get("TX_WS_PATH", "/asterisk-ws")
+# henwen-sip-ws (henwen/sip_ws_relay.py): Apache proxies TX_WS_PATH through
+# it so a linked node's non-UTF-8 app_rpt text can't make browsers drop
+# their SIP socket. Installed by setup/browser-tx/apply.sh.
+SIP_WS_RELAY_PORT = int(os.environ.get("SIP_WS_RELAY_PORT", "8087"))
+_ASTERISK_WS_PROXY_RE = re.compile(
+    r'^[ \t]*ProxyPass[ \t]+"?/asterisk-ws"?[ \t]+"?ws://127\.0\.0\.1:(\d+)/ws', re.M)
+
+
+def _asterisk_ws_proxy_ports(vhost_paths):
+    """{vhost path: [ports]} for every /asterisk-ws ProxyPass line in each
+    vhost. Unreadable files and files without the line are left out."""
+    found = {}
+    for path in vhost_paths:
+        try:
+            with open(path) as f:
+                ports = [int(p) for p in _ASTERISK_WS_PROXY_RE.findall(f.read())]
+        except OSError:
+            continue
+        if ports:
+            found[path] = ports
+    return found
+
+
+def _tcp_listening(host, port, timeout=0.5):
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _sip_ws_relay_check(proxy_ports, relay_port, listening):
+    """TX Diagnostics verdict on the SIP WebSocket relay: (ok, warn, detail).
+    proxy_ports is _asterisk_ws_proxy_ports()'s result."""
+    if not proxy_ports:
+        return False, False, ("No /asterisk-ws proxy line in any HenWen vhost — "
+                              "run setup/browser-tx/apply.sh")
+    ports = {p for ps in proxy_ports.values() for p in ps}
+    via_relay = relay_port in ports
+    direct = ports - {relay_port}
+    if via_relay and not listening:
+        return False, False, (f"Apache proxies through the relay on 127.0.0.1:{relay_port} but it "
+                              "isn't running, so browser SIP can't connect — "
+                              "sudo systemctl restart henwen-sip-ws "
+                              "(journalctl -u henwen-sip-ws -n 30)")
+    if direct:
+        return False, True, ("Apache proxies /asterisk-ws straight to Asterisk (port "
+                             f"{', '.join(str(p) for p in sorted(direct))}): browsers drop their "
+                             "SIP connection whenever a linked node sends non-UTF-8 text. "
+                             "Run Apply Browser TX Setup to route it through the relay")
+    return True, False, f"henwen-sip-ws running on 127.0.0.1:{relay_port}; every vhost uses it"
 TX_APPLY_SCRIPT_PATH = os.path.join(SETUP_DIR, "browser-tx", "apply.sh")
 
 
@@ -9398,6 +9449,11 @@ def api_tx_diagnostics():
             f"No '{TX_SIP_USER}' endpoint — run setup/browser-tx/apply.sh (or re-run it if it was rolled back)")
     except Exception as e:
         add("PJSIP endpoint registered in Asterisk", False, f"Could not query AMI: {e}")
+
+    ok, warn, detail = _sip_ws_relay_check(
+        _asterisk_ws_proxy_ports(all_vhosts), SIP_WS_RELAY_PORT,
+        _tcp_listening("127.0.0.1", SIP_WS_RELAY_PORT))
+    add("SIP WebSocket relay", ok, detail, warn=warn)
 
     # HenWen 2.0 per-user SIP identities. Each is its own check so "written
     # but not included" and "included but nobody assigned" read differently.

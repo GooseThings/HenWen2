@@ -61,4 +61,12 @@ echo "$TAG Reloading systemd and restarting $SERVICE_NAME..."
 systemctl daemon-reload
 systemctl restart "$SERVICE_NAME"
 
+# The SIP WebSocket relay is its own unit (setup/browser-tx/apply.sh), so a
+# HenWen restart doesn't drop browser calls. Restart it only when its code
+# changed; that drops calls once, and the kiosk redials within seconds.
+if ! git diff --quiet "$BEFORE" "$AFTER" -- henwen/sip_ws_relay.py; then
+    echo "$TAG SIP WebSocket relay changed; restarting henwen-sip-ws..."
+    systemctl try-restart henwen-sip-ws || true
+fi
+
 echo "$TAG Update complete: now on $AFTER"

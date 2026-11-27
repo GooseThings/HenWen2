@@ -16,6 +16,8 @@
 #           finds actually fronting HenWen (WSS proxy line added to each —
 #           see that file for why this is a scan, not two hardcoded names)
 #           /etc/asterisk/henwen-tx.secret        (generated SIP password)
+#           /etc/systemd/system/henwen-sip-ws.service  (the SIP WebSocket
+#           relay Apache proxies /asterisk-ws through; see henwen/sip_ws_relay.py)
 # Does NOT restart Asterisk — modules are loaded live; app_rpt keeps running.
 set -euo pipefail
 
@@ -209,10 +211,51 @@ echo "== Reloading Asterisk config (http server, dialplan, pjsip)"
 asterisk -rx "core reload" >/dev/null
 sleep 2
 
+# The relay sits between Apache and Asterisk and cleans text frames that
+# would make a browser drop the socket (henwen/sip_ws_relay.py says why).
+# Apache only goes through it once it is confirmed listening; otherwise the
+# proxy line points straight at Asterisk as before, so TX never ends up
+# behind a relay that isn't running.
+echo "== SIP WebSocket relay"
+APP_DIR="$(cd "$SPIKE_DIR/../.." && pwd)"
+RELAY_PORT="${SIP_WS_RELAY_PORT:-8087}"
+RELAY_UNIT=/etc/systemd/system/henwen-sip-ws.service
+RELAY_TMP=$(mktemp)
+sed -e "s|@APP_DIR@|$APP_DIR|g" -e "s|@RELAY_PORT@|$RELAY_PORT|g" \
+  "$APP_DIR/systemd/henwen-sip-ws.service" > "$RELAY_TMP"
+RELAY_CHANGED=0
+if ! cmp -s "$RELAY_TMP" "$RELAY_UNIT"; then
+  install -m 644 "$RELAY_TMP" "$RELAY_UNIT"
+  systemctl daemon-reload
+  RELAY_CHANGED=1
+fi
+rm -f "$RELAY_TMP"
+systemctl enable henwen-sip-ws >/dev/null 2>&1 || true
+if [ "$RELAY_CHANGED" = 1 ] || ! systemctl is-active --quiet henwen-sip-ws; then
+  systemctl restart henwen-sip-ws || true
+fi
+WS_TARGET="127.0.0.1:8088"
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if (exec 3<>"/dev/tcp/127.0.0.1/$RELAY_PORT") 2>/dev/null; then
+    WS_TARGET="127.0.0.1:$RELAY_PORT"
+    break
+  fi
+  sleep 0.5
+done
+if [ "$WS_TARGET" = "127.0.0.1:$RELAY_PORT" ]; then
+  echo "   henwen-sip-ws listening on $WS_TARGET"
+else
+  echo "   WARNING: henwen-sip-ws is not listening on 127.0.0.1:$RELAY_PORT"
+  echo "   (journalctl -u henwen-sip-ws -n 30). Proxying straight to Asterisk;"
+  echo "   browsers will drop their SIP connection whenever a linked node sends"
+  echo "   non-UTF-8 text. Re-run this script once the relay starts."
+fi
+
 echo "== Apache WSS proxy"
 INSERT_TEXT="    # ${MARKER}: SIP-over-WebSocket signaling to the loopback-only
-    # Asterisk builtin HTTP server; Apache terminates WSS with the same cert.
-    ProxyPass /asterisk-ws ws://127.0.0.1:8088/ws retry=0
+    # Asterisk builtin HTTP server, through the henwen-sip-ws relay when it
+    # is running; Apache terminates WSS with the same cert.
+    ProxyPass /asterisk-ws ws://${WS_TARGET}/ws retry=0
 "
 for conf in "${APACHE_CONFS[@]}"; do
   echo "   $conf"
@@ -220,7 +263,10 @@ for conf in "${APACHE_CONFS[@]}"; do
   henwen_insert_before_proxypass "$conf" "$FLASK_PORT" "asterisk-ws" "$INSERT_TEXT" || rc=$?
   case "$rc" in
     0) echo "      patched" ;;
-    1) echo "      already patched, skipping" ;;
+    1) # Patched by an earlier run: point the existing line at the current
+       # target (the relay, or straight to Asterisk if it isn't running).
+       sed -i -E "s#^([[:space:]]*ProxyPass[[:space:]]+/asterisk-ws[[:space:]]+ws://)127\.0\.0\.1:[0-9]+(/ws)#\1${WS_TARGET}\2#" "$conf"
+       echo "      already patched, now proxying to ${WS_TARGET}" ;;
     *) echo "      FAILED to insert proxy line — restoring every vhost touched this run"
        henwen_restore_vhosts_from_manifest "$BACKUP_DIR" >/dev/null || true
        exit 1 ;;
