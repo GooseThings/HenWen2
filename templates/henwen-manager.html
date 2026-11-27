@@ -1721,15 +1721,62 @@ pre.codeblock { background: var(--bg3); padding: 12px; border-radius: 4px; font-
     <div class="card" style="max-width:620px">
       <div class="card-header"><h2>Audio Levels</h2></div>
       <div class="card-body">
+        <div style="font-size:0.75rem;color:var(--text2);margin-bottom:10px">
+          Analog_Bridge's level controls, one set per direction. Apply Audio Levels changes them on the running bridge straight away, with no restart and no change of talkgroup, and also writes them to Analog_Bridge.ini so they survive a restart. 1.0 is unity: lower is quieter, higher is louder. Get a signal report from someone on the talkgroup and change the gain about 0.05 at a time.
+        </div>
+        <h3 style="font-size:0.9rem;margin:4px 0 8px">AllStar &rarr; DMR <span style="font-weight:normal;color:var(--text2)">(what DMR hears from this node)</span></h3>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px 18px">
           <div>
-            <label class="toggle-label" style="display:block;margin-bottom:3px">AllStar-side gain</label>
-            <input type="number" id="dvs-allstar-gain" class="val-input" min="0.1" max="10" step="0.1" style="width:100%">
+            <label class="toggle-label" style="display:block;margin-bottom:3px">Gain <code>tlvGain</code></label>
+            <input type="number" id="dvs-dmr-gain" class="val-input" min="0.05" max="5" step="0.05" style="width:100%">
+            <div style="font-size:0.75rem;color:var(--text2);margin-top:3px">The software AMBE encoder is hot at 1.0. DVSwitch ships 0.35. If everyone on DMR hears this node too loud, lower it.</div>
+            <div class="dvs-live" id="dvs-live-dmr" style="font-size:0.75rem;color:var(--text2);margin-top:3px"></div>
           </div>
           <div>
-            <label class="toggle-label" style="display:block;margin-bottom:3px">DMR-side gain</label>
-            <input type="number" id="dvs-dmr-gain" class="val-input" min="0.1" max="10" step="0.1" style="width:100%">
+            <label class="toggle-label" style="display:block;margin-bottom:3px">Mode <code>tlvAudio</code></label>
+            <select id="dvs-tlv-audio" class="val-input" style="width:100%">
+              <option value="AUDIO_USE_GAIN">Use gain</option>
+              <option value="AUDIO_UNITY">Unity (gain ignored)</option>
+              <option value="AUDIO_USE_BPF">Band-pass filter</option>
+            </select>
           </div>
+        </div>
+        <h3 style="font-size:0.9rem;margin:16px 0 8px">DMR &rarr; AllStar <span style="font-weight:normal;color:var(--text2)">(what this node hears from DMR)</span></h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px 18px">
+          <div>
+            <label class="toggle-label" style="display:block;margin-bottom:3px">Gain <code>usrpGain</code></label>
+            <input type="number" id="dvs-allstar-gain" class="val-input" min="0.05" max="5" step="0.05" style="width:100%">
+            <div style="font-size:0.75rem;color:var(--text2);margin-top:3px">DVSwitch ships 1.5. Used when the mode is Use gain.</div>
+            <div class="dvs-live" id="dvs-live-allstar" style="font-size:0.75rem;color:var(--text2);margin-top:3px"></div>
+          </div>
+          <div>
+            <label class="toggle-label" style="display:block;margin-bottom:3px">Mode <code>usrpAudio</code></label>
+            <select id="dvs-usrp-audio" class="val-input" style="width:100%" onchange="dvswitchAgcRowToggle()">
+              <option value="AUDIO_USE_GAIN">Use gain</option>
+              <option value="AUDIO_UNITY">Unity (gain ignored)</option>
+              <option value="AUDIO_USE_AGC">Automatic gain control (AGC)</option>
+            </select>
+            <div style="font-size:0.75rem;color:var(--text2);margin-top:3px">AGC evens out DMR stations that come in at very different levels.</div>
+          </div>
+        </div>
+        <div id="dvs-agc-row" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px 18px;margin-top:12px">
+          <div>
+            <label class="toggle-label" style="display:block;margin-bottom:3px">AGC threshold (dB)</label>
+            <input type="number" id="dvs-agc-threshold" class="val-input" min="-60" max="0" step="1" style="width:100%">
+          </div>
+          <div>
+            <label class="toggle-label" style="display:block;margin-bottom:3px">AGC slope (dB)</label>
+            <input type="number" id="dvs-agc-slope" class="val-input" min="0" max="60" step="1" style="width:100%">
+          </div>
+          <div>
+            <label class="toggle-label" style="display:block;margin-bottom:3px">AGC decay (ms)</label>
+            <input type="number" id="dvs-agc-decay" class="val-input" min="1" max="10000" step="10" style="width:100%">
+          </div>
+          <div style="grid-column:1/-1;font-size:0.75rem;color:var(--text2)">Only used in AGC mode. DVSwitch ships -20 / 10 / 100. Analog_Bridge doesn't report these back, so this shows the saved values only.</div>
+        </div>
+        <div style="margin-top:14px">
+          <button class="btn btn-sm btn-primary" id="dvs-audio-btn" onclick="dvswitchApplyAudio()">Apply Audio Levels</button>
+          <div id="dvs-audio-status" style="margin-top:8px;font-size:0.82rem"></div>
         </div>
       </div>
     </div>
@@ -6257,14 +6304,75 @@ async function dvswitchLoad() {
   document.getElementById('dvs-network-port').value      = d.network_port || 62031;
   document.getElementById('dvs-network-password').value  = d.network_password || '';
   document.getElementById('dvs-talkgroups').value        = d.static_talkgroups || '';
-  document.getElementById('dvs-allstar-gain').value      = d.allstar_gain != null ? d.allstar_gain : 1.0;
-  document.getElementById('dvs-dmr-gain').value           = d.dmr_gain != null ? d.dmr_gain : 1.0;
+  document.getElementById('dvs-allstar-gain').value      = d.allstar_gain != null ? d.allstar_gain : 1.5;
+  document.getElementById('dvs-dmr-gain').value           = d.dmr_gain != null ? d.dmr_gain : 0.35;
+  document.getElementById('dvs-usrp-audio').value         = d.usrp_audio || 'AUDIO_USE_GAIN';
+  document.getElementById('dvs-tlv-audio').value          = d.tlv_audio || 'AUDIO_USE_GAIN';
+  document.getElementById('dvs-agc-threshold').value      = d.agc_threshold != null ? d.agc_threshold : -20;
+  document.getElementById('dvs-agc-slope').value          = d.agc_slope != null ? d.agc_slope : 10;
+  document.getElementById('dvs-agc-decay').value          = d.agc_decay != null ? d.agc_decay : 100;
+  dvswitchAgcRowToggle();
+  dvswitchRenderLiveAudio(d.audio_live);
   document.getElementById('dvs-ambe-source').value        = d.ambe_source || 'software';
   document.getElementById('dvs-ambe-device').value        = d.ambe_device || '';
   document.getElementById('dvs-ambe-host').value          = d.ambe_host || '';
   document.getElementById('dvs-ambe-port').value          = d.ambe_port || 2460;
   dvswitchAmbeSourceChanged();
   loadDvswitchApplyStatus();
+}
+
+function dvswitchAudioPayload() {
+  function v(id) { return document.getElementById(id).value.trim(); }
+  return {
+    tlv_audio:     v('dvs-tlv-audio'),
+    dmr_gain:      v('dvs-dmr-gain'),
+    usrp_audio:    v('dvs-usrp-audio'),
+    allstar_gain:  v('dvs-allstar-gain'),
+    agc_threshold: v('dvs-agc-threshold'),
+    agc_slope:     v('dvs-agc-slope'),
+    agc_decay:     v('dvs-agc-decay'),
+  };
+}
+
+function dvswitchAgcRowToggle() {
+  document.getElementById('dvs-agc-row').style.display =
+    document.getElementById('dvs-usrp-audio').value === 'AUDIO_USE_AGC' ? 'grid' : 'none';
+}
+
+var _DVS_MODE_LABELS = {AUDIO_USE_GAIN: 'use gain', AUDIO_UNITY: 'unity', AUDIO_USE_AGC: 'AGC', AUDIO_USE_BPF: 'band-pass'};
+function dvswitchRenderLiveAudio(live) {
+  function one(id, mode, gain) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = live ? ('Running now: ' + gain + ' (' + (_DVS_MODE_LABELS[mode] || mode) + ')')
+                          : 'Analog_Bridge is not running, so the live value is unknown.';
+  }
+  one('dvs-live-dmr', live && live.tlv_audio, live && live.dmr_gain);
+  one('dvs-live-allstar', live && live.usrp_audio, live && live.allstar_gain);
+}
+
+async function dvswitchApplyAudio() {
+  var st = document.getElementById('dvs-audio-status');
+  var btn = document.getElementById('dvs-audio-btn');
+  btn.disabled = true;
+  st.textContent = 'Applying…'; st.style.color = '';
+  var r = await api('/api/dvswitch/audio', {
+    method:  'POST',
+    headers: {'Content-Type': 'application/json'},
+    body:    JSON.stringify(dvswitchAudioPayload()),
+  });
+  btn.disabled = false;
+  if (!r.ok) {
+    st.textContent = (r.data && r.data.error) || 'Error'; st.style.color = 'var(--danger)';
+    return;
+  }
+  dvswitchRenderLiveAudio(r.data.audio_live);
+  if (r.data.ok) {
+    st.textContent = 'Applied live and saved to Analog_Bridge.ini.'; st.style.color = 'var(--success)';
+  } else {
+    st.textContent = 'Saved in HenWen, but: ' + (r.data.problems || []).join(' ');
+    st.style.color = 'var(--warn,#e0a030)';
+  }
 }
 
 async function dvswitchSave() {
@@ -6281,8 +6389,7 @@ async function dvswitchSave() {
     network_port:        parseInt(document.getElementById('dvs-network-port').value, 10),
     network_password:    document.getElementById('dvs-network-password').value,
     static_talkgroups:   document.getElementById('dvs-talkgroups').value.trim(),
-    allstar_gain:        parseFloat(document.getElementById('dvs-allstar-gain').value),
-    dmr_gain:            parseFloat(document.getElementById('dvs-dmr-gain').value),
+    ...dvswitchAudioPayload(),
     ambe_source:         document.getElementById('dvs-ambe-source').value,
     ambe_device:         document.getElementById('dvs-ambe-device').value.trim(),
     ambe_host:           document.getElementById('dvs-ambe-host').value.trim(),

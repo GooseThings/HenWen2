@@ -127,3 +127,67 @@ def test_logrotate_guard_is_idempotent_and_scoped(tmp_path):
 def test_logrotate_guard_skips_a_missing_rule(tmp_path):
     assert _guard(tmp_path, "Analog_Reflector", "analog_reflector").returncode == 0
     assert not (tmp_path / "Analog_Reflector").exists()
+
+
+AB_INI = """[GENERAL]
+decoderFallBack = true
+
+[USRP]
+address = 127.0.0.1
+usrpAudio = AUDIO_USE_GAIN                 ; Digital -> Analog
+usrpGain = 1.50
+usrpAGC = -20,10,100
+tlvAudio = AUDIO_USE_GAIN                  ; Analog -> Digital
+tlvGain = 0.35
+
+[MACROS]
+"""
+
+
+def _patch_audio(ini, **env):
+    return _bash(f'ANALOG_BRIDGE_INI="{ini}"\n{_func_body("patch_ini")}\n'
+                 f'{_func_body("patch_audio")}\npatch_audio', **env)
+
+
+def test_patch_audio_writes_only_usrp_audio_keys(tmp_path):
+    ini = tmp_path / "Analog_Bridge.ini"
+    ini.write_text(AB_INI)
+    r = _patch_audio(ini, DVS_USRP_AUDIO="AUDIO_USE_AGC", DVS_ALLSTAR_GAIN="1.2",
+                     DVS_AGC_THRESHOLD="-25.0", DVS_AGC_SLOPE="12.0", DVS_AGC_DECAY="200",
+                     DVS_TLV_AUDIO="AUDIO_UNITY", DVS_DMR_GAIN="0.3")
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = ini.read_text()
+    for line in ("usrpAudio = AUDIO_USE_AGC", "usrpGain = 1.2", "usrpAGC = -25.0,12.0,200",
+                 "tlvAudio = AUDIO_UNITY", "tlvGain = 0.3", "decoderFallBack = true",
+                 "address = 127.0.0.1"):
+        assert line in text
+    assert text.count("tlvGain") == 1 and text.index("tlvGain") < text.index("[MACROS]")
+
+
+def test_patch_audio_old_export_falls_back_to_previous_behaviour(tmp_path):
+    ini = tmp_path / "Analog_Bridge.ini"
+    ini.write_text(AB_INI.replace("AUDIO_USE_GAIN", "AUDIO_UNITY"))
+    r = _patch_audio(ini, DVS_USRP_AUDIO="", DVS_TLV_AUDIO="", DVS_AGC_THRESHOLD="",
+                     DVS_AGC_SLOPE="", DVS_AGC_DECAY="", DVS_ALLSTAR_GAIN="1.0", DVS_DMR_GAIN="1.0")
+    assert r.returncode == 0, r.stdout
+    text = ini.read_text()
+    assert "usrpAudio = AUDIO_USE_GAIN" in text and "usrpAGC = -20,10,100" in text
+
+
+def test_patch_audio_refuses_junk(tmp_path):
+    ini = tmp_path / "Analog_Bridge.ini"
+    ini.write_text(AB_INI)
+    for env in ({"DVS_TLV_AUDIO": "AUDIO_UNITY\nx=1"}, {"DVS_DMR_GAIN": "0.3\nx=1"},
+                {"DVS_AGC_DECAY": "1;rm"}):
+        base = dict(DVS_USRP_AUDIO="AUDIO_USE_GAIN", DVS_TLV_AUDIO="AUDIO_USE_GAIN",
+                    DVS_ALLSTAR_GAIN="1", DVS_DMR_GAIN="0.35")
+        base.update(env)
+        assert _patch_audio(ini, **base).returncode != 0, env
+    assert ini.read_text() == AB_INI
+
+
+def test_audio_only_exits_before_anything_else():
+    # Everything that installs, restarts or needs the location comes after the exit.
+    exit_at = SRC.index('if [ "$AUDIO_ONLY" = 1 ]; then')
+    assert SRC.index('[ -n "$DVS_LATITUDE" ]') > exit_at
+    assert SRC.index("apt-get install") > exit_at

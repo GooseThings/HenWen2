@@ -43,9 +43,16 @@ DVSWITCH_SH="${DVSWITCH_SH:-/opt/MMDVM_Bridge/dvswitch.sh}"
 
 [ "$(id -u)" = 0 ] || { echo "Run as root (sudo)"; exit 1; }
 
+# --audio-only: patch just Analog_Bridge's [USRP] audio keys (POST
+# /api/dvswitch/audio, which has already set them live over Analog_Bridge's
+# remote-control port). No package, unit, rpt.conf or other ini changes, and
+# no restart. Same sudoers rule as the full run.
+AUDIO_ONLY=0
+if [ "${1:-}" = "--audio-only" ]; then AUDIO_ONLY=1; shift; fi
+
 CONFIG_JSON="${1:-}"
 [ -n "$CONFIG_JSON" ] && [ -f "$CONFIG_JSON" ] || {
-  echo "Usage: $0 <path-to-config.json>  (written by POST /api/dvswitch/apply)"
+  echo "Usage: $0 [--audio-only] <path-to-config.json>  (written by POST /api/dvswitch/apply or /api/dvswitch/audio)"
   exit 1
 }
 
@@ -60,10 +67,75 @@ for k in ("dmr_id","callsign","dmr_network","network_host","network_port",
           "network_password","static_talkgroups","allstar_gain","dmr_gain",
           "ambe_source","ambe_device","ambe_host","ambe_port",
           "latitude","longitude",
+          "usrp_audio","tlv_audio","agc_threshold","agc_slope","agc_decay",
           "usrp_asterisk_rxport","usrp_asterisk_txport"):
     print(f"DVS_{k.upper()}={shlex.quote(str(c.get(k, '')))}")
 PYEOF
 )"
+# Patches one "Key = value" line within a named [Section], leaving every
+# other line (comments, keys not mentioned) untouched — same section-scoped
+# approach as app.py's own update_setting_in_content(), reimplemented here
+# in python3 since this script doesn't import app.py. Appends the key at
+# the end of the section if it isn't already present, rather than failing.
+patch_ini() {
+  python3 - "$1" "$2" "$3" "$4" <<'PYEOF'
+import re, sys
+path, section, key, value = sys.argv[1:5]
+with open(path) as f:
+    lines = f.readlines()
+out, in_sec, found = [], False, False
+sec_re = re.compile(r'^\s*\[([^\]]+)\]')
+key_re = re.compile(r'^\s*' + re.escape(key) + r'\s*=')
+for i, line in enumerate(lines):
+    m = sec_re.match(line)
+    if m:
+        if in_sec and not found:
+            out.append(f"{key} = {value}\n")
+            found = True
+        in_sec = (m.group(1).strip().lower() == section.lower())
+    if in_sec and key_re.match(line):
+        out.append(f"{key} = {value}\n")
+        found = True
+        continue
+    out.append(line)
+if in_sec and not found:
+    out.append(f"{key} = {value}\n")
+with open(path, "w") as f:
+    f.writelines(out)
+PYEOF
+}
+
+# Analog_Bridge audio. Directions per the package-shipped ini's own comments:
+# usrpAudio/usrpGain/usrpAGC = Digital -> Analog (DMR heard on AllStar),
+# tlvAudio/tlvGain = Analog -> Digital (AllStar heard on DMR). Values were
+# validated by app.py; re-checked here so a hand-run can't write junk
+# (or a newline) into the ini. Blank fields (an export from an older app.py)
+# fall back to AUDIO_USE_GAIN and the shipped AGC, which is what this script
+# always wrote before these were configurable.
+patch_audio() {
+  local ua="${DVS_USRP_AUDIO:-AUDIO_USE_GAIN}" ta="${DVS_TLV_AUDIO:-AUDIO_USE_GAIN}"
+  local thr="${DVS_AGC_THRESHOLD:--20}" slope="${DVS_AGC_SLOPE:-10}" decay="${DVS_AGC_DECAY:-100}"
+  local num='^-?[0-9]+(\.[0-9]+)?$'
+  case "$ua" in AUDIO_UNITY|AUDIO_USE_GAIN|AUDIO_USE_AGC|AUDIO_USE_BPF) ;; *) echo "ERROR: bad usrp_audio '$ua'"; return 1;; esac
+  case "$ta" in AUDIO_UNITY|AUDIO_USE_GAIN|AUDIO_USE_AGC|AUDIO_USE_BPF) ;; *) echo "ERROR: bad tlv_audio '$ta'"; return 1;; esac
+  for v in "$DVS_ALLSTAR_GAIN" "$DVS_DMR_GAIN" "$thr" "$slope" "$decay"; do
+    [[ "$v" =~ $num ]] || { echo "ERROR: bad audio value '$v'"; return 1; }
+  done
+  patch_ini "$ANALOG_BRIDGE_INI" "USRP" "usrpAudio" "$ua"
+  patch_ini "$ANALOG_BRIDGE_INI" "USRP" "usrpGain" "$DVS_ALLSTAR_GAIN"
+  patch_ini "$ANALOG_BRIDGE_INI" "USRP" "usrpAGC" "$thr,$slope,$decay"
+  patch_ini "$ANALOG_BRIDGE_INI" "USRP" "tlvAudio" "$ta"
+  patch_ini "$ANALOG_BRIDGE_INI" "USRP" "tlvGain" "$DVS_DMR_GAIN"
+}
+
+if [ "$AUDIO_ONLY" = 1 ]; then
+  [ -f "$ANALOG_BRIDGE_INI" ] || { echo "ERROR: $ANALOG_BRIDGE_INI not found -- run guided setup first"; exit 1; }
+  cp -p "$ANALOG_BRIDGE_INI" "$ANALOG_BRIDGE_INI.bak-henwen-audio"
+  patch_audio
+  echo "== $ANALOG_BRIDGE_INI audio: AllStar->DMR $DVS_TLV_AUDIO $DVS_DMR_GAIN, DMR->AllStar $DVS_USRP_AUDIO $DVS_ALLSTAR_GAIN, AGC $DVS_AGC_THRESHOLD,$DVS_AGC_SLOPE,$DVS_AGC_DECAY (previous: $ANALOG_BRIDGE_INI.bak-henwen-audio)"
+  exit 0
+fi
+
 echo "== Config: DMR ID $DVS_DMR_ID, callsign $DVS_CALLSIGN, network $DVS_DMR_NETWORK ($DVS_NETWORK_HOST:$DVS_NETWORK_PORT), AMBE source: $DVS_AMBE_SOURCE"
 
 # The station's own coordinates, entered by the owner in Manager > DVSwitch
@@ -176,38 +248,6 @@ cp "$MMDVM_BRIDGE_INI"  "$BACKUP_DIR/"
 cp "$DVSWITCH_INI"      "$BACKUP_DIR/"
 echo "$BACKUP_DIR" > /root/henwen-dvswitch-last-backup
 
-# Patches one "Key = value" line within a named [Section], leaving every
-# other line (comments, keys not mentioned) untouched — same section-scoped
-# approach as app.py's own update_setting_in_content(), reimplemented here
-# in python3 since this script doesn't import app.py. Appends the key at
-# the end of the section if it isn't already present, rather than failing.
-patch_ini() {
-  python3 - "$1" "$2" "$3" "$4" <<'PYEOF'
-import re, sys
-path, section, key, value = sys.argv[1:5]
-with open(path) as f:
-    lines = f.readlines()
-out, in_sec, found = [], False, False
-sec_re = re.compile(r'^\s*\[([^\]]+)\]')
-key_re = re.compile(r'^\s*' + re.escape(key) + r'\s*=')
-for i, line in enumerate(lines):
-    m = sec_re.match(line)
-    if m:
-        if in_sec and not found:
-            out.append(f"{key} = {value}\n")
-            found = True
-        in_sec = (m.group(1).strip().lower() == section.lower())
-    if in_sec and key_re.match(line):
-        out.append(f"{key} = {value}\n")
-        found = True
-        continue
-    out.append(line)
-if in_sec and not found:
-    out.append(f"{key} = {value}\n")
-with open(path, "w") as f:
-    f.writelines(out)
-PYEOF
-}
 
 echo "== Patching $MMDVM_BRIDGE_INI [Info] location ($DVS_LATITUDE, $DVS_LONGITUDE)"
 # [Info] is repeater metadata the bridge reports to the DMR network at login.
@@ -234,10 +274,7 @@ patch_ini "$ANALOG_BRIDGE_INI" "USRP" "address" "127.0.0.1"
 # values the other way around.
 patch_ini "$ANALOG_BRIDGE_INI" "USRP" "txPort" "$DVS_USRP_ASTERISK_TXPORT"   # Analog_Bridge's txPort == Asterisk's rxport
 patch_ini "$ANALOG_BRIDGE_INI" "USRP" "rxPort" "$DVS_USRP_ASTERISK_RXPORT"   # Analog_Bridge's rxPort == Asterisk's txport
-patch_ini "$ANALOG_BRIDGE_INI" "USRP" "usrpAudio" "AUDIO_USE_GAIN"
-patch_ini "$ANALOG_BRIDGE_INI" "USRP" "usrpGain" "$DVS_ALLSTAR_GAIN"
-patch_ini "$ANALOG_BRIDGE_INI" "USRP" "tlvAudio" "AUDIO_USE_GAIN"
-patch_ini "$ANALOG_BRIDGE_INI" "USRP" "tlvGain" "$DVS_DMR_GAIN"
+patch_audio
 # ambeMode belongs to [AMBE_AUDIO], NOT [GENERAL] -- confirmed against a
 # real installed Analog_Bridge.ini (patching it into [GENERAL] produced a
 # stray line Analog_Bridge's parser treated as fatal: "parse error ... line

@@ -149,6 +149,7 @@ revert it; re-running `apply.sh` reinstates it.
   package ships several other mode gateways too (D-Star, P25, NXDN, YSF) —
   out of scope for this DMR-only feature, so those are also stopped and
   disabled regardless of network.
+- Writes the saved audio levels (see "Audio levels" below).
 - Points Analog_Bridge's active audio routing at the right partner
   (`dvswitch.sh mode STFU` or `dvswitch.sh mode DMR`) — best-effort; a
   failure here is logged but doesn't fail the whole run, since it's easy to
@@ -190,6 +191,45 @@ the BrandMeister-specific `TS2_1=<tg>;` syntax that was tried here crashed
 `mmdvm-bridge` outright (see above) rather than just failing to register.
 If TGIF/custom has an equivalent to BrandMeister's self-care static-TG
 config, use that.
+
+## Audio levels
+
+Manager > DVSwitch > Audio Levels sets Analog_Bridge's `[USRP]` audio keys,
+one group per direction. The names are easy to get backwards, so this is
+what the package-shipped `Analog_Bridge.ini` says about each:
+
+| Direction | Keys | Shipped | HenWen field |
+|---|---|---|---|
+| AllStar -> DMR (what DMR hears) | `tlvAudio`, `tlvGain` | `AUDIO_USE_GAIN`, 0.35 | `tlv_audio`, `dmr_gain` |
+| DMR -> AllStar (what the node hears) | `usrpAudio`, `usrpGain`, `usrpAGC` | `AUDIO_USE_GAIN`, 1.50, `-20,10,100` | `usrp_audio`, `allstar_gain`, `agc_*` |
+
+The software AMBE encoder is hot at unity, which is why `tlvGain` ships at
+0.35. Earlier HenWen versions wrote 1.0 over both gains on every guided
+setup run. On one live install that made AllStar -> DMR audio about three
+times too loud: a browser operator had to set their mic to 20% on the bridge
+and 60% everywhere else. The defaults now match the package's.
+
+**Apply Audio Levels** (`POST /api/dvswitch/audio`) does this:
+
+1. It saves the values to `dvswitch_config`.
+2. It sets them on the running bridge by sending the same remote-control
+   commands that `dvswitch.sh tlvAudio|usrpAudio|usrpAgc` send. These go over
+   the same unprivileged UDP port that `tune` uses (ABInfo `tlv.rx_port`), so
+   the change takes effect immediately. HenWen sends the datagrams itself
+   (`0x05`, length byte, `key=value`) and doesn't build a command line from
+   request data. Analog_Bridge doesn't restart, so the tuned
+   talkgroup stays (a restart drops back to `txTg`).
+3. It runs `apply.sh --audio-only`, which patches only those five keys in
+   `Analog_Bridge.ini` so they survive a restart. The previous file is kept
+   as `Analog_Bridge.ini.bak-henwen-audio`. Nothing else is installed,
+   restarted, or changed.
+
+"Running now" under each gain is read back from `/tmp/ABInfo_<port>.json`.
+That file doesn't include the AGC parameters, so the AGC fields can only
+show the saved values. Analog_Bridge 1.6.4 accepts all four modes
+(`AUDIO_UNITY`, `AUDIO_USE_GAIN`, `AUDIO_USE_AGC`, `AUDIO_USE_BPF`) for
+either key. The page offers only the modes the shipped ini documents for
+each one.
 
 ## AMBE vocoder
 
