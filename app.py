@@ -1390,8 +1390,8 @@ def get_db():
         network_password   TEXT    NOT NULL DEFAULT '',
         static_talkgroups  TEXT    NOT NULL DEFAULT '',
         bridge_node        TEXT    NOT NULL DEFAULT '',
-        allstar_gain       REAL    NOT NULL DEFAULT 1.0,
-        dmr_gain           REAL    NOT NULL DEFAULT 1.0,
+        allstar_gain       REAL    NOT NULL DEFAULT 1.5,
+        dmr_gain           REAL    NOT NULL DEFAULT 0.35,
         ambe_source        TEXT    NOT NULL DEFAULT 'software',
         ambe_device        TEXT    NOT NULL DEFAULT '',
         ambe_host          TEXT    NOT NULL DEFAULT '',
@@ -1418,6 +1418,17 @@ def get_db():
         # with no default; apply refuses to run until both are set.
         conn.execute("ALTER TABLE dvswitch_config ADD COLUMN latitude REAL")
         conn.execute("ALTER TABLE dvswitch_config ADD COLUMN longitude REAL")
+    if 'usrp_audio' not in _dvswitch_cfg_cols:
+        # Analog_Bridge [USRP] audio shaping, one mode per direction:
+        # usrpAudio (DMR -> AllStar, with usrpGain = allstar_gain and the
+        # usrpAGC threshold/slope/decay) and tlvAudio (AllStar -> DMR, with
+        # tlvGain = dmr_gain). apply.sh used to hardcode both modes to
+        # AUDIO_USE_GAIN; existing rows keep exactly that.
+        conn.execute("ALTER TABLE dvswitch_config ADD COLUMN usrp_audio TEXT NOT NULL DEFAULT 'AUDIO_USE_GAIN'")
+        conn.execute("ALTER TABLE dvswitch_config ADD COLUMN tlv_audio TEXT NOT NULL DEFAULT 'AUDIO_USE_GAIN'")
+        conn.execute("ALTER TABLE dvswitch_config ADD COLUMN agc_threshold REAL NOT NULL DEFAULT -20")
+        conn.execute("ALTER TABLE dvswitch_config ADD COLUMN agc_slope REAL NOT NULL DEFAULT 10")
+        conn.execute("ALTER TABLE dvswitch_config ADD COLUMN agc_decay INTEGER NOT NULL DEFAULT 100")
     conn.commit()
     # Per-node lockout: presence of a row means that node is locked by its
     # Owner. Only one lockout state per node, so `node` is the primary key
@@ -16661,10 +16672,26 @@ def api_stream_relay_config_save():
 DVSWITCH_CONFIG_DEFAULTS = {
     "enabled": False, "dmr_id": "", "callsign": "", "dmr_network": "brandmeister",
     "network_host": "", "network_port": 62031, "network_password": "",
-    "static_talkgroups": "", "bridge_node": "", "allstar_gain": 1.0, "dmr_gain": 1.0,
+    "static_talkgroups": "", "bridge_node": "", "allstar_gain": 1.5, "dmr_gain": 0.35,
     "ambe_source": "software", "ambe_device": "", "ambe_host": "", "ambe_port": 2460,
     "talkgroup_presets": [], "latitude": None, "longitude": None,
+    "usrp_audio": "AUDIO_USE_GAIN", "tlv_audio": "AUDIO_USE_GAIN",
+    "agc_threshold": -20.0, "agc_slope": 10.0, "agc_decay": 100,
 }
+# Analog_Bridge's audio settings. Direction is easy to get backwards, so per
+# the package-shipped Analog_Bridge.ini's own comments: usrpAudio/usrpGain is
+# Digital -> Analog (DMR heard on AllStar; stored as allstar_gain, shipped
+# 1.50) and tlvAudio/tlvGain is Analog -> Digital (AllStar heard on DMR;
+# dmr_gain, shipped 0.35 -- the software AMBE encoder is hot at unity).
+# Analog_Bridge 1.6.4 accepts all four modes for either key ("Invalid AUDIO
+# mode: %s (AUDIO_UNITY|AUDIO_USE_AGC|AUDIO_USE_GAIN|AUDIO_USE_BPF)"); only
+# the ones the shipped ini documents per key are offered. Gain range is the
+# shipped ini's own "0.0 to 5.0".
+DVSWITCH_USRP_AUDIO_MODES = ("AUDIO_USE_GAIN", "AUDIO_UNITY", "AUDIO_USE_AGC")
+DVSWITCH_TLV_AUDIO_MODES  = ("AUDIO_USE_GAIN", "AUDIO_UNITY", "AUDIO_USE_BPF")
+DVSWITCH_GAIN_MIN, DVSWITCH_GAIN_MAX = 0.05, 5.0
+DVSWITCH_AUDIO_FIELDS = ("usrp_audio", "allstar_gain", "agc_threshold", "agc_slope",
+                         "agc_decay", "tlv_audio", "dmr_gain")
 _DVSWITCH_DMR_ID_RE   = re.compile(r'^\d{6,7}$')
 _DVSWITCH_CALLSIGN_RE = re.compile(r'^[A-Z0-9]{3,7}$')
 _DVSWITCH_NETWORKS    = ("brandmeister", "tgif", "custom")
@@ -16876,6 +16903,60 @@ def _dvswitch_location_set(cfg):
     return bool(cfg) and cfg["latitude"] is not None and cfg["longitude"] is not None
 
 
+def _validate_dvswitch_audio(data):
+    """Returns (cleaned_audio_dict, error_or_None) for DVSWITCH_AUDIO_FIELDS.
+    Pure. Missing keys take DVSWITCH_CONFIG_DEFAULTS, so an older client that
+    only sends the two gains still validates."""
+    d = DVSWITCH_CONFIG_DEFAULTS
+    usrp_audio = str(data.get("usrp_audio") or d["usrp_audio"]).strip().upper()
+    tlv_audio  = str(data.get("tlv_audio")  or d["tlv_audio"]).strip().upper()
+    if usrp_audio not in DVSWITCH_USRP_AUDIO_MODES:
+        return None, f"DMR -> AllStar audio mode must be one of: {', '.join(DVSWITCH_USRP_AUDIO_MODES)}"
+    if tlv_audio not in DVSWITCH_TLV_AUDIO_MODES:
+        return None, f"AllStar -> DMR audio mode must be one of: {', '.join(DVSWITCH_TLV_AUDIO_MODES)}"
+
+    def num(key, cast=float):
+        v = data.get(key)
+        if v is None or v == "":
+            return cast(d[key])
+        if isinstance(v, bool):
+            raise ValueError(key)
+        f = float(v)
+        if f != f or f in (float("inf"), float("-inf")):
+            raise ValueError(key)
+        if cast is int:
+            if f != int(f):
+                raise ValueError(key)
+            return int(f)
+        return f
+    try:
+        allstar_gain  = num("allstar_gain")
+        dmr_gain      = num("dmr_gain")
+        agc_threshold = num("agc_threshold")
+        agc_slope     = num("agc_slope")
+        agc_decay     = num("agc_decay", int)
+    except (TypeError, ValueError):
+        return None, "gain and AGC values must be numbers (AGC decay a whole number)"
+
+    for g in (allstar_gain, dmr_gain):
+        if not (DVSWITCH_GAIN_MIN <= g <= DVSWITCH_GAIN_MAX):
+            return None, (f"gain values must be between {DVSWITCH_GAIN_MIN:g} "
+                          f"and {DVSWITCH_GAIN_MAX:g}")
+    if not (-60 <= agc_threshold <= 0):
+        return None, "AGC threshold must be between -60 and 0 dB"
+    if not (0 <= agc_slope <= 60):
+        return None, "AGC slope must be between 0 and 60 dB"
+    if not (1 <= agc_decay <= 10000):
+        return None, "AGC decay must be between 1 and 10000 ms"
+
+    return {
+        "usrp_audio": usrp_audio, "allstar_gain": round(allstar_gain, 3),
+        "agc_threshold": round(agc_threshold, 2), "agc_slope": round(agc_slope, 2),
+        "agc_decay": agc_decay,
+        "tlv_audio": tlv_audio, "dmr_gain": round(dmr_gain, 3),
+    }, None
+
+
 def _validate_dvswitch_config(data):
     """Returns (cleaned_dict, error_string_or_None). Pure validation, no DB/
     filesystem access, so it's directly unit-testable."""
@@ -16900,18 +16981,14 @@ def _validate_dvswitch_config(data):
         ambe_port = int(data.get("ambe_port", 2460) or 2460)
     except (TypeError, ValueError):
         return None, "ambe_port must be a number"
-    try:
-        allstar_gain = float(data.get("allstar_gain", 1.0) or 1.0)
-        dmr_gain     = float(data.get("dmr_gain", 1.0) or 1.0)
-    except (TypeError, ValueError):
-        return None, "gain values must be numbers"
+    audio, audio_err = _validate_dvswitch_audio(data)
+    if audio_err:
+        return None, audio_err
 
     if dmr_network not in _DVSWITCH_NETWORKS:
         return None, f"dmr_network must be one of: {', '.join(_DVSWITCH_NETWORKS)}"
     if ambe_source not in _DVSWITCH_AMBE_SOURCES:
         return None, f"ambe_source must be one of: {', '.join(_DVSWITCH_AMBE_SOURCES)}"
-    if not (0.1 <= allstar_gain <= 10) or not (0.1 <= dmr_gain <= 10):
-        return None, "gain values must be between 0.1 and 10"
     if dmr_id and not _DVSWITCH_DMR_ID_RE.match(dmr_id):
         return None, "DMR ID must be 6-7 digits"
     if callsign and not _DVSWITCH_CALLSIGN_RE.match(callsign):
@@ -16947,7 +17024,7 @@ def _validate_dvswitch_config(data):
         "dmr_network": dmr_network, "network_host": network_host,
         "network_port": network_port, "network_password": network_password,
         "static_talkgroups": static_talkgroups, "bridge_node": bridge_node,
-        "allstar_gain": allstar_gain, "dmr_gain": dmr_gain,
+        **audio,
         "ambe_source": ambe_source, "ambe_device": ambe_device,
         "ambe_host": ambe_host, "ambe_port": ambe_port,
         "talkgroup_presets": talkgroup_presets,
@@ -16967,6 +17044,7 @@ def api_dvswitch_config_get():
         result["talkgroup_presets"] = json.loads(result.get("talkgroup_presets") or "[]")
     except (TypeError, ValueError):
         result["talkgroup_presets"] = []
+    result["audio_live"] = _dvswitch_live_audio()
     return jsonify(result)
 
 
@@ -16984,14 +17062,17 @@ def api_dvswitch_config_save():
            (id, enabled, dmr_id, callsign, dmr_network, network_host, network_port,
             network_password, static_talkgroups, bridge_node, allstar_gain, dmr_gain,
             ambe_source, ambe_device, ambe_host, ambe_port, talkgroup_presets,
-            latitude, longitude)
-           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            latitude, longitude, usrp_audio, tlv_audio, agc_threshold, agc_slope,
+            agc_decay)
+           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (int(cleaned["enabled"]), cleaned["dmr_id"], cleaned["callsign"], cleaned["dmr_network"],
          cleaned["network_host"], cleaned["network_port"], cleaned["network_password"],
          cleaned["static_talkgroups"], cleaned["bridge_node"], cleaned["allstar_gain"],
          cleaned["dmr_gain"], cleaned["ambe_source"], cleaned["ambe_device"],
          cleaned["ambe_host"], cleaned["ambe_port"], json.dumps(cleaned["talkgroup_presets"]),
-         cleaned["latitude"], cleaned["longitude"])
+         cleaned["latitude"], cleaned["longitude"], cleaned["usrp_audio"],
+         cleaned["tlv_audio"], cleaned["agc_threshold"], cleaned["agc_slope"],
+         cleaned["agc_decay"])
     )
     db.commit()
     log("INFO", f"[DVSWITCH] Config saved by {session.get('username', '')}")
@@ -17111,6 +17192,130 @@ def api_dvswitch_tune():
     return jsonify({"ok": True, "tg": tg})
 
 
+def _dvswitch_whole(x):
+    """-20.0 -> -20, so the ini reads usrpAGC = -20,10,100 like the shipped one."""
+    return int(x) if float(x) == int(x) else x
+
+
+def _dvswitch_audio_export(cfg):
+    """The audio fields of a dvswitch_config row, for apply.sh's JSON."""
+    out = {k: cfg[k] for k in DVSWITCH_AUDIO_FIELDS}
+    out["agc_threshold"] = _dvswitch_whole(out["agc_threshold"])
+    out["agc_slope"] = _dvswitch_whole(out["agc_slope"])
+    return out
+
+
+def _dvswitch_live_audio():
+    """What Analog_Bridge is running right now, from its live-status export
+    (rewritten whenever a setting changes over its remote-control port).
+    None when Analog_Bridge isn't running. The export carries no AGC
+    parameters, so those can only be shown as saved."""
+    try:
+        with open(DVSWITCH_ABINFO_PATH) as f:
+            usrp = json.load(f).get("usrp") or {}
+        to_pcm, to_ambe = usrp.get("to_pcm") or {}, usrp.get("to_ambe") or {}
+        return {
+            "usrp_audio": to_pcm.get("shape"), "allstar_gain": float(to_pcm.get("gain")),
+            "tlv_audio": to_ambe.get("shape"), "dmr_gain": float(to_ambe.get("gain")),
+        }
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _dvswitch_live_audio_commands(audio):
+    """Pure: the dvswitch.sh invocations that set `audio` on a running
+    Analog_Bridge. Same unprivileged remote-control channel `tune` uses."""
+    sh = DVSWITCH_TUNE_SCRIPT_PATH
+    return [
+        [sh, "tlvAudio", audio["tlv_audio"], f"{audio['dmr_gain']:g}"],
+        [sh, "usrpAudio", audio["usrp_audio"], f"{audio['allstar_gain']:g}"],
+        [sh, "usrpAgc", f"{audio['agc_threshold']:g}", f"{audio['agc_slope']:g}",
+         str(audio["agc_decay"])],
+    ]
+
+
+def _dvswitch_write_export(data):
+    """Root-readable JSON handoff to apply.sh (0600; may hold the network
+    password). Raises OSError."""
+    fd = os.open(DVSWITCH_EXPORT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f)
+
+
+@app.route("/api/dvswitch/audio", methods=["POST"])
+def api_dvswitch_audio():
+    """Save Analog_Bridge's audio levels and apply them without a restart.
+
+    Two steps, both reported: (1) live, via dvswitch.sh's remote-control
+    commands, so the change is heard immediately and Analog_Bridge keeps its
+    current talkgroup (a restart drops back to txTg); (2) persisted, via
+    `apply.sh --audio-only`, which patches only the [USRP] audio keys in
+    Analog_Bridge.ini so the next restart or reboot keeps them. Full guided
+    setup writes the same saved values. Owner-only, like the rest of
+    DVSwitch's settings."""
+    if session.get('role') != 'owner':
+        return jsonify({"error": "Only the owner can change DVSwitch settings"}), 403
+    if not _get_dvswitch_config():
+        return jsonify({"error": "Save the DVSwitch configuration first"}), 400
+    audio, err = _validate_dvswitch_audio(request.json or {})
+    if err:
+        return jsonify({"error": err}), 400
+
+    db = get_db()
+    db.execute(f"UPDATE dvswitch_config SET {', '.join(k + '=?' for k in DVSWITCH_AUDIO_FIELDS)} "
+               "WHERE id=1", tuple(audio[k] for k in DVSWITCH_AUDIO_FIELDS))
+    db.commit()
+    user = session.get('username', '?')
+    log("INFO", f"[DVSWITCH] Audio levels saved by {user}: AllStar->DMR {audio['tlv_audio']} "
+               f"{audio['dmr_gain']:g}, DMR->AllStar {audio['usrp_audio']} {audio['allstar_gain']:g}, "
+               f"AGC {audio['agc_threshold']:g},{audio['agc_slope']:g},{audio['agc_decay']}")
+
+    problems = []
+
+    live_applied = False
+    if not os.path.isfile(DVSWITCH_TUNE_SCRIPT_PATH):
+        problems.append(f"Not applied live: {DVSWITCH_TUNE_SCRIPT_PATH} not found.")
+    elif _dvswitch_live_audio() is None:
+        problems.append("Not applied live: Analog_Bridge isn't running. It will pick up the "
+                        "saved values when it starts.")
+    else:
+        live_applied = True
+        for cmd in _dvswitch_live_audio_commands(audio):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                if r.returncode != 0:
+                    raise RuntimeError(((r.stdout or "") + (r.stderr or "")).strip()
+                                       or f"exit {r.returncode}")
+            except Exception as e:
+                live_applied = False
+                problems.append(f"Live '{cmd[1]}' failed: {e}")
+                log("WARN", f"[DVSWITCH] live audio command {cmd[1:]} failed: {e}")
+
+    persisted = False
+    if not os.path.exists(DVSWITCH_APPLY_SCRIPT_PATH):
+        problems.append(f"Not saved to Analog_Bridge.ini: {DVSWITCH_APPLY_SCRIPT_PATH} not found.")
+    else:
+        try:
+            _dvswitch_write_export(_dvswitch_audio_export(audio))
+            r = subprocess.run([SUDO_PATH, "-n", DVSWITCH_APPLY_SCRIPT_PATH, "--audio-only",
+                                DVSWITCH_EXPORT_PATH], capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                persisted = True
+            else:
+                out = ((r.stdout or "") + (r.stderr or "")).strip()
+                problems.append(f"Not saved to Analog_Bridge.ini (apply.sh exit {r.returncode}): "
+                                f"{out[-400:]}")
+                log("WARN", f"[DVSWITCH] apply.sh --audio-only exit {r.returncode}: {out[-400:]}")
+        except Exception as e:
+            problems.append(f"Not saved to Analog_Bridge.ini: {e}")
+            log("WARN", f"[DVSWITCH] apply.sh --audio-only failed: {e}")
+
+    time.sleep(0.3)   # let Analog_Bridge rewrite its status export
+    return jsonify({"ok": live_applied and persisted, "saved": True,
+                    "live_applied": live_applied, "persisted": persisted,
+                    "problems": problems, "audio_live": _dvswitch_live_audio()})
+
+
 def _dvswitch_bridge_node_settings(context):
     """Pure function: the key=value settings for the DVSwitch bridge node's
     rpt.conf stanza. Split out from the /api/dvswitch/apply route so it's
@@ -17217,7 +17422,7 @@ def api_dvswitch_apply():
         "dmr_id": cfg["dmr_id"], "callsign": cfg["callsign"], "dmr_network": cfg["dmr_network"],
         "network_host": cfg["network_host"], "network_port": cfg["network_port"],
         "network_password": cfg["network_password"], "static_talkgroups": cfg["static_talkgroups"],
-        "allstar_gain": cfg["allstar_gain"], "dmr_gain": cfg["dmr_gain"],
+        **_dvswitch_audio_export(cfg),
         "ambe_source": cfg["ambe_source"], "ambe_device": cfg["ambe_device"],
         "ambe_host": cfg["ambe_host"], "ambe_port": cfg["ambe_port"],
         "latitude": cfg["latitude"], "longitude": cfg["longitude"],
@@ -17225,9 +17430,7 @@ def api_dvswitch_apply():
         "usrp_asterisk_txport": DVSWITCH_USRP_ASTERISK_TXPORT,
     }
     try:
-        fd = os.open(DVSWITCH_EXPORT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump(export, f)
+        _dvswitch_write_export(export)
     except OSError as e:
         log("ERROR", f"[API] Could not write {DVSWITCH_EXPORT_PATH}: {e}")
         return jsonify({"error": "Could not write the DVSwitch export file — check server logs"}), 500

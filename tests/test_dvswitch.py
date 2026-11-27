@@ -753,3 +753,132 @@ class TestCallerKeyedPromotion:
         app._dvswitch_process_caller_lines([], state, keyed_now=True)
         app._dvswitch_process_caller_lines([self.END], state, keyed_now=False)
         assert app._dvswitch_caller_cache["id"] == "3333"
+
+
+ABINFO_USRP = {"usrp": {"to_pcm": {"shape": "AUDIO_USE_GAIN", "gain": "1.50"},
+                        "to_ambe": {"shape": "AUDIO_USE_GAIN", "gain": "0.35"}}}
+
+
+class TestValidateDvswitchAudio:
+    def test_defaults_are_the_package_shipped_values(self):
+        audio, err = app._validate_dvswitch_audio({})
+        assert err is None
+        assert audio == {"usrp_audio": "AUDIO_USE_GAIN", "allstar_gain": 1.5,
+                         "agc_threshold": -20, "agc_slope": 10, "agc_decay": 100,
+                         "tlv_audio": "AUDIO_USE_GAIN", "dmr_gain": 0.35}
+
+    def test_strings_from_the_form_are_accepted(self):
+        audio, err = app._validate_dvswitch_audio(
+            {"dmr_gain": "0.3", "allstar_gain": "1", "usrp_audio": "audio_use_agc",
+             "agc_threshold": "-25", "agc_slope": "12", "agc_decay": "200"})
+        assert err is None
+        assert audio["dmr_gain"] == 0.3 and audio["usrp_audio"] == "AUDIO_USE_AGC"
+        assert audio["agc_decay"] == 200 and isinstance(audio["agc_decay"], int)
+
+    def test_mode_is_checked_per_direction(self):
+        # AGC is offered for DMR -> AllStar only, band-pass for AllStar -> DMR only.
+        assert app._validate_dvswitch_audio({"tlv_audio": "AUDIO_USE_AGC"})[1]
+        assert app._validate_dvswitch_audio({"usrp_audio": "AUDIO_USE_BPF"})[1]
+        assert app._validate_dvswitch_audio({"tlv_audio": "AUDIO_USE_BPF"})[1] is None
+        assert app._validate_dvswitch_audio({"usrp_audio": "AUDIO_X\nfoo=1"})[1]
+
+    def test_ranges(self):
+        for bad in ({"dmr_gain": 0}, {"dmr_gain": 5.5}, {"allstar_gain": -1},
+                    {"agc_threshold": 5}, {"agc_slope": 61}, {"agc_decay": 0},
+                    {"agc_decay": "1.5"}, {"dmr_gain": "nan"}, {"dmr_gain": "abc"},
+                    {"dmr_gain": True}):
+            assert app._validate_dvswitch_audio(bad)[1], bad
+        assert app._validate_dvswitch_audio({"dmr_gain": 5, "allstar_gain": 0.05})[1] is None
+
+    def test_full_config_carries_audio_fields(self):
+        cfg = dict(VALID_CONFIG); cfg["tlv_audio"] = "AUDIO_UNITY"; cfg["dmr_gain"] = 0.4
+        cleaned, err = app._validate_dvswitch_config(cfg)
+        assert err is None
+        assert cleaned["tlv_audio"] == "AUDIO_UNITY" and cleaned["dmr_gain"] == 0.4
+        assert cleaned["agc_decay"] == 100
+
+
+class TestDvswitchLiveAudio:
+    def test_reads_abinfo(self, monkeypatch, tmp_path):
+        f = tmp_path / "ABInfo.json"; f.write_text(json.dumps(ABINFO_USRP))
+        monkeypatch.setattr(app, "DVSWITCH_ABINFO_PATH", str(f))
+        assert app._dvswitch_live_audio() == {"usrp_audio": "AUDIO_USE_GAIN", "allstar_gain": 1.5,
+                                              "tlv_audio": "AUDIO_USE_GAIN", "dmr_gain": 0.35}
+
+    def test_none_when_not_running(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(app, "DVSWITCH_ABINFO_PATH", str(tmp_path / "missing.json"))
+        assert app._dvswitch_live_audio() is None
+
+    def test_commands(self):
+        audio, _ = app._validate_dvswitch_audio({"dmr_gain": 0.35, "allstar_gain": 1.5})
+        cmds = [c[1:] for c in app._dvswitch_live_audio_commands(audio)]
+        assert cmds == [["tlvAudio", "AUDIO_USE_GAIN", "0.35"],
+                        ["usrpAudio", "AUDIO_USE_GAIN", "1.5"],
+                        ["usrpAgc", "-20", "10", "100"]]
+
+
+class TestDvswitchAudioRoute:
+    def _setup(self, client, create_user, monkeypatch, tmp_path, role="owner"):
+        if role != "owner":
+            create_user("owner1", role="owner")
+        create_user("u1", role=role)
+        _login(client, "u1")
+        db = app.get_db()
+        db.execute("INSERT OR REPLACE INTO dvswitch_config (id, enabled, bridge_node) VALUES (1, 1, '1999')")
+        db.commit()
+        f = tmp_path / "ABInfo.json"; f.write_text(json.dumps(ABINFO_USRP))
+        script = tmp_path / "dvswitch.sh"; script.write_text("")
+        apply = tmp_path / "apply.sh"; apply.write_text("")
+        monkeypatch.setattr(app, "DVSWITCH_ABINFO_PATH", str(f))
+        monkeypatch.setattr(app, "DVSWITCH_TUNE_SCRIPT_PATH", str(script))
+        monkeypatch.setattr(app, "DVSWITCH_APPLY_SCRIPT_PATH", str(apply))
+        monkeypatch.setattr(app, "DVSWITCH_EXPORT_PATH", str(tmp_path / "export.json"))
+        monkeypatch.setattr(app.time, "sleep", lambda s: None)
+        return tmp_path
+
+    def test_owner_only(self, client, create_user, monkeypatch, tmp_path):
+        self._setup(client, create_user, monkeypatch, tmp_path, role="admin")
+        assert client.post("/api/dvswitch/audio", json={}).status_code == 403
+
+    def test_invalid_rejected_and_not_saved(self, client, create_user, monkeypatch, tmp_path):
+        self._setup(client, create_user, monkeypatch, tmp_path)
+        with patch.object(app.subprocess, "run") as run:
+            resp = client.post("/api/dvswitch/audio", json={"dmr_gain": 9})
+        assert resp.status_code == 400 and not run.called
+
+    def test_saves_applies_live_and_persists(self, client, create_user, monkeypatch, tmp_path):
+        tmp = self._setup(client, create_user, monkeypatch, tmp_path)
+        with patch.object(app.subprocess, "run",
+                          return_value=MagicMock(returncode=0, stdout="", stderr="")) as run:
+            resp = client.post("/api/dvswitch/audio", json={"dmr_gain": "0.3", "allstar_gain": "1.2"})
+        d = resp.get_json()
+        assert resp.status_code == 200 and d["ok"] and d["live_applied"] and d["persisted"]
+        argv = [c.args[0] for c in run.call_args_list]
+        assert argv[0][1:] == ["tlvAudio", "AUDIO_USE_GAIN", "0.3"]
+        assert argv[-1][-2:] == ["--audio-only", str(tmp / "export.json")]
+        assert json.loads((tmp / "export.json").read_text())["dmr_gain"] == 0.3
+        row = app.get_db().execute("SELECT dmr_gain, allstar_gain, usrp_audio FROM dvswitch_config").fetchone()
+        assert tuple(row) == (0.3, 1.2, "AUDIO_USE_GAIN")
+        assert "network_password" not in json.loads((tmp / "export.json").read_text())
+
+    def test_not_running_still_persists(self, client, create_user, monkeypatch, tmp_path):
+        self._setup(client, create_user, monkeypatch, tmp_path)
+        monkeypatch.setattr(app, "DVSWITCH_ABINFO_PATH", str(tmp_path / "missing.json"))
+        with patch.object(app.subprocess, "run",
+                          return_value=MagicMock(returncode=0, stdout="", stderr="")) as run:
+            d = client.post("/api/dvswitch/audio", json={}).get_json()
+        assert run.call_count == 1 and d["persisted"] and not d["live_applied"] and not d["ok"]
+        assert "isn't running" in " ".join(d["problems"])
+
+    def test_config_get_includes_live_values(self, client, create_user, monkeypatch, tmp_path):
+        self._setup(client, create_user, monkeypatch, tmp_path)
+        d = client.get("/api/dvswitch/config").get_json()
+        assert d["audio_live"]["dmr_gain"] == 0.35 and d["usrp_audio"] == "AUDIO_USE_GAIN"
+
+    def test_full_save_keeps_audio_columns(self, client, create_user, monkeypatch, tmp_path):
+        self._setup(client, create_user, monkeypatch, tmp_path)
+        cfg = dict(VALID_CONFIG); cfg.update(latitude=43, longitude=-86, tlv_audio="AUDIO_UNITY",
+                                             usrp_audio="AUDIO_USE_AGC", agc_decay=250)
+        assert client.post("/api/dvswitch/config", json=cfg).status_code == 200
+        row = app.get_db().execute("SELECT tlv_audio, usrp_audio, agc_decay FROM dvswitch_config").fetchone()
+        assert tuple(row) == ("AUDIO_UNITY", "AUDIO_USE_AGC", 250)
