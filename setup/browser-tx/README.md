@@ -32,9 +32,10 @@ per hostname), is found the same way, so no manual renaming is ever
 needed, even when the real TLS termination happens entirely on your
 reverse proxy/tunnel, not on this box. Whatever you use
 needs to proxy two things to this box: plain HTTP to Flask's port (default
-5000), and a WebSocket-capable proxy to Asterisk's `:8088` for
-`/asterisk-ws` (see `apply.sh`'s "Apache WSS proxy" step for the exact line
-it inserts, if you're wiring that path up by hand instead of via Apache).
+5000), and a WebSocket-capable proxy for `/asterisk-ws` to the
+`henwen-sip-ws` relay on `127.0.0.1:8087` (see `apply.sh`'s "Apache WSS
+proxy" step for the exact line it inserts, if you're wiring that path up by
+hand instead of via Apache).
 
 **A reverse proxy only solves the signaling side.** Getting `wss://.../asterisk-ws`
 reachable makes registration and dialing work, but the actual call audio
@@ -79,7 +80,8 @@ independently of everything else — see the table below.
 - `extensions-custom.snippet` — that context, installed via the
   `#tryinclude "custom/extensions.conf"` hook ASL3 already ships
 - `apply.sh` — backs everything up, applies the above, live-loads the
-  modules (no Asterisk restart), adds the Apache `/asterisk-ws` WSS proxy
+  modules (no Asterisk restart), installs and starts the `henwen-sip-ws`
+  relay (below), adds the Apache `/asterisk-ws` WSS proxy pointing at it
   (configtest-gated), generates the SIP secret, prints test credentials.
   Derives the local node number from `rpt.conf` (same rule as `app.py`'s
   `get_node_numbers()`: first top-level `[NNNN]` stanza) and substitutes it
@@ -115,8 +117,8 @@ install time**:
 | 10000–10100 | UDP | inbound → this box | WebRTC RTP media (Asterisk; range set by apply.sh) |
 | — | UDP | outbound | STUN to stun.l.google.com (both sides' ICE candidates) |
 
-Asterisk's builtin HTTP server (8088) stays loopback-only and must **not**
-be forwarded. LAN-only operators need none of the inbound forwards — ICE
+Asterisk's builtin HTTP server (8088) and the relay (8087) stay
+loopback-only and must **not** be forwarded. LAN-only operators need none of the inbound forwards — ICE
 host candidates connect directly. For that case, `sudo bash
 setup/browser-tx/setup-https.sh --lan` provisions HTTPS with a self-signed
 certificate covering this box's LAN IP(s) and hostname (no hostname, email
@@ -147,3 +149,24 @@ each session to its learned peer.
 
 `sudo bash setup/browser-tx/rollback.sh` — restores all configs; loaded modules
 stay resident (harmless, unreferenced) until Asterisk next restarts.
+
+## SIP WebSocket relay (`henwen-sip-ws`)
+
+Apache proxies `/asterisk-ws` to `henwen/sip_ws_relay.py` on
+`127.0.0.1:8087`, which relays to Asterisk on `127.0.0.1:8088`. app_rpt
+forwards node-to-node text to every browser link, and Asterisk sends it as
+a SIP MESSAGE in a WebSocket *text* frame. When that text isn't valid UTF-8
+(the DVSwitch bridge's DMR metadata, for example), the browser is required
+to close the connection, and every browser on the node dropped at once.
+The relay replaces each invalid byte with `?`, one for one, so lengths are
+unchanged; everything else passes through untouched.
+
+- Its own systemd unit, so restarting HenWen doesn't drop calls. Restarting
+  `henwen-sip-ws` does; the kiosk redials within seconds.
+- `apply.sh` only points Apache at it once it is listening; if it can't
+  start, Apache keeps proxying straight to Asterisk and the script warns.
+- Re-running `apply.sh` (or **Apply Browser TX Setup**) moves an existing
+  install onto the relay. `rollback.sh` removes it.
+- Logs: `journalctl -u henwen-sip-ws`. A `replaced N invalid UTF-8 byte(s)`
+  line (at most one a minute) means it just saved those connections.
+- **Manager → TX Diagnostics** has a "SIP WebSocket relay" check.

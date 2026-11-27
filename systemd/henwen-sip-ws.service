@@ -1,0 +1,29 @@
+# HenWen SIP WebSocket relay. Template: setup/browser-tx/apply.sh fills in
+# @APP_DIR@ and @RELAY_PORT@ and installs it as
+# /etc/systemd/system/henwen-sip-ws.service. See henwen/sip_ws_relay.py.
+#
+# Its own unit, not a HenWen child process, so restarting HenWen does not
+# drop browser calls. Restarting this unit does drop them (the kiosk
+# redials within seconds).
+[Unit]
+Description=HenWen SIP WebSocket relay (browser SIP signalling to Asterisk)
+After=network.target asterisk.service
+
+[Service]
+Type=simple
+User=asterisk
+Group=asterisk
+Environment=SIP_WS_RELAY_HOST=127.0.0.1
+Environment=SIP_WS_RELAY_PORT=@RELAY_PORT@
+Environment=SIP_WS_UPSTREAM_HOST=127.0.0.1
+Environment=SIP_WS_UPSTREAM_PORT=8088
+ExecStart=/usr/bin/python3 -I @APP_DIR@/henwen/sip_ws_relay.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
