@@ -196,12 +196,17 @@ fi
 
 echo "== Loading Asterisk modules (live, no restart)"
 grep -E "^load = " "$SPIKE_DIR/modules.snippet" | awk '{print $3}' | while read -r m; do
+  # Skip anything already running. Asterisk 22 answers a second "module
+  # load" with "Unable to load module" -- the same words as a real failure --
+  # so the reply alone can't tell the two apart.
+  shown=$(asterisk -rx "module show like $m" 2>/dev/null || true)
+  if awk -v m="$m" '$1 == m && /Running/ { found = 1 } END { exit !found }' <<<"$shown"; then
+    continue
+  fi
   out=$(asterisk -rx "module load $m" 2>&1) || true
   case "$out" in
-    # Covers every phrasing Asterisk has used for "this is already resident,
-    # nothing to do" across versions (e.g. "already loaded and running.") —
-    # a module hot-loading fine at boot via modules.conf but refusing a
-    # second live "module load" here is normal, not a failure.
+    # Phrasings older Asterisk versions use for "already resident" (e.g.
+    # "already loaded and running."), in case the check above missed it.
     *"Loaded $m"*|*"Already loaded"*|*"already loaded"*|*"is already loaded"*) : ;;
     *) echo "   $m: $out" ;;
   esac
@@ -287,8 +292,11 @@ henwen_apache_reload_or_start || {
 }
 
 echo "== Verification"
-asterisk -rx "http show status" | head -6
-asterisk -rx "pjsip show endpoints" | head -12
+# sed, not head: head exits after N lines, asterisk gets SIGPIPE, and
+# under pipefail that ended the whole script with 141 after everything had
+# been applied (Manager's Apply button then reported a failure).
+asterisk -rx "http show status" | sed -n '1,6p'
+asterisk -rx "pjsip show endpoints" | sed -n '1,12p'
 echo
 
 # Print one set of SIP credentials per host:port this feature is now

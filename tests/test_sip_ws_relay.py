@@ -193,3 +193,19 @@ def test_live_relay_cleans_downstream_and_passes_upstream(monkeypatch):
     assert len(out) == len(bad) and out != bad
     hdr = r.parse_frame_header(out)
     out[hdr[4]:].decode('utf-8')
+
+
+def test_port_probe_is_closed_quietly(capsys):
+    # apply.sh checks the relay with a connect-and-close; that is not an error.
+    a, b = socket.socketpair()
+    a.close()
+    r._handle(b)
+    assert capsys.readouterr().out == ''
+
+
+def test_truncated_request_is_logged(capsys):
+    a, b = socket.socketpair()
+    a.sendall(b'GET /ws HTTP/1.1\r\nHost: x\r\n')
+    a.close()
+    r._handle(b)
+    assert 'closing connection' in capsys.readouterr().out
