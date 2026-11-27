@@ -62,6 +62,11 @@ class ProtocolError(Exception):
     """The peer sent something this relay refuses to forward."""
 
 
+class ClosedBeforeRequest(Exception):
+    """The peer connected and left without sending anything: a port check
+    (setup/browser-tx/apply.sh, TX Diagnostics), not a broken client."""
+
+
 def sanitize_utf8(data):
     """Return (clean_bytes, replaced): every byte of `data` that is not part
     of a valid UTF-8 sequence becomes b'?', one for one, so the length never
@@ -242,6 +247,8 @@ def _read_head(sock):
             raise ProtocolError('HTTP head too large')
         chunk = sock.recv(RECV_BYTES)
         if not chunk:
+            if not buf:
+                raise ClosedBeforeRequest()
             raise ProtocolError('connection closed during HTTP head')
         buf += chunk
 
@@ -301,7 +308,7 @@ def _handle(client):
                 break
     except ProtocolError as e:
         _log(f'closing connection: {e}')
-    except OSError:
+    except (ClosedBeforeRequest, OSError):
         pass
     finally:
         _close(client)
